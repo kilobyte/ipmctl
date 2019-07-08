@@ -3,8 +3,8 @@ Section: admin
 Priority: optional
 Maintainer: Adam Borowski <kilobyte@angband.pl>
 Build-Depends: debhelper-compat (= 12),
-               cmake (>=2.8.12),
-               libndctl-dev(>=58.2),
+               cmake,
+               libndctl-dev,
                pkg-config,
                python,
                libsafec-dev,
