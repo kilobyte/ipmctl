@@ -22,6 +22,7 @@
 int _fltused();
 #endif
 
+#define EFI_FILE_MODE_BINARY  0x8000000000000064ULL
 
 /**
   The Config Protocol version bytes definition
@@ -45,7 +46,6 @@ typedef union {
 
 #define SPD_INTEL_VENDOR_ID 0x8980
 #define SPD_DEVICE_ID 0x0000
-#define SPD_DEVICE_ID_05 0x0979
 #define SPD_DEVICE_ID_10 0x097A
 #define SPD_DEVICE_ID_15 0x097B
 
@@ -143,7 +143,7 @@ typedef union {
 #define OVERWRITE_DIMM_STATUS_COMPLETED_STR    L"Completed"
 
 // Memory type string values
-#define MEMORY_TYPE_DCPM_STR     L"DCPM"
+#define MEMORY_TYPE_DCPM_STR     L"Logical Non-Volatile Device"
 #define MEMORY_TYPE_DDR4_STR     L"DDR4"
 #define MEMORY_TYPE_UNKNOWN_STR  L"Unknown"
 
@@ -225,7 +225,11 @@ typedef union {
 #define BYTES_TO_GB(Size)         ((Size)/1000/1000/1000)
 #define KIB_TO_BYTES(Size)        ((Size) * BYTES_IN_KIB)
 #define MIB_TO_BYTES(Size)        ((Size) * BYTES_IN_MEBIBYTE)
+#define MB_TO_BYTES(Size)         ((Size) * BYTES_IN_MEGABYTE)
 #define GIB_TO_BYTES(Size)        ((Size) * BYTES_IN_GIBIBYTE)
+#define GB_TO_BYTES(Size)         ((Size) * BYTES_IN_GIGABYTE)
+#define TIB_TO_BYTES(Size)        ((Size) * BYTES_IN_TEBIBYTE)
+#define TB_TO_BYTES(Size)         ((Size) * BYTES_IN_TERABYTE)
 #define KIB_TO_MIB(Size)          ((Size)>>10)
 #define GIB_TO_MIB(Size)          ((Size)<<10)
 #define MIB_TO_GIB(Size)          ((Size)>>10)
@@ -241,7 +245,6 @@ typedef union {
 
 #define GIB_TO_GB(Size) (BYTES_TO_GB(GIB_TO_BYTES(Size)))
 #define GB_TO_GIB(Size) (BYTES_TO_GIB(GB_TO_BYTES(Size)))
-#define GB_TO_BYTES(Size)         ((Size)*1000*1000*1000)
 
 #define BYTES_IN_TERABYTE (BYTES_IN_GIGABYTE * BYTES_IN_KB)
 #define BYTES_IN_GIGABYTE (BYTES_IN_MEGABYTE * BYTES_IN_KB)
@@ -280,6 +283,17 @@ typedef union {
   if (pBuffer != NULL) { \
     FreeAlignedPages((VOID *)pBuffer, NumberOfPages); \
     pBuffer = NULL; \
+  } \
+};
+
+#define FREE_CMD_DISPLAY_OPTIONS_SAFE(pCmdOptions) { \
+  if (pCmdOptions != NULL) { \
+    if(pCmdOptions->pDisplayValues != NULL) { \
+      FreePool((VOID *)pCmdOptions->pDisplayValues); \
+      pCmdOptions->pDisplayValues = NULL; \
+    } \
+    FreePool((VOID *)pCmdOptions); \
+    pCmdOptions = NULL; \
   } \
 };
 
@@ -327,7 +341,7 @@ typedef union {
   do {                                                        \
     ReturnCode = Call;                                        \
     if (EFI_ERROR(ReturnCode)) {                              \
-      NVDIMM_ERR("Failure on function: 0x%x", ReturnCode);   \
+      NVDIMM_ERR("Failure on function: %d", ReturnCode);   \
       goto Label;                                             \
     }                                                         \
   } while (0)
@@ -336,7 +350,7 @@ typedef union {
   do {                                                        \
     ReturnCode = Call;                                        \
     if (EFI_ERROR(ReturnCode)) {                              \
-      NVDIMM_ERR("Failure on function: 0x%x", ReturnCode);   \
+      NVDIMM_ERR("Failure on function: %d", ReturnCode);   \
     }                                                         \
   } while (0)
 
@@ -396,9 +410,35 @@ typedef union {
   BufferSize,                                                     \
   (VOID*)Buffer))
 #else
-#define SET_VARIABLE_NV(VarName,VendorGuid,BufferSize,Buffer) preferences_set_var(VarName,VendorGuid,(void*)Buffer,BufferSize)
-#define SET_STR_VARIABLE_NV(VarName,VendorGuid,VarVal) preferences_set_var_string_wide(VarName,VendorGuid, VarVal)
+#define SET_VARIABLE_NV(VarName,VendorGuid,BufferSize,Buffer) preferences_set_var(VarName,VendorGuid,(void*)Buffer,BufferSize); preferences_flush_the_file()
+#define SET_STR_VARIABLE_NV(VarName,VendorGuid,VarVal) preferences_set_var_string_wide(VarName,VendorGuid, VarVal); preferences_flush_the_file()
 #endif
+
+/**
+  Set a Volatile UEFI RunTime variable.
+
+  This will use the Runtime Services call SetVariable to set a non-volatile variable.
+
+  @param VarName                The name of the variable in question
+  @param VendorGuid             A unique identifier for the vendor
+  @param BufferSize             UINTN size of Buffer
+  @param Buffer                 Pointer to value to set variable to
+
+  @retval EFI_SUCCESS           The variable was changed successfully
+  @retval other                 An error occurred
+**/
+#ifndef OS_BUILD
+#define SET_VARIABLE(VarName,VendorGuid,BufferSize,Buffer)  \
+  (gRT->SetVariable((CHAR16*)VarName,                          \
+  &VendorGuid,                                            \
+  EFI_VARIABLE_BOOTSERVICE_ACCESS|EFI_VARIABLE_RUNTIME_ACCESS,      \
+  BufferSize,                                                     \
+  (VOID*)Buffer))
+#else
+#define SET_VARIABLE(VarName,VendorGuid,BufferSize,Buffer) preferences_set_var(VarName,VendorGuid,(void*)Buffer,BufferSize)
+#define SET_STR_VARIABLE(VarName,VendorGuid,VarVal) preferences_set_var_string_wide(VarName,VendorGuid, VarVal)
+#endif
+
 
 /**
   Returns the value of the environment variable with the given name.
@@ -424,7 +464,7 @@ GetEnvVariable(
 **/
 EFI_STATUS
 CheckConfigProtocolVersion(
-  IN     EFI_DCPMM_CONFIG_PROTOCOL *pConfigProtocol
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pConfigProtocol
   );
 
 /**
@@ -645,6 +685,52 @@ OpenFile(
   IN     CONST CHAR16 *pCurrentDirectory OPTIONAL,
   IN     BOOLEAN CreateFileFlag
   );
+
+/**
+  Open file or create new file in binary mode.
+
+  @param[in] pArgFilePath path to a file that will be opened
+  @param[out] pFileHandle output handler
+  @param[in, optional] pCurrentDirectory is the current directory path to where
+    we should start to search for the file.
+  @param[in] CreateFileFlag TRUE to create new file or FALSE to open
+    existing file
+
+  @retval EFI_SUCCESS
+  @retval EFI_INVALID_PARAMETER pFilePath is NULL or empty or pFileHandle is NULL
+  @retval EFI_PROTOCOL_ERROR if there is no EFI_SIMPLE_FILE_SYSTEM_PROTOCOL
+**/
+EFI_STATUS
+OpenFileBinary(
+  IN     CHAR16 *pArgFilePath,
+  OUT EFI_FILE_HANDLE *pFileHandle,
+  IN     CONST CHAR16 *pCurrentDirectory OPTIONAL,
+  IN     BOOLEAN CreateFileFlag
+);
+
+/**
+  Open file or create new file with the proper flags.
+
+  @param[in] pArgFilePath path to a file that will be opened
+  @param[out] pFileHandle output handler
+  @param[in, optional] pCurrentDirectory is the current directory path to where
+    we should start to search for the file.
+  @param[in] CreateFileFlag - TRUE to create new file or FALSE to open
+    existing file
+  @param[in] binary - use binary open
+
+  @retval EFI_SUCCESS
+  @retval EFI_INVALID_PARAMETER pFilePath is NULL or empty or pFileHandle is NULL
+  @retval EFI_PROTOCOL_ERROR if there is no EFI_SIMPLE_FILE_SYSTEM_PROTOCOL
+**/
+EFI_STATUS
+OpenFileWithFlag(
+  IN     CHAR16 *pArgFilePath,
+  OUT EFI_FILE_HANDLE *pFileHandle,
+  IN     CONST CHAR16 *pCurrentDirectory OPTIONAL,
+  IN     BOOLEAN CreateFileFlag,
+  BOOLEAN binary
+);
 
 /**
   Open file or create new file based on device path protocol.
@@ -1001,7 +1087,7 @@ Pow(
   @retval EFI_SUCCESS All Ok
 **/
 EFI_STATUS
-ReadFile(
+FileRead(
   IN      CHAR16 *pFilePath,
   IN      EFI_DEVICE_PATH_PROTOCOL *pDevicePath,
   IN      CONST UINT64  MaxFileSize,
@@ -1176,6 +1262,20 @@ SecurityToString(
   );
 
 /**
+  Convert dimm's security state bitmask to its respective string
+
+  @param[in] HiiHandle handle to the HII database that contains i18n strings
+  @param[in] SecurityStateBitmask, bits define dimm's security state
+
+  @retval String representation of Dimm's security state
+**/
+CHAR16*
+SecurityStateBitmaskToString(
+  IN     EFI_HANDLE HiiHandle,
+  IN     UINT32 SecurityStateBitmask
+);
+
+/**
   Convert ARS status value to its respective string
 
   @param[in] ARS status value
@@ -1307,15 +1407,20 @@ BubbleSort(
   );
 
 /**
-  Convert from units type to a string
+  Populates the units string based on the particular capacity unit
+  @param[in] pData A pointer to the main HII data structure
+  @param[in] Units The input unit to be converted into its HII string
+  @param[out] ppUnitsStr A pointer to the HII units string. Dynamically allocated memory and must be released by calling function.
 
-  @param[in] UnitsToDisplay The type of units to be used
-
-  @retval String representation of the units type
+  @retval EFI_OUT_OF_RESOURCES if there is no space available to allocate memory for units string
+  @retval EFI_INVALID_PARAMETER if one or more input parameters are invalid
+  @retval EFI_SUCCESS The conversion was successful
 **/
-CHAR16*
-UnitsToStr(
-  IN     UINT16 UnitsToDisplay
+EFI_STATUS
+UnitsToStr (
+  IN     EFI_HII_HANDLE HiiHandle,
+  IN     UINT16 Units,
+     OUT CHAR16 **ppUnitsStr
   );
 
 /**
@@ -1379,7 +1484,8 @@ EndianSwapUint16(
   @retval Human readable time string
 **/
 CHAR16 *GetTimeFormatString (
-    IN UINT64 TimeInSeconds
+    IN UINT64 TimeInSeconds,
+    IN BOOLEAN verbose
     );
 
 /**
@@ -1401,7 +1507,7 @@ GoalStatusToString(
 
   Polls the status of the background operation on the dimm.
 
-  @param [in] pNvmDimmConfigProtocol Pointer to the EFI_DCPMM_CONFIG_PROTOCOL instance
+  @param [in] pNvmDimmConfigProtocol Pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance
   @param [in] DimmId Dimm ID of the dimm to poll status
   @param [in] OpcodeToPoll Specify an opcode to poll, 0 to poll regardless of opcode
   @param [in] SubOpcodeToPoll Specify an opcode to poll
@@ -1409,7 +1515,7 @@ GoalStatusToString(
 **/
 EFI_STATUS
 PollLongOpStatus(
-  IN     EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol,
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
   IN     UINT16 DimmId,
   IN     UINT8 OpcodeToPoll OPTIONAL,
   IN     UINT8 SubOpcodeToPoll OPTIONAL,
@@ -1547,4 +1653,57 @@ CHAR16*
 ControllerRidToStr(
   IN     UINT16 ControllerRid
   );
+
+/**
+Set object status for DIMM_INFO
+
+@param[out] pCommandStatus Pointer to command status structure
+@param[in] pDimm DIMM_INFO for which the object status is being set
+@param[in] Status Object status to set
+**/
+VOID
+SetObjStatusForDimmInfo(
+  OUT COMMAND_STATUS *pCommandStatus,
+  IN     DIMM_INFO *pDimm,
+  IN     NVM_STATUS Status
+);
+
+/**
+Set object status for DIMM_INFO
+
+@param[out] pCommandStatus Pointer to command status structure
+@param[in] pDimm DIMM_INFO for which the object status is being set
+@param[in] Status Object status to set
+@param[in] If TRUE - clear all other status before setting this one
+**/
+VOID
+SetObjStatusForDimmInfoWithErase(
+  OUT COMMAND_STATUS *pCommandStatus,
+  IN     DIMM_INFO *pDimm,
+  IN     NVM_STATUS Status,
+  IN     BOOLEAN EraseFirst
+);
+
+/**
+Serialize a Tag ID
+
+@param[in] id the session tag id to be save/serialized
+**/
+EFI_STATUS PbrDcpmmSerializeTagId(
+  UINT32 id
+);
+
+/**
+Deserialize a Tag ID
+
+@param[in] id - will contain the previously serialized tag id if exists, otherwise will contain the value
+            of 'defaultId'
+@param[in] defaultId - the value to assign input param 'id' in the case the TagId wasn't previously serialized.
+**/
+EFI_STATUS PbrDcpmmDeserializeTagId(
+  UINT32 *id,
+  UINT32 defaultId
+);
+
 #endif /** _UTILITY_H_ **/
+

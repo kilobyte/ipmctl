@@ -13,45 +13,38 @@
 
 #include "NvmInterface.h"
 
-#define SPARE_CAPACITY_STR              L"PercentageRemaining"
-#define CONTROLLER_TEMPERATURE_STR      L"ControllerTemperature"
-#define MEDIA_TEMPERATURE_STR           L"MediaTemperature"
-#define POWER_ON_TIME_STR               L"PowerOnTime"
-#define DIRTY_SHUTDOWNS_STR             L"DirtyShutdowns"
-#define POWER_CYCLES_STR                L"PowerCycles"
-#define UPTIME_STR                      L"UpTime"
-#define FW_ERROR_COUNT_STR              L"FwErrorCount"
-#define DIMM_HEALTH_STR                 L"Health"
-#define UNLATCHED_DIRTY_SHUTDOWNS_STR   L"UnlatchedDirtyShutdowns"
+#define SPARE_CAPACITY_STR                    L"PercentageRemaining"
+#define CONTROLLER_TEMPERATURE_STR            L"ControllerTemperature"
+#define MEDIA_TEMPERATURE_STR                 L"MediaTemperature"
+#define POWER_ON_TIME_STR                     L"PowerOnTime"
+#define LATCHED_DIRTY_SHUTDOWN_COUNT_STR      L"LatchedDirtyShutdownCount"
+#define POWER_CYCLES_STR                      L"PowerCycles"
+#define UPTIME_STR                            L"UpTime"
+#define FW_ERROR_COUNT_STR                    L"FwErrorCount"
+#define DIMM_HEALTH_STR                       L"Health"
+#define UNLATCHED_DIRTY_SHUTDOWN_COUNT_STR    L"UnlatchedDirtyShutdownCount"
 
 #define SENSORS_COMBINED \
-  L"Health|MediaTemperature|ControllerTemperature|PercentageRemaining|DirtyShutdowns|PowerOnTime|" \
-  L"UpTime|PowerCycles|FwErrorCount|UnlatchedDirtyShutdowns" \
+  L"Health|MediaTemperature|ControllerTemperature|PercentageRemaining|LatchedDirtyShutdownCount|PowerOnTime|" \
+  L"UpTime|PowerCycles|FwErrorCount|UnlatchedDirtyShutdownCount" \
+
 
 #define TEMPERATURE_MSR     L"C"
 #define SPARE_CAPACITY_MSR  L"%"
 #define TIME_MSR            L"s"
 
-#define STATE_NORMAL_STR        L"Normal"
-#define STATE_NON_CRITICAL_STR  L"NonCritical"
-#define STATE_CRITICAL_STR      L"Critical"
-#define STATE_FATAL_STR         L"Fatal"
-#define STATE_UNKNOWN_STR       L"Unknown"
-
 #define THRESHOLD_NONE_STR                L"None"
-#define THRESHOLD_LOWER_NON_CRITICAL_STR  L"LowerThresholdNonCritical"
-#define THRESHOLD_UPPER_NON_CRITICAL_STR  L"UpperThresholdNonCritical"
-#define THRESHOLD_LOWER_CRITICAL_STR      L"LowerThresholdCritical"
-#define THRESHOLD_UPPER_CRITICAL_STR      L"UpperThresholdCritical"
-#define THRESHOLD_UPPER_FATAL_STR         L"UpperThresholdFatal"
+#define THRESHOLD_ALARM_STR               L"AlarmThreshold"
+#define THRESHOLD_THROTTLING_STOP_STR     L"ThrottlingStopThreshold"
+#define THRESHOLD_THROTTLING_START_STR    L"ThrottlingStartThreshold"
+#define THRESHOLD_SHUTDOWN_STR            L"ShutdownThreshold"
 
 typedef enum {
   ThresholdNone = 0,
-  ThresholdLowerNonCritical = BIT0,
-  ThresholdUpperNonCritical = BIT1,
-  ThresholdLowerCritical = BIT2,
-  ThresholdUpperCritical = BIT3,
-  ThresholdUpperFatal  = BIT4
+  AlarmThreshold = BIT0,
+  ThrottlingStopThreshold = BIT1,
+  ThrottlingStartThreshold = BIT2,
+  ShutdownThreshold = BIT3
 } SensorThresholds;
 
 #define SENSOR_ENABLED_STATE_ENABLED_STR    L"1"
@@ -151,7 +144,7 @@ InitSensorsSet(
 
 EFI_STATUS
 GetSensorsInfo(
-  IN     EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol,
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
   IN     UINT16 DimmID,
   IN OUT DIMM_SENSOR DimmSensorsSet[SENSOR_TYPE_COUNT]
   );
@@ -169,19 +162,6 @@ CONST
 CHAR16 *
 SensorTypeToString(
   IN     UINT8 SensorType
-  );
-
-/**
-  Translate the SensorState into its Unicode string representation.
-  The string buffer is static and the returned string is const so the
-  caller should not make changes to the returned buffer.
-
-  @param[in] SensorState the enum sensor state.
-**/
-CONST
-CHAR16 *
-SensorStateToString(
-  IN     UINT8 SensorState
   );
 
 /**
@@ -233,7 +213,7 @@ ConvertHealthBitmask(
   freeing the returned string
 
   @param[in] HiiHandle handle to the HII database that contains i18n strings
-  @param[in] Health State - Numeric Value of the Health State.
+  @param[in] HealthState - Numeric Value of the Health State.
       Defined in NvmTypes.h
 
   @retval String representation of the health state

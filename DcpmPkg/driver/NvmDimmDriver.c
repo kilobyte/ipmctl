@@ -19,9 +19,17 @@
 #include <Dimm.h>
 #include <Convert.h>
 #include <Protocol/NvdimmLabel.h>
+#include <ProcessorAndTopologyInfo.h>
+#include <PbrDcpmm.h>
 #ifndef OS_BUILD
 #include <Smbus.h>
 #endif
+
+#if _BullseyeCoverage
+#ifndef OS_BUILD
+extern int cov_dumpData(void);
+#endif // !OS_BUILD
+#endif // _BullseyeCoverage
 
 #define FIRST_ERR(rc, newRc) { if (rc == EFI_SUCCESS) rc = newRc; }
 
@@ -34,19 +42,9 @@ EFI_GUID gNvmDimmNgnvmGuid = NVMDIMM_DRIVER_NGNVM_GUID;
 
 EFI_GUID gIntelDimmConfigVariableGuid = INTEL_DIMM_CONFIG_VARIABLE_GUID;
 
-/**
-  Adds the DIMM name for the use of the ComponentName protocols.
+EFI_GUID gIntelDimmPbrVariableGuid = INTEL_DIMM_PBR_VARIABLE_GUID;
 
-  @param[in] DimmIndex, the index of the DIMM that the caller wants to register the name for.
-
-  @retval EFI_SUCCESS if the name was added successfully
-  Other return values from the function AddStringToUnicodeTable.
-**/
-STATIC
-EFI_STATUS
-RegisterDimmName(
-  IN     UINT32 DimmIndex
-  );
+EFI_GUID gIntelDimmPbrTagIdVariableguid = INTEL_DIMM_PBR_TAGID_VARIABLE_GUID;
 
 /**
   Array of dimms UEFI-related data structures.
@@ -74,6 +72,14 @@ EFI_DRIVER_BINDING_PROTOCOL gNvmDimmDriverDriverBinding = {
   Data structure
 **/
 NVMDIMMDRIVER_DATA *gNvmDimmData = NULL;
+
+#ifndef OS_BUILD
+/**
+  Track the NFIT protocol dimm handles that we've installed Device Path on
+**/
+static EFI_HANDLE *gInstalledDevicePathProtocolHandles = NULL;
+static UINTN gNumberOfDevicePathProtocolsInstalled = 0;
+#endif
 
 /**
   Driver specific Vendor Device Path definition.
@@ -110,6 +116,84 @@ ACPI_NVDIMM_DEVICE_PATH gNvmDimmDevicePathNode = {
     0 // Device handle to be set for each DIMM
 };
 
+#ifndef OS_BUILD
+/**
+  Function installs EfiDevicePathProtocolGuid on handles
+  for NfitBinding protocols unless it is already tracking
+  handles.
+
+  @retval EFI_SUCCESS Protocol installed successfully
+  @retval EFI_NOT_FOUND No Handles found
+  Error return codes from LocateHandleBuffer and InstallMultipleProtocolInterfaces
+**/
+EFI_STATUS
+InstallProtoEfiDevicePathProtocolToNfitBinding(
+)
+{
+  EFI_HANDLE *Buffer = NULL;
+  UINTN BufSize = 0;
+  UINTN Index = 0;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+
+  /**
+  If already installed just return
+  **/
+  if ((gInstalledDevicePathProtocolHandles != NULL) &&
+    (gNumberOfDevicePathProtocolsInstalled > 0)) {
+    NVDIMM_WARN("Install already recorded.");
+    goto Finish;
+  }
+
+  /**
+  check sanity and try to clean up if needed
+  **/
+  if ((gInstalledDevicePathProtocolHandles != NULL) &&
+    (gNumberOfDevicePathProtocolsInstalled == 0)) {
+    NVDIMM_ERR("gNumberOfDevicePathProtocolsInstalled is 0 and gInstalledDevicePathProtocolHandles is not NULL.");
+      FREE_POOL_SAFE(gInstalledDevicePathProtocolHandles);
+      gInstalledDevicePathProtocolHandles = NULL;
+  } else if ((gInstalledDevicePathProtocolHandles == NULL) &&
+    (gNumberOfDevicePathProtocolsInstalled != 0)) {
+    NVDIMM_ERR("gNumberOfDevicePathProtocolsInstalled is not 0 and gInstalledDevicePathProtocolHandles is NULL.");
+      gNumberOfDevicePathProtocolsInstalled = 0;
+  }
+
+  /**
+  Install device path protocol so reconnect will find handle
+  **/
+  ReturnCode = gBS->LocateHandleBuffer(ByProtocol, &gNfitBindingProtocolGuid, NULL, &BufSize, &Buffer);
+  if (ReturnCode == EFI_SUCCESS) {
+    gNumberOfDevicePathProtocolsInstalled = BufSize;
+    gInstalledDevicePathProtocolHandles = AllocateZeroPool(gNumberOfDevicePathProtocolsInstalled * sizeof(EFI_HANDLE));
+    if (gInstalledDevicePathProtocolHandles == NULL) {
+      NVDIMM_WARN("Failed to allocate storage for gInstalledDevicePathProtocolHandles.");
+      gNumberOfDevicePathProtocolsInstalled = 0;
+      goto Finish;
+    }
+    for (Index = 0; Index < BufSize; Index++) {
+      ReturnCode = gBS->InstallMultipleProtocolInterfaces(
+        &Buffer[Index],
+        &gEfiDevicePathProtocolGuid,
+        &gNvmDimmDriverDevicePath,
+        NULL);
+      if (EFI_ERROR(ReturnCode)) {
+        gInstalledDevicePathProtocolHandles[Index] = NULL;  /** NULL so skip when freeing **/
+        NVDIMM_WARN("Failed to install the gEfiDevicePathProtocolGuid, error = 0x%llx.", ReturnCode);
+      } else {
+        gInstalledDevicePathProtocolHandles[Index] = Buffer[Index];  /** record the handle if successful **/
+      }
+    }
+  } else if (ReturnCode == EFI_NOT_FOUND) {  /** nothing found so make sure we are not tracking any handles **/
+    gInstalledDevicePathProtocolHandles = NULL;
+    gNumberOfDevicePathProtocolsInstalled = 0;
+  }
+
+Finish:
+  FREE_POOL_SAFE(Buffer);
+  return ReturnCode;
+}
+
+#endif // UEFI
 /**
   Function tries to remove all of the block namespaces protocols, then it
   removes all of the enumerated namespaces from the LSA and also the regions.
@@ -145,6 +229,8 @@ Finish:
   If a DIMM is unaccessible, all of the ISs and namespaces
   that it was a part of will be removed.
 
+  @param[in] DoDriverCleanup, if the caller wants namespaces cleaned up including unloading protocols
+
   @retval EFI_SUCCESS if all DIMMs are working.
   @retval EFI_INVALID_PARAMETER if any of pointer parameters in NULL
   @retval EFI_ABORTED if at least one DIMM is not responding.
@@ -153,33 +239,32 @@ Finish:
 **/
 EFI_STATUS
 ReenumerateNamespacesAndISs(
+  IN BOOLEAN DoDriverCleanup
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
 #ifndef OS_BUILD
   NVDIMM_ENTRY();
 
-  ReturnCode = CleanNamespacesAndISs();
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_WARN("Failed to clean namespaces and pools");
+  if (DoDriverCleanup == TRUE) {
+    ReturnCode = CleanNamespacesAndISs();
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_WARN("Failed to clean namespaces and pools");
+    }
   }
   /** Initialize Interleave Sets **/
   ReturnCode = InitializeISs(gNvmDimmData->PMEMDev.pFitHead,
     &gNvmDimmData->PMEMDev.Dimms, &gNvmDimmData->PMEMDev.ISs);
   if (EFI_ERROR(ReturnCode)) {
-    if (EFI_NO_RESPONSE == ReturnCode) {
-      goto Finish;
-    }
     NVDIMM_WARN("Failed to retrieve the Interleave Set and Region list, error = " FORMAT_EFI_STATUS ".", ReturnCode);
+    goto Finish;
   }
 
   /** Initialize Namespaces (read LSA, enumerate every namespace) **/
   ReturnCode = InitializeNamespaces();
   if (EFI_ERROR(ReturnCode)) {
-    if (EFI_NO_RESPONSE == ReturnCode) {
-      goto Finish;
-    }
     NVDIMM_WARN("Failed to re-initialize namespaces, error = " FORMAT_EFI_STATUS ".", ReturnCode);
+    goto Finish;
   }
 
   /** Install block and device path protocols on Namespaces **/
@@ -204,6 +289,10 @@ NvmDimmDriverUnload(
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
+
+  /** Uninitialize data associated with Playback and Record**/
+  PbrUninit();
+
 #ifndef OS_BUILD
   EFI_STATUS TempReturnCode = EFI_SUCCESS;
   EFI_HANDLE *pHandleBuffer = NULL;
@@ -212,6 +301,36 @@ NvmDimmDriverUnload(
   CONST BOOLEAN DriverAlreadyUnloaded = (gNvmDimmData == NULL);
 
   NVDIMM_ENTRY();
+
+  /**
+  Uninstall EfiDevicePathProtocol on handles recorded earlier.
+  **/
+  if ((gNumberOfDevicePathProtocolsInstalled > 0) && (gInstalledDevicePathProtocolHandles != NULL)) {
+    for (Index = 0; Index < gNumberOfDevicePathProtocolsInstalled; Index++) {
+      if (gInstalledDevicePathProtocolHandles[Index] != NULL) {
+        ReturnCode = gBS->UninstallMultipleProtocolInterfaces(
+          gInstalledDevicePathProtocolHandles[Index],
+          &gEfiDevicePathProtocolGuid,
+          &gNvmDimmDriverDevicePath,
+          NULL);
+        if (EFI_ERROR(ReturnCode)) {
+          NVDIMM_ERR("Uninstall of EfiDevicePathProtocolGuid failed with code 0x%llx.", ReturnCode);
+        }
+      } else {
+        NVDIMM_WARN("NULL handle encountered in gInstalledDevicePathProtocolHandles.");
+      }
+    }
+    gNumberOfDevicePathProtocolsInstalled = 0;
+    FREE_POOL_SAFE(gInstalledDevicePathProtocolHandles);
+    gInstalledDevicePathProtocolHandles = NULL;
+  } else if ((gNumberOfDevicePathProtocolsInstalled == 0) && (gInstalledDevicePathProtocolHandles != NULL)) {
+    NVDIMM_WARN("gNumberOfDevicePathProtocolsInstalled is 0 and gInstalledDevicePathProtocolHandles is not NULL.");
+    FREE_POOL_SAFE(gInstalledDevicePathProtocolHandles);
+    gInstalledDevicePathProtocolHandles = NULL;
+  } else if ((gNumberOfDevicePathProtocolsInstalled != 0) && (gInstalledDevicePathProtocolHandles == NULL)) {
+    NVDIMM_WARN("gNumberOfDevicePathProtocolsInstalled is not 0 and gInstalledDevicePathProtocolHandles is NULL.");
+    gNumberOfDevicePathProtocolsInstalled = 0;
+  }
 
   /** Retrieve array of all handles in the handle database **/
   ReturnCode = gBS->LocateHandleBuffer(AllHandles, NULL, NULL, &HandleCount, &pHandleBuffer);
@@ -274,6 +393,15 @@ NvmDimmDriverUnload(
     NVDIMM_DBG("Failed to uninstall the DriverHealth protocol, error = 0x%llx.", TempReturnCode);
   }
 
+  /** Uninstall Driver PBR Protocol **/
+  TempReturnCode = gBS->UninstallMultipleProtocolInterfaces(ImageHandle,
+    &gNvmDimmPbrProtocolGuid, &gNvmDimmDriverNvmDimmPbr, NULL);
+  if (EFI_ERROR(TempReturnCode)) {
+    FIRST_ERR(ReturnCode, TempReturnCode);
+    NVDIMM_DBG("Failed to uninstall the DriverPbr protocol, error = 0x%llx.", TempReturnCode);
+  }
+
+
   /**
     clean up data struct
   **/
@@ -283,6 +411,8 @@ NvmDimmDriverUnload(
   /** Disable recording AllocatePool and FreePool occurrences, print list and clear it **/
   FlushPointerTrace((CHAR16 *)__WFUNCTION__);
 #endif
+
+
 
   if (EFI_ERROR(ReturnCode) && DriverAlreadyUnloaded) {
     NVDIMM_WARN("The driver was not properly initialized or was unloaded before, error = " FORMAT_EFI_STATUS ".", TempReturnCode);
@@ -295,6 +425,11 @@ NvmDimmDriverUnload(
   return ReturnCode;
 }
 
+
+
+#ifndef OS_BUILD
+
+
 /**
   This function reads the driver workarounds flags from the
   shell variable and sets the proper flags or values in the driver.
@@ -302,58 +437,7 @@ NvmDimmDriverUnload(
   This function exists only in the debug version of the driver.
 **/
 #if defined(DYNAMIC_WA_ENABLE)
-STATIC
-VOID
-InitWorkarounds(
-  )
-{
-  CHAR16 *pShellVar = NULL;
-  CHAR16 **ppShellVarSplit = NULL;
-  UINT32 ShellTokensCount = 0;
-  UINT32 Index = 0;
 
-  pShellVar = GetEnvVariable(DYNAMIC_WA_ENV_VARIABLE_NAME);
-
-  if (pShellVar != NULL) {
-    if (NULL == (ppShellVarSplit = StrSplit(pShellVar, L',', &ShellTokensCount))) {
-      return;
-    }
-
-    for (Index = 0; Index < ShellTokensCount; Index++) {
-      if (CompareMem(ppShellVarSplit[Index], WA_FLAG_ALWAYS_LOAD, sizeof(WA_FLAG_ALWAYS_LOAD)) == 0) {
-        Print(L"INFO: 'Always load' workaround enabled in the driver.\n");
-        gNvmDimmData->AlwaysLoadDriver = TRUE;
-        continue;
-      }
-
-      if (CompareMem(ppShellVarSplit[Index], WA_FLAG_SIMICS, sizeof(WA_FLAG_SIMICS)) == 0) {
-        Print(L"INFO: 'Simics' workaround enabled in the driver.\n");
-        gNvmDimmData->SimicsWorkarounds = TRUE;
-        continue;
-      }
-
-      if (CompareMem(ppShellVarSplit[Index],
-          WA_FLAG_UNLOAD_OTHER_DRIVERS, sizeof(WA_FLAG_UNLOAD_OTHER_DRIVERS)) == 0) {
-        Print(L"INFO: 'Unload loaded drivers before load' workaround enabled in the driver.\n");
-        gNvmDimmData->UnloadExistingDrivers = TRUE;
-        continue;
-      }
-
-      if (CompareMem(ppShellVarSplit[Index], WA_FLAG_IGNORE_UID_NUMS, sizeof(WA_FLAG_IGNORE_UID_NUMS)) == 0) {
-        Print(L"INFO: Ignoring the same NVDIMM UID numbers workaround enabled in the driver.\n");
-        gNvmDimmData->IgnoreTheSameUIDNumbers = TRUE;
-        continue;
-      }
-
-      if (CompareMem(ppShellVarSplit[Index], WA_FLAG_NO_PCD_INIT, sizeof(WA_FLAG_NO_PCD_INIT)) == 0) {
-        Print(L"INFO: Disable PCD read during initialization workaround enabled in the driver.\n");
-        gNvmDimmData->PcdUsageDisabledOnInit = TRUE;
-        continue;
-      }
-    }
-    FreeStringArray(ppShellVarSplit, ShellTokensCount);
-  }
-}
 
 /**
   Finds a driver handle for the given driver name keywords.
@@ -383,7 +467,6 @@ FindDriverByComponentName(
      OUT EFI_HANDLE *pDriverHandle
   )
 {
-#ifndef OS_BUILD
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   UINTN HandleCount = 0;
   EFI_HANDLE *pHandleBuffer = NULL;
@@ -487,7 +570,58 @@ FindDriverByComponentName(
 Finish:
   FREE_POOL_SAFE(pHandleBuffer);
   NVDIMM_EXIT();
-#endif
+}
+STATIC
+VOID
+InitWorkarounds(
+  )
+{
+  CHAR16 *pShellVar = NULL;
+  CHAR16 **ppShellVarSplit = NULL;
+  UINT32 ShellTokensCount = 0;
+  UINT32 Index = 0;
+
+  pShellVar = GetEnvVariable(DYNAMIC_WA_ENV_VARIABLE_NAME);
+
+  if (pShellVar != NULL) {
+    if (NULL == (ppShellVarSplit = StrSplit(pShellVar, L',', &ShellTokensCount))) {
+      return;
+    }
+
+    for (Index = 0; Index < ShellTokensCount; Index++) {
+      if (CompareMem(ppShellVarSplit[Index], WA_FLAG_ALWAYS_LOAD, sizeof(WA_FLAG_ALWAYS_LOAD)) == 0) {
+        Print(L"INFO: 'Always load' workaround enabled in the driver.\n");
+        gNvmDimmData->AlwaysLoadDriver = TRUE;
+        continue;
+      }
+
+      if (CompareMem(ppShellVarSplit[Index], WA_FLAG_SIMICS, sizeof(WA_FLAG_SIMICS)) == 0) {
+        Print(L"INFO: 'Simics' workaround enabled in the driver.\n");
+        gNvmDimmData->SimicsWorkarounds = TRUE;
+        continue;
+      }
+
+      if (CompareMem(ppShellVarSplit[Index],
+          WA_FLAG_UNLOAD_OTHER_DRIVERS, sizeof(WA_FLAG_UNLOAD_OTHER_DRIVERS)) == 0) {
+        Print(L"INFO: 'Unload loaded drivers before load' workaround enabled in the driver.\n");
+        gNvmDimmData->UnloadExistingDrivers = TRUE;
+        continue;
+      }
+
+      if (CompareMem(ppShellVarSplit[Index], WA_FLAG_IGNORE_UID_NUMS, sizeof(WA_FLAG_IGNORE_UID_NUMS)) == 0) {
+        Print(L"INFO: Ignoring the same NVDIMM UID numbers workaround enabled in the driver.\n");
+        gNvmDimmData->IgnoreTheSameUIDNumbers = TRUE;
+        continue;
+      }
+
+      if (CompareMem(ppShellVarSplit[Index], WA_FLAG_NO_PCD_INIT, sizeof(WA_FLAG_NO_PCD_INIT)) == 0) {
+        Print(L"INFO: Disable PCD read during initialization workaround enabled in the driver.\n");
+        gNvmDimmData->PcdUsageDisabledOnInit = TRUE;
+        continue;
+      }
+    }
+    FreeStringArray(ppShellVarSplit, ShellTokensCount);
+  }
 }
 
 /**
@@ -535,8 +669,45 @@ UnloadDcpmmDriversIfAny(
   }
 
 }
-
 #endif /** DYNAMIC_WA_ENABLE **/
+
+/**
+  RegisterDimmName
+  Adds the DIMM name for the use of the ComponentName protocols.
+
+  @param[in] DimmIndex, the index of the DIMM that the caller wants to register the name for.
+
+  @retval EFI_SUCCESS if the name was added successfully
+  Other return values from the function AddStringToUnicodeTable.
+**/
+STATIC
+EFI_STATUS
+RegisterDimmName(
+  IN     UINT32 DimmIndex
+  )
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  CHAR16 *pDimmNameString = NULL;
+
+  NVDIMM_ENTRY();
+
+  pDimmNameString = CatSPrint(NULL, PMEM_DIMM_NAME, gDimmsUefiData[DimmIndex].pDimm->DimmID);
+
+  if (pDimmNameString != NULL) {
+    ReturnCode = AddStringToUnicodeTable(pDimmNameString, &gDimmsUefiData[DimmIndex].pDimmName);
+  } else {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    NVDIMM_WARN("Failed to allocate memory for DIMM name.\n");
+  }
+
+  FREE_POOL_SAFE(pDimmNameString);
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+
+#endif /**!OS_BUILD **/
+
+
 
 /**
   Driver entry point
@@ -549,12 +720,21 @@ NvmDimmDriverDriverEntryPoint(
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
-  EFI_LOADED_IMAGE_PROTOCOL *pLoadedImage = NULL;
   EFI_HANDLE ExistingDriver = NULL;
   DRIVER_PREFERENCES DriverPreferences;
+#ifndef OS_BUILD
+  EFI_LOADED_IMAGE_PROTOCOL *pLoadedImage = NULL;
+#endif
 
   NVDIMM_ENTRY();
-
+  /**
+    Set up playback/record data
+  **/
+  ReturnCode = PbrInit();
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_ERR("Failed to initialize PBR module, error = " FORMAT_EFI_STATUS ".\n", ReturnCode);
+    goto Finish;
+  }
   /**
     This is the sample usage of the OutputCheckpoint function.
     The minor and major codes are custom. The BIOS scratchpad must be set to this value before the code gets there.
@@ -666,6 +846,21 @@ NvmDimmDriverDriverEntryPoint(
     NVDIMM_WARN("Failed to install the EfiDriverHealthProtocol, error = 0x%llx.", ReturnCode);
     goto Finish;
   }
+
+  /**
+   Install Pbr Protocol onto ImageHandle
+ **/
+  ReturnCode = gBS->InstallMultipleProtocolInterfaces(
+    &ImageHandle,
+    &gNvmDimmPbrProtocolGuid, &gNvmDimmDriverNvmDimmPbr,
+    NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Failed to install the EfiDriverPbrProtocol, error = 0x%llx.", ReturnCode);
+    goto Finish;
+  }
+
+  InstallProtoEfiDevicePathProtocolToNfitBinding();
+
 #endif // UEFI
 Finish:
 #ifndef OS_BUILD
@@ -682,9 +877,11 @@ Finish:
   } else {  /** clean - call unload manually if we failed to initialize the driver **/
     NvmDimmDriverUnload(ImageHandle);
   }
+
 #endif
   NVDIMM_DBG("Exiting DriverEntryPoint, error = " FORMAT_EFI_STATUS ".\n", ReturnCode);
   NVDIMM_EXIT_I64(ReturnCode);
+
   return ReturnCode;
 }
 
@@ -860,40 +1057,6 @@ Finish:
 }
 
 /**
-  RegisterDimmName
-  Adds the DIMM name for the use of the ComponentName protocols.
-
-  @param[in] DimmIndex, the index of the DIMM that the caller wants to register the name for.
-
-  @retval EFI_SUCCESS if the name was added successfully
-  Other return values from the function AddStringToUnicodeTable.
-**/
-STATIC
-EFI_STATUS
-RegisterDimmName(
-  IN     UINT32 DimmIndex
-  )
-{
-  EFI_STATUS ReturnCode = EFI_SUCCESS;
-  CHAR16 *pDimmNameString = NULL;
-
-  NVDIMM_ENTRY();
-
-  pDimmNameString = CatSPrint(NULL, L"Intel Persistent Memory DIMM %d Controller", gDimmsUefiData[DimmIndex].pDimm->DimmID);
-
-  if (pDimmNameString != NULL) {
-    ReturnCode = AddStringToUnicodeTable(pDimmNameString, &gDimmsUefiData[DimmIndex].pDimmName);
-  } else {
-    ReturnCode = EFI_OUT_OF_RESOURCES;
-    NVDIMM_WARN("Failed to allocate memory for DIMM name.\n");
-  }
-
-  FREE_POOL_SAFE(pDimmNameString);
-  NVDIMM_EXIT_I64(ReturnCode);
-  return ReturnCode;
-}
-
-/**
   This function makes calls to the dimms required to initialize the driver.
 
   @retval EFI_SUCCESS if no errors.
@@ -905,14 +1068,19 @@ InitializeDimms()
    EFI_STATUS ReturnCode = EFI_SUCCESS;
    EFI_STATUS ReturnCodeNonBlocking = EFI_SUCCESS;
    UINT32 Index = 0;
-   EFI_DEVICE_PATH_PROTOCOL *pTempDevicePathInterface = NULL;
    DIMM *pDimm = NULL;
    DIMM *pDimm2 = NULL;
    LIST_ENTRY *pDimmNode = NULL;
    LIST_ENTRY *pDimmNode2 = NULL;
-   BOOLEAN PcdUsage = TRUE;
    CHAR16 Dimm1Uid[MAX_DIMM_UID_LENGTH];
    CHAR16 Dimm2Uid[MAX_DIMM_UID_LENGTH];
+
+   NVDIMM_ENTRY();
+
+#ifndef OS_BUILD
+   BOOLEAN PcdUsage = TRUE;
+   EFI_DEVICE_PATH_PROTOCOL *pTempDevicePathInterface = NULL;
+#endif
    /**
     Init container keeping operation statuses with wanring, error and info level messages.
    **/
@@ -935,7 +1103,7 @@ InitializeDimms()
    // For right now, this only fills in additional smbus information for
    // uninitialized dimms listed in the NFIT *only* (not any that aren't listed
    // in the NFIT)
-   ReturnCodeNonBlocking = FillUninitializedDimmList();
+   ReturnCodeNonBlocking = PopulateUninitializedDimmList();
    if (EFI_ERROR(ReturnCodeNonBlocking)) {
     NVDIMM_WARN("Failed on Smbus dimm list init, error = " FORMAT_EFI_STATUS ".", ReturnCodeNonBlocking);
    }
@@ -974,10 +1142,12 @@ InitializeDimms()
       }
     }
    }
+
+#ifndef OS_BUILD
+
 #if defined(DYNAMIC_WA_ENABLE)
    PcdUsage = !gNvmDimmData->PcdUsageDisabledOnInit;
 #endif
-#ifndef OS_BUILD
    if (PcdUsage) {
     /**
       Initialize Interleave Sets
@@ -998,7 +1168,7 @@ InitializeDimms()
       NVDIMM_WARN("Failed to initialize Namespaces, error = " FORMAT_EFI_STATUS ".", ReturnCode);
     }
    }
-#endif
+#endif // !OS_BUILD
    Index = 0;
    for (pDimmNode = GetFirstNode(&gNvmDimmData->PMEMDev.Dimms);
       !IsNull(&gNvmDimmData->PMEMDev.Dimms, pDimmNode);
@@ -1031,6 +1201,8 @@ InitializeDimms()
             gDimmsUefiData[Index].pDevicePath,
             NULL);
 
+    NVDIMM_DBG("gBS->InstallMultipleProtocolInterfaces(...)[%d] ReturnCode = %d", Index, ReturnCode);
+    NVDIMM_DBG("gDimmsUefiData[%d].DeviceHandle was set to %d", Index, gDimmsUefiData[Index].DeviceHandle);
     if (EFI_ERROR(ReturnCode)) {
       NVDIMM_WARN("Failed to install Device Path protocol, error = " FORMAT_EFI_STATUS ".", ReturnCode);
       goto Finish;
@@ -1115,7 +1287,7 @@ InitializeDimms()
     }
 
     Index++;
-#endif //OS_BUILD
+#endif // !OS_BUILD
    }
 #ifndef OS_BUILD
    ReturnCode = InstallProtocolsOnNamespaces();
@@ -1124,9 +1296,9 @@ InitializeDimms()
     NVDIMM_WARN("Failed to install Block Namespace devices, error = " FORMAT_EFI_STATUS ".", ReturnCode);
     goto Finish;
    }
-#endif
+#endif // !OS_BUILD
 Finish:
-
+   NVDIMM_EXIT_I64(ReturnCode);
    return ReturnCode;
 
 }
@@ -1145,18 +1317,15 @@ NvmDimmDriverDriverBindingStart(
 {
    EFI_STATUS ReturnCode = EFI_SUCCESS;
    UINT32 Index = 0;
-   EFI_DEVICE_PATH_PROTOCOL *pTempDevicePathInterface = NULL;
    DIMM *pDimm = NULL;
    DIMM *pDimm2 = NULL;
    LIST_ENTRY *pDimmNode = NULL;
    LIST_ENTRY *pDimmNode2 = NULL;
-   VOID *pDummy = 0;
-   BOOLEAN PcdUsage = TRUE;
    CHAR16 Dimm1Uid[MAX_DIMM_UID_LENGTH];
    CHAR16 Dimm2Uid[MAX_DIMM_UID_LENGTH];
 
-   NVDIMM_ENTRY();
 
+   NVDIMM_ENTRY();
 #if !defined(MDEPKG_NDEBUG) && !defined(_MSC_VER)
    /**
    Enable recording AllocatePool and FreePool occurences
@@ -1236,9 +1405,6 @@ NvmDimmDriverDriverBindingStart(
          }
       }
    }
-#if defined(DYNAMIC_WA_ENABLE)
-   PcdUsage = !gNvmDimmData->PcdUsageDisabledOnInit;
-#endif
 
    Index = 0;
    for (pDimmNode = GetFirstNode(&gNvmDimmData->PMEMDev.Dimms);
@@ -1267,13 +1433,12 @@ NvmDimmDriverDriverBindingStart(
       }
    }
 
-Finish:
-  //ReturnCode = 0;
+ Finish:
    NVDIMM_DBG("Exiting DriverBindingStart, error = " FORMAT_EFI_STATUS ".\n", ReturnCode);
    NVDIMM_EXIT_I64(ReturnCode);
    return ReturnCode;
 }
-#else
+#else // !OS_BUILD
 /**
 Starts a device controller or a bus controller.
 **/
@@ -1288,8 +1453,26 @@ NvmDimmDriverDriverBindingStart(
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   VOID *pDummy = 0;
   INTEL_DIMM_CONFIG *pIntelDIMMConfig = NULL;
+  UINT32 TagId = 0;
+  PbrContext *ctx = PBR_CTX();
+  UINT32 NextId = 0;
 
   NVDIMM_ENTRY();
+
+  if (PBR_RECORD_MODE == PBR_GET_MODE(ctx)) {
+    //set a tag id to mark the start of driver initialization
+    PbrSetTag(PBR_DCPMM_CLI_SIG, L"driver: initialization", L"0", &TagId);
+  }
+  else if (PBR_PLAYBACK_MODE == PBR_GET_MODE(ctx)) {
+    //The id is saved to a non-persistent volatile store, and is incremented
+    //after each CLI cmd and drive load invocation.  Given we have the tagid that should
+    //be executed next, explicitely reset the pbr session to that id before
+    //running the cmd.
+    PbrDcpmmDeserializeTagId(&NextId, 0);
+    PbrResetSession(NextId);
+    PbrDcpmmSerializeTagId(NextId + 1);
+  }
+
 
 #if !defined(MDEPKG_NDEBUG) && !defined(_MSC_VER)
    /**
@@ -1304,43 +1487,7 @@ NvmDimmDriverDriverBindingStart(
    gNvmDimmData->ControllerHandle = ControllerHandle;
 
    /**
-   Install device path protocol
-   **/
-   ReturnCode = gBS->InstallMultipleProtocolInterfaces(
-      &ControllerHandle,
-      &gEfiDevicePathProtocolGuid,
-      &gNvmDimmDriverDevicePath,
-      NULL);
-   if (EFI_ERROR(ReturnCode)) {
-      /**
-      We might get this error if we already have the device path protocol installed.
-      Lets try to open it.
-      **/
-      if (ReturnCode == EFI_INVALID_PARAMETER) {
-         ReturnCode = gBS->OpenProtocol(
-            ControllerHandle,
-            &gEfiDevicePathProtocolGuid,
-            (VOID **)&gNvmDimmData->pControllerDevicePathInstance,
-            pThis->DriverBindingHandle,
-            NULL,
-            EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL
-         );
-
-         if (EFI_ERROR(ReturnCode)) {
-            NVDIMM_WARN("Failed to install Device Path protocol, error = " FORMAT_EFI_STATUS ".", ReturnCode);
-            goto Finish;
-         } else {
-            gNvmDimmData->UninstallDevicePath = FALSE; //!< The device path was already installed - do not uninstall it
-         }
-      } else {
-         NVDIMM_WARN("Failed to install Device Path protocol, error = " FORMAT_EFI_STATUS ".", ReturnCode);
-      }
-   } else {
-      gNvmDimmData->UninstallDevicePath = TRUE; //!< We installed the device path - need to uninstall it on Stop()
-   }
-
-   /**
-   Install EFI_DCPMM_CONFIG_PROTOCOL on the driver handle
+   Install EFI_DCPMM_CONFIG2_PROTOCOL on the driver handle
    **/
    ReturnCode = gBS->InstallMultipleProtocolInterfaces(&gNvmDimmData->DriverHandle,
       &gNvmDimmConfigProtocolGuid, &gNvmDimmDriverNvmDimmConfig,
@@ -1362,6 +1509,22 @@ NvmDimmDriverDriverBindingStart(
       ControllerHandle,
       EFI_OPEN_PROTOCOL_BY_DRIVER
    );
+
+   /**
+   If failed to open then try to install and retry open.
+   **/
+   if (ReturnCode != EFI_SUCCESS) {
+      InstallProtoEfiDevicePathProtocolToNfitBinding();
+
+      ReturnCode = gBS->OpenProtocol(
+         ControllerHandle,
+         &gEfiDevicePathProtocolGuid,
+         (VOID **)&gNvmDimmData->pControllerDevicePathInstance,
+         pThis->DriverBindingHandle,
+         ControllerHandle,
+         EFI_OPEN_PROTOCOL_BY_DRIVER
+      );
+   }
 
    if (EFI_ERROR(ReturnCode)) {
       NVDIMM_WARN("Failed to open Device Path protocol, error = " FORMAT_EFI_STATUS ".", ReturnCode);
@@ -1404,6 +1567,22 @@ NvmDimmDriverDriverBindingStart(
       NVDIMM_ERR("Failed while checking memory map, error = " FORMAT_EFI_STATUS ".", ReturnCode);
       goto Finish;
    }
+
+   /**
+     load the ARS list
+   **/
+   ReturnCode = LoadArsList();
+   if (EFI_ERROR(ReturnCode)) {
+     NVDIMM_WARN("Failed to load the ARS list, error = " FORMAT_EFI_STATUS ".", ReturnCode);
+   }
+
+   // Ignore return code as we don't want to block the ability to work
+   // with functional dimms
+   ReturnCode = InitializeSmbusAccess();
+   if (EFI_ERROR(ReturnCode)) {
+     NVDIMM_WARN("Failed to start SMBUS access, error = 0x%llx.\nContinuing...", ReturnCode);
+   }
+
   /**
     Initialize DIMMs, ISets and namespaces
   **/
@@ -1435,6 +1614,7 @@ NvmDimmDriverDriverBindingStart(
   }
 
 Finish:
+
   FREE_POOL_SAFE(pIntelDIMMConfig);
   if (EFI_ERROR(ReturnCode)) {
     gBS->CloseProtocol(
@@ -1454,7 +1634,7 @@ FinishSkipClose:
 	NVDIMM_EXIT_I64(ReturnCode);
 	return ReturnCode;
 }
-#endif //OS_BUILD
+#endif // !OS_BUILD
 /**
   Stops a device controller or a bus controller.
 **/
@@ -1475,7 +1655,6 @@ NvmDimmDriverDriverBindingStop(
   UINT32 Index = 0;
 
   NVDIMM_ENTRY();
-
   if (gNvmDimmData == NULL) {
     NVDIMM_WARN("Driver data structure not initialized!\n");
     ReturnCode = EFI_DEVICE_ERROR;
@@ -1564,6 +1743,16 @@ NvmDimmDriverDriverBindingStop(
         if (EFI_ERROR(ReturnCode)) {
           NVDIMM_WARN("Failed to uninstall the child device security command protocol, error = " FORMAT_EFI_STATUS ".\n", ReturnCode);
         }
+
+        ReturnCode = gBS->UninstallMultipleProtocolInterfaces(
+          gDimmsUefiData[Index].DeviceHandle,
+          &gEfiNvdimmLabelProtocolGuid, &gDimmsUefiData[Index].NvdimmLabelProtocolInstance,
+          NULL
+        );
+
+        if (EFI_ERROR(ReturnCode)) {
+          NVDIMM_WARN("Failed to uninstall the child device NVDIMM label protocol, error = " FORMAT_EFI_STATUS ".\n", ReturnCode);
+        }
       }
       gDimmsUefiData[Index].DeviceHandle = NULL;
 
@@ -1610,21 +1799,12 @@ NvmDimmDriverDriverBindingStop(
     NVDIMM_WARN("Failed to uninstall the NvmDimmConfig protocol, error = " FORMAT_EFI_STATUS ".\n", TempReturnCode);
   }
 
-  /**
-    Uninstall device path
-  **/
-  if (gNvmDimmData->UninstallDevicePath) {
-    TempReturnCode = gBS->UninstallMultipleProtocolInterfaces(
-        ControllerHandle,
-        &gEfiDevicePathProtocolGuid, &gNvmDimmDriverDevicePath,
-        NULL);
-    if (EFI_ERROR(TempReturnCode)) {
-      FIRST_ERR(ReturnCode, TempReturnCode);
-      NVDIMM_DBG("Failed to uninstall the device path protocol, error = " FORMAT_EFI_STATUS ".\n", TempReturnCode);
-    } else {
-      gNvmDimmData->UninstallDevicePath = FALSE; //!< Remember that we had already uninstalled the device path
-    }
+  TempReturnCode = UninitializeSmbusAccess();
+  if (EFI_ERROR(TempReturnCode)) {
+    FIRST_ERR(ReturnCode, TempReturnCode);
+    NVDIMM_DBG("Failed to uninstall smbus access, error = 0x%llx.", TempReturnCode);
   }
+
   TempReturnCode = SmbusDeinit();
   if (EFI_ERROR(TempReturnCode)) {
     FIRST_ERR(ReturnCode, TempReturnCode);
@@ -1655,11 +1835,28 @@ NvmDimmDriverDriverBindingStop(
 
 Finish:
 #else //not OS_BUILD
-  uninitAcpiTables();
+  
+
+  /**
+   Remove the DIMM from memory
+ **/
+  ReturnCode = FreeDimmList();
+
+  /** Free PCAT tables memory **/
+  FreeParsedPcat(gNvmDimmData->PMEMDev.pPcatHead);
+
+  /** Free NFIT tables memory **/
+  FreeParsedNfit(gNvmDimmData->PMEMDev.pFitHead);
+
 #endif //not OS_BUILD
-  /** Bullseye dump here **/
+#if _BullseyeCoverage
+#ifndef OS_BUILD
+  cov_dumpData();
+#endif // !OS_BUILD
+#endif // _BullseyeCoverage
   NVDIMM_DBG("Exiting DriverBindingStop, error = " FORMAT_EFI_STATUS ".\n", ReturnCode);
   NVDIMM_EXIT_I64(ReturnCode);
+
   return ReturnCode;
 }
 
@@ -1902,8 +2099,8 @@ GetDimmEfiDataIndex(
   IN     EFI_HANDLE DimmHandle OPTIONAL
   )
 {
-  EFI_STATUS ReturnCode = EFI_SUCCESS;
 #ifndef OS_BUILD
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   UINT16 Index = 0;
   if (DimmHandle != NULL) {
     ReturnCode = HandleToPID(DimmHandle, NULL, &DimmPid);

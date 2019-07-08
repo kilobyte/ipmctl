@@ -10,14 +10,14 @@ NAME
 ----
 ipmctl-show-host - Shows basic information about the host server
 
-DESCRIPTION
------------
-Shows basic information about the host server.
-
 SYNOPSIS
 --------
 [verse]
 ipmctl show [OPTIONS] -system -host
+
+DESCRIPTION
+-----------
+Shows basic information about the host server.
 
 OPTIONS
 -------
@@ -38,6 +38,14 @@ NOTE: The all and display options are exclusive and may not be used together.
 -help::
   Displays help for the command.
 
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
+
 ifdef::os_build[]
 -o (text|nvmxml)::
 -output (text|nvmxml)::
@@ -50,7 +58,7 @@ Lists a few key fields for the server.
 [verse]
 ipmctl show -system -host
 
-Displays the host server operating system name
+Displays the host server operating system name.
 [verse]
 ipmctl show -d osname -system -host
 
@@ -72,11 +80,11 @@ MixedSKU::
   (Default) One or more DCPMMs in the system have different SKUs. One of:
   - 0: False
   - 1: True - In this case, the host software operates in a read-only mode and
-  does not allow changes to the DCPMEM DIMMs and their associated capacity.
+  does not allow changes to the DCPMMs and their associated capacity.
 
 SKUViolation::
   (Default) One or more DCPMMs in the system has an unsupported configuration
   due to a license issue. One of:
   - 0: False
   - 1: True - In this case, the host software operates in a read-only mode and
-  does not allow changes to the DCPMMs and their associated capacity
+  does not allow changes to the DCPMMs and their associated capacity.

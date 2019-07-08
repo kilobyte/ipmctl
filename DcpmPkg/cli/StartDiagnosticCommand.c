@@ -12,6 +12,43 @@
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <ReadRunTimePreferences.h>
+
+#define DS_ROOT_PATH                       L"/DiagnosticList"
+#define DS_DIAGNOSTIC_PATH                 L"/DiagnosticList/Diagnostic"
+#define DS_DIAGNOSTIC_INDEX_PATH           L"/DiagnosticList/Diagnostic[%d]"
+
+#define TEST_NAME_STR                      L"TEST"
+#define SUBTEST_NAME_STR                   L"SubTest"
+
+#define SUBTEST_MAX_STR_WIDTH  25
+
+#define DIAG_ENTRY_EOL                     L'\n'
+#define DIAG_CR                            L'\r'
+
+ /*
+    *  PRINT LIST ATTRIBUTES
+    *  ---Test = Quick---
+    *        Dimm specs = ok
+    *           Dimm specs.Message.1 = X
+    */
+PRINTER_LIST_ATTRIB StartDiagListAttributes =
+{
+ {
+    {
+      DIAGNOSTIC_NODE_STR,                                         //GROUP LEVEL TYPE
+      L"---" TEST_NAME_STR L" = $(" TEST_NAME_STR L")",            //NULL or GROUP LEVEL HEADER
+      SHOW_LIST_IDENT SHOW_LIST_IDENT L"%ls = %ls",                //NULL or KEY VAL FORMAT STR
+      TEST_NAME_STR                                                //NULL or IGNORE KEY LIST (K1;K2)
+    }
+  }
+};
+
+PRINTER_DATA_SET_ATTRIBS StartDiagDataSetAttribs =
+{
+  &StartDiagListAttributes,
+  NULL
+};
 
 /**
   Command syntax definition
@@ -19,20 +56,26 @@
 COMMAND StartDiagnosticCommand =
 {
   START_VERB,                                                     //!< verb
-  {
+  {                                                               //!< options
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"",HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", LARGE_PAYLOAD_OPTION, L"", L"", HELP_LPAYLOAD_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", SMALL_PAYLOAD_OPTION, L"", L"", HELP_SPAYLOAD_DETAILS_TEXT, FALSE, ValueEmpty}
 #ifdef OS_BUILD
-    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired }
+    ,{ OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP,HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired }
 #else
-    {L"", L"", L"", L"", FALSE, ValueOptional}                         //!< options
+    ,{L"", L"", L"", L"", L"",FALSE, ValueOptional}
 #endif
   },
   {                                                               //!< targets
     {DIAGNOSTIC_TARGET, L"", ALL_DIAGNOSTICS_TARGETS, TRUE, ValueOptional},
-    {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, FALSE, ValueRequired},
+    {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, FALSE, ValueOptional},
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                        //!< properties
   L"Run a diagnostic test on one or more DIMMs",                  //!< help
-  StartDiagnosticCmd
+  StartDiagnosticCmd,
+  TRUE
 };
 
 /**
@@ -90,7 +133,6 @@ Finish:
   return ChosenDiagnosticTests;
 }
 
-
 /**
   Execute the Start Diagnostic command
 
@@ -105,7 +147,7 @@ StartDiagnosticCmd(
   IN     COMMAND *pCmd
   )
 {
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   UINT16 *pDimmIds = NULL;
   UINT32 DimmIdsCount = 0;
@@ -117,7 +159,16 @@ StartDiagnosticCmd(
   UINT32 DimmCount = 0;
   DISPLAY_PREFERENCES DisplayPreferences;
   UINT8 DimmIdPreference = DISPLAY_DIMM_ID_HANDLE;
-  CHAR16 *pFinalDiagnosticsResult = NULL;
+  DIAG_INFO *pFinalDiagnosticsResult = NULL;
+  PRINT_CONTEXT *pPrinterCtx = NULL;
+  CHAR16 *pPath = NULL;
+  UINTN length = 0;
+  UINT8 Id = 0;
+  CHAR16 *MsgStr = NULL;
+  CHAR16 *SubTestNameStr = NULL;
+  CHAR16 **ppSplitDiagResultLines = NULL;
+  UINT32 NumTokens = 0;
+  UINT32 i = 0;
 
   NVDIMM_ENTRY();
 
@@ -127,36 +178,40 @@ StartDiagnosticCmd(
 
   if (pCmd == NULL) {
     ReturnCode = EFI_INVALID_PARAMETER;
-    Print(FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
+    NVDIMM_DBG("pCmd parameter is NULL.\n");
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
     goto Finish;
   }
 
-  ReturnCode = ReadRunTimeCliDisplayPreferences(&DisplayPreferences);
+  pPrinterCtx = pCmd->pPrintCtx;
+
+  ReturnCode = ReadRunTimePreferences(&DisplayPreferences, DISPLAY_CLI_INFO);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_DISPLAY_PREFERENCES_RETRIEVE);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_DISPLAY_PREFERENCES_RETRIEVE);
     goto Finish;
   }
   DimmIdPreference = DisplayPreferences.DimmIdentifier;
 
   ChosenDiagTests = GetDiagnosticTestType(pCmd);
   if (ChosenDiagTests == DIAGNOSTIC_TEST_UNKNOWN || ((ChosenDiagTests & DIAGNOSTIC_TEST_ALL) != ChosenDiagTests)) {
-      Print(FORMAT_STR_SPACE FORMAT_STR_NL, CLI_ERR_WRONG_DIAGNOSTIC_TARGETS, ALL_DIAGNOSTICS_TARGETS);
-      ReturnCode = EFI_INVALID_PARAMETER;
-      goto Finish;
+    ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_WRONG_DIAGNOSTIC_TARGETS, ALL_DIAGNOSTICS_TARGETS);
+    goto Finish;
   }
 
   // NvmDimmConfigProtocol required
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 
   ReturnCode = pNvmDimmConfigProtocol->GetDimmCount(pNvmDimmConfigProtocol, &DimmCount);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
+    ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 
@@ -164,14 +219,14 @@ StartDiagnosticCmd(
 
   if (pDimms == NULL) {
     ReturnCode = EFI_OUT_OF_RESOURCES;
-    Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
     goto Finish;
   }
 
   ReturnCode = pNvmDimmConfigProtocol->GetDimms(pNvmDimmConfigProtocol, DimmCount, DIMM_INFO_CATEGORY_NONE, pDimms);
   if (EFI_ERROR(ReturnCode)) {
     ReturnCode = EFI_ABORTED;
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     NVDIMM_WARN("Failed to retrieve the DIMM inventory found in NFIT");
     goto Finish;
   }
@@ -179,7 +234,7 @@ StartDiagnosticCmd(
   // check targets
   if (ContainTarget(pCmd, DIMM_TARGET)) {
     pDimmTargetValue = GetTargetValue(pCmd, DIMM_TARGET);
-    ReturnCode = GetDimmIdsFromString(pDimmTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
+    ReturnCode = GetDimmIdsFromString(pCmd, pDimmTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
     if (EFI_ERROR(ReturnCode)) {
       goto Finish;
     }
@@ -192,37 +247,61 @@ StartDiagnosticCmd(
       continue;
     }
 
-    ReturnCode = pNvmDimmConfigProtocol->StartDiagnostic(
-        pNvmDimmConfigProtocol,
-        pDimmIds,
-        DimmIdsCount,
-        CurrentDiagTest,
-        DimmIdPreference,
-        &pFinalDiagnosticsResult);
+    ReturnCode = pNvmDimmConfigProtocol->StartDiagnosticDetail(
+      pNvmDimmConfigProtocol,
+      pDimmIds,
+      DimmIdsCount,
+      CurrentDiagTest,
+      DimmIdPreference,
+      &pFinalDiagnosticsResult);
     if (EFI_ERROR(ReturnCode)) {
       NVDIMM_WARN("Diagnostics failed");
     }
+
+    DIAG_INFO *pLoc = pFinalDiagnosticsResult;
+
+    PRINTER_BUILD_KEY_PATH(pPath, DS_DIAGNOSTIC_INDEX_PATH, Index);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, TEST_NAME_STR, pLoc->TestName);
+    for (Id = 0; Id < MAX_NO_OF_DIAGNOSTIC_SUBTESTS; Id++) {
+      if (pLoc->SubTestName[Id] != NULL) {
+
+        length = StrLen(pLoc->SubTestName[Id]);
+
+        SubTestNameStr = CatSPrint(NULL, pLoc->SubTestName[Id]);
+        for (i = 0; i < (SUBTEST_MAX_STR_WIDTH - length); i++) {
+          SubTestNameStr = CatSPrintClean(SubTestNameStr, L" ");
+        }
+
+        PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, SubTestNameStr, pLoc->state[Id]);
+        // Split message string and set printer in unique key-> value form.
+        if (pLoc->Message[Id] != NULL) {
+          ppSplitDiagResultLines = StrSplit(pLoc->Message[Id], DIAG_ENTRY_EOL, &NumTokens);
+          if (ppSplitDiagResultLines == NULL) {
+            NVDIMM_WARN("Message string split failed");
+            return EFI_OUT_OF_RESOURCES;
+          }
+          for (i = 0; i < NumTokens; i++) {
+            MsgStr = CatSPrint(pLoc->SubTestName[Id], L".Message.%d", i + 1);
+            PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, MsgStr, ppSplitDiagResultLines[i]);
+            FREE_POOL_SAFE(MsgStr);
+          }
+          FreeStringArray(ppSplitDiagResultLines, NumTokens);
+        }
+        FREE_POOL_SAFE(SubTestNameStr);
+        FREE_POOL_SAFE(pLoc->SubTestName[Id]);
+        FREE_POOL_SAFE(pLoc->Message[Id]);
+        FREE_POOL_SAFE(pLoc->state[Id]);
+      }
+    }
+    FREE_POOL_SAFE(pLoc->TestName);
+    FREE_POOL_SAFE(pFinalDiagnosticsResult);
   }
 
-  //Print Cli diagnostics result
-#ifdef OS_BUILD //todo, implement ST->ConOut in OS, for now just Print it
-  if (NULL != pFinalDiagnosticsResult) {
-    Print(pFinalDiagnosticsResult);
-  }
-  else {
-    NVDIMM_ERR("The final diagnostic result string not allocated; NULL pointer");
-  }
-#else
-  if ((pFinalDiagnosticsResult != NULL) && ((gST != NULL) && (gST->ConOut != NULL))) {
-    ReturnCode = gST->ConOut->OutputString(gST->ConOut, pFinalDiagnosticsResult);
-    if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_PRINTING_DIAGNOSTICS_RESULTS);
-    }
-  }
-#endif
+  PRINTER_CONFIGURE_DATA_ATTRIBUTES(pPrinterCtx, DS_ROOT_PATH, &StartDiagDataSetAttribs);
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
   // free all memory structures
-  FREE_POOL_SAFE(pFinalDiagnosticsResult);
+  FREE_POOL_SAFE(pPath);
   FREE_POOL_SAFE(pDimmIds);
   FREE_POOL_SAFE(pDimms);
   NVDIMM_EXIT_I64(ReturnCode);
@@ -248,4 +327,3 @@ RegisterStartDiagnosticCommand(
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
-

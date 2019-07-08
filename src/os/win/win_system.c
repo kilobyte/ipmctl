@@ -953,13 +953,33 @@ int os_get_os_type()
 int os_mkdir(OS_PATH path)
 {
   char* p;
-  for (p = strchr(path + 1, '/'); p; p = strchr(p + 1, '/'))
+  char seperator = '/';
+  if (NULL == strchr(path + 1, '/') && NULL != strchr(path + 1, '\\'))
+  {
+    seperator = '\\';
+  }
+
+  for (p = strchr(path + 1, seperator); p; p = strchr(p + 1, seperator))
   {
     *p = '\0';
     if (_mkdir(path) == -1) {
-      if (errno != EEXIST) { *p = '/'; return -1; }
+      if (errno != EEXIST) { *p = seperator; return -1; }
     }
-    *p = '/';
+    *p = seperator;
   }
+
   return 0;
+}
+
+/*
+ Get CPUID info for windows. Depending on the inputRequestType,
+  regs[0...3] will be populated with register values eax....edx
+*/
+int getCPUID(unsigned int *regs, int registerCount, int inputRequestType) {
+  int rc = NVM_ERR_INVALIDPARAMETER;
+  if (registerCount < 4) {
+    return rc;
+  }
+  __cpuid((int *)regs, inputRequestType);
+  return NVM_SUCCESS;
 }

@@ -30,7 +30,7 @@ CHAR16 *
 GetObjectTypeString(
   IN     EFI_HANDLE HiiHandle,
   IN     UINT8 ObjectType
-  )
+)
 {
   CHAR16 *pObjectTypeString = NULL;
 
@@ -81,8 +81,8 @@ CreateCommandStatusString(
   IN     CONST CHAR16 *pStatusPreposition,
   IN     COMMAND_STATUS *pCommandStatus,
   IN     BOOLEAN ObjectIdNumberPreferred,
-     OUT CHAR16 **ppOutputMessage
-  )
+  OUT CHAR16 **ppOutputMessage
+)
 {
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   LIST_ENTRY *pObjectStatusNode = NULL;
@@ -114,15 +114,17 @@ CreateCommandStatusString(
         pStatusMessage,
         pExecuteSuccessString);
       FREE_POOL_SAFE(pExecuteSuccessString);
-    } else {
+    }
+    else {
       pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(HiiHandle, pCommandStatus->GeneralStatus);
       if ((pCommandStatus->GeneralStatus == NVM_ERR_MANAGEABLE_DIMM_NOT_FOUND) ||
         (pCommandStatus->GeneralStatus == NVM_ERR_DIMM_NOT_FOUND)) {
         pCurrentString = CatSPrint(pCurrentString, FORMAT_STR_NL, pSingleStatusCodeMessage);
-      } else {
+      }
+      else {
         pFailedString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_FAILED), NULL);
         pErrorString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERROR), NULL);
-        pCurrentString = CatSPrint(pCurrentString, FORMAT_STR_SPACE FORMAT_STR L": " FORMAT_STR L" (%d) - " FORMAT_STR_NL,
+        pCurrentString = CatSPrint(pCurrentString, FORMAT_STR_SPACE FORMAT_STR L": " FORMAT_STR L" %d - " FORMAT_STR_NL,
           pStatusMessage,
           pFailedString,
           pErrorString,
@@ -133,26 +135,35 @@ CreateCommandStatusString(
       }
       FREE_POOL_SAFE(pSingleStatusCodeMessage);
     }
-  } else {
+  }
+  else {
     LIST_FOR_EACH(pObjectStatusNode, &pCommandStatus->ObjectStatusList) {
       pObjectStatus = OBJECT_STATUS_FROM_NODE(pObjectStatusNode);
 
       ReturnCode = GetPreferredValueAsString(
-          pObjectStatus->ObjectId,
-          (pObjectStatus->IsObjectIdStr) ? pObjectStatus->ObjectIdStr : NULL,
-          ObjectIdNumberPreferred,
-          ObjectStr,
-          MAX_OBJECT_ID_STR_LEN
-          );
+        pObjectStatus->ObjectId,
+        (pObjectStatus->IsObjectIdStr) ? pObjectStatus->ObjectIdStr : NULL,
+        ObjectIdNumberPreferred,
+        ObjectStr,
+        MAX_OBJECT_ID_STR_LEN
+      );
       if (EFI_ERROR(ReturnCode)) {
         goto Finish;
       }
 
-      pPrefixString = CatSPrint(NULL, FORMAT_STR FORMAT_STR FORMAT_STR FORMAT_STR L": ",
+      if ((pObjectTypeString == NULL) || (pObjectTypeString[0] == L'\0')) {
+        pPrefixString = CatSPrint(NULL, FORMAT_STR FORMAT_STR FORMAT_STR  FORMAT_STR L": ",
           pStatusMessage,
           pStatusPreposition,
           pObjectTypeString,
           ObjectStr);
+      } else {
+        pPrefixString = CatSPrint(NULL, FORMAT_STR FORMAT_STR L" " FORMAT_STR L" " FORMAT_STR L": ",
+          pStatusMessage,
+          pStatusPreposition,
+          pObjectTypeString,
+          ObjectStr);
+      }
 
       pAllStatusCodeMessages = GetAllNvmStatusCodeMessages(HiiHandle, pObjectStatus, pPrefixString);
       pCurrentString = CatSPrintClean(pCurrentString, FORMAT_STR, pAllStatusCodeMessages);
@@ -206,7 +217,8 @@ InitErrorAndWarningNvmStatusCodes()
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_UNABLE_TO_GET_SECURITY_STATE);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_INCONSISTENT_SECURITY_STATE);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_INVALID_PASSPHRASE);
-  SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_SECURITY_COUNT_EXPIRED);
+  SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_SECURITY_USER_PP_COUNT_EXPIRED);
+  SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_SECURITY_MASTER_PP_COUNT_EXPIRED);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_FILENAME_NOT_PROVIDED);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_IMAGE_EXAMINE_INVALID);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_IMAGE_EXAMINE_LOWER_VERSION);
@@ -256,6 +268,7 @@ InitErrorAndWarningNvmStatusCodes()
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_RESERVE_DIMM_REQUIRES_AT_LEAST_TWO_DIMMS);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_REGION_GOAL_NAMESPACE_EXISTS);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_REGION_GOAL_AUTO_PROV_ENABLED);
+  SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_CREATE_NAMESPACE_NOT_ALLOWED);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_REGION_REMAINING_SIZE_NOT_IN_LAST_PROPERTY);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_PERS_MEM_MUST_BE_APPLIED_TO_ALL_DIMMS);
 
@@ -280,7 +293,7 @@ InitErrorAndWarningNvmStatusCodes()
   Unicode string representing its brief description.
 
   @param[in] EFI HANDLE the HiiHandle to the HII database that contains NvmStatus strings
-  @param[in] NvmStatusCode the status code returned from
+  @param[in] Code the status code returned from
     a NVM command.
 
   @retval Pointer to a decoded string. Memory is dynamically allocated. It should be freed by caller.
@@ -288,13 +301,13 @@ InitErrorAndWarningNvmStatusCodes()
 CHAR16 *
 GetSingleNvmStatusCodeMessage(
   IN     EFI_HANDLE    HiiHandle,
-  IN     NvmStatusCode NvmStatusCodeVar
-  )
+  IN     NvmStatusCode Code
+)
 {
   CHAR16 *pTempString = NULL;
   CHAR16 *pTempString1 = NULL;
 
-  switch (NvmStatusCodeVar) {
+  switch (Code) {
 
   case NVM_SUCCESS:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_SUCCESS), NULL);
@@ -327,8 +340,10 @@ GetSingleNvmStatusCodeMessage(
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_COMMAND_NOT_SUPPORTED_BY_THIS_SKU), NULL);
   case NVM_ERR_CONFIG_NOT_SUPPORTED_BY_CURRENT_SKU:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_CONFIG_NOT_SUPPORTED_BY_CURRENT_SKU), NULL);
-  case NVM_ERR_SECURITY_COUNT_EXPIRED:
-    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_SECURITY_COUNT_EXPIRED), NULL);
+  case NVM_ERR_SECURITY_USER_PP_COUNT_EXPIRED:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_SECURITY_USER_PP_COUNT_EXPIRED), NULL);
+  case NVM_ERR_SECURITY_MASTER_PP_COUNT_EXPIRED:
+    return  HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_SECURITY_MASTER_PP_COUNT_EXPIRED), NULL);
   case NVM_ERR_RECOVERY_ACCESS_NOT_ENABLED:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_RECOVERY_ACCESS_NOT_ENABLED), NULL);
   case NVM_ERR_SECURE_ERASE_NAMESPACE_EXISTS:
@@ -342,7 +357,7 @@ GetSingleNvmStatusCodeMessage(
   case NVM_ERR_SENSOR_NOT_VALID:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_SENSOR_NOT_VALID), NULL);
   case NVM_ERR_SENSOR_CONTROLLER_TEMP_OUT_OF_RANGE:
-    pTempString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_CONTROLLER_OUT_OF_RANGE),  NULL);
+    pTempString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_CONTROLLER_OUT_OF_RANGE), NULL);
     if (pTempString == NULL) {
       return pTempString;
     }
@@ -350,7 +365,7 @@ GetSingleNvmStatusCodeMessage(
     FREE_POOL_SAFE(pTempString);
     return pTempString1;
   case NVM_ERR_SENSOR_MEDIA_TEMP_OUT_OF_RANGE:
-    pTempString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_MEDIA_OUT_OF_RANGE),  NULL);
+    pTempString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_MEDIA_OUT_OF_RANGE), NULL);
 
     if (pTempString == NULL) {
       return pTempString;
@@ -359,7 +374,7 @@ GetSingleNvmStatusCodeMessage(
     FREE_POOL_SAFE(pTempString);
     return pTempString1;
   case NVM_ERR_SENSOR_CAPACITY_OUT_OF_RANGE:
-    pTempString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_CAPACITY_OUT_OF_RANGE),  NULL);
+    pTempString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_CAPACITY_OUT_OF_RANGE), NULL);
     if (pTempString == NULL) {
       return pTempString;
     }
@@ -371,7 +386,7 @@ GetSingleNvmStatusCodeMessage(
   case NVM_ERR_MEDIA_DISABLED:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_MEDIA_DISABLED_VALUE), NULL);
   case NVM_ERR_ENABLE_SECURITY_NOT_ALLOWED:
-      return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_ENABLE_SECURITY_NOT_ALLOWED), NULL);
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_ENABLE_SECURITY_NOT_ALLOWED), NULL);
   case NVM_ERR_CREATE_GOAL_NOT_ALLOWED:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_CREATE_GOAL_NOT_ALLOWED), NULL);
   case NVM_ERR_INVALID_SECURITY_STATE:
@@ -434,6 +449,8 @@ GetSingleNvmStatusCodeMessage(
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_REGION_GOAL_NAMESPACE_EXISTS), NULL);
   case NVM_ERR_REGION_GOAL_AUTO_PROV_ENABLED:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_CREATE_GOAL_AUTO_PROV_ENABLED), NULL);
+  case NVM_ERR_CREATE_NAMESPACE_NOT_ALLOWED:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_CREATE_NAMESPACE_NOT_ALLOWED), NULL);
 
   case NVM_ERR_REGION_REMAINING_SIZE_NOT_IN_LAST_PROPERTY:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_REGION_REMAINING_SIZE_NOT_IN_LAST_PROPERTY), NULL);
@@ -532,6 +549,27 @@ GetSingleNvmStatusCodeMessage(
 
   case NVM_ERR_ARS_IN_PROGRESS:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_ARS_IN_PROGRESS), NULL);
+  case NVM_ERR_FWUPDATE_IN_PROGRESS:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_FWUPDATE_IN_PROGRESS), NULL);
+  case NVM_ERR_OVERWRITE_DIMM_IN_PROGRESS:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_OVERWRITE_DIMM_IN_PROGRESS), NULL);
+  case NVM_ERR_UNKNOWN_LONG_OP_IN_PROGRESS:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_UNKNOWN_LONG_OP_IN_PROGRESS), NULL);
+
+  case NVM_ERR_LONG_OP_ABORTED_OR_REVISION_FAILURE:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_LONG_OP_ABORTED_OR_REVISION_FAILURE), NULL);
+  case NVM_ERR_FW_UPDATE_AUTH_FAILURE:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_FW_UPDATE_AUTH_FAILURE), NULL);
+  case NVM_ERR_UNSUPPORTED_COMMAND:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_UNSUPPORTED_COMMAND), NULL);
+  case NVM_ERR_DEVICE_ERROR:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_DEVICE_ERROR), NULL);
+  case NVM_ERR_TRANSFER_ERROR:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_TRANSFER_ERROR), NULL);
+  case NVM_ERR_UNABLE_TO_STAGE_NO_LONGOP:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_UNABLE_TO_STAGE_NO_LONGOP), NULL);
+  case NVM_ERR_LONG_OP_UNKNOWN:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_LONG_OP_UNKNOWN), NULL);
 
   case NVM_ERR_APPDIRECT_IN_SYSTEM:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_APPDIRECT_IN_SYSTEM), NULL);
@@ -601,7 +639,7 @@ GetSingleNvmStatusCodeMessage(
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_DRIVERFAILED), NULL);
 
   case NVM_ERR_OPERATION_NOT_SUPPORTED:
-      return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_NOT_SUPPORTED), NULL);
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_NOT_SUPPORTED), NULL);
 
 
   case NVM_ERR_SPD_NOT_ACCESSIBLE:
@@ -610,6 +648,11 @@ GetSingleNvmStatusCodeMessage(
   case NVM_ERR_INCOMPATIBLE_HARDWARE_REVISION:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_INCOMPATIBLE_HARDWARE_REVISION), NULL);
 
+  case NVM_SUCCESS_NO_EVENT_FOUND:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_SUCCESS_NO_EVENT_FOUND), NULL);
+
+  case NVM_ERR_FILE_NOT_FOUND:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_FILE_NOT_FOUND), NULL);
 
   default:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_DEFAULT), NULL);
@@ -631,7 +674,7 @@ GetAllNvmStatusCodeMessages(
   IN     EFI_HANDLE    HiiHandle,
   IN     OBJECT_STATUS *pObjectStatus,
   IN     CONST CHAR16 *pPrefixString
-  )
+)
 {
   CHAR16 *pStatusStr = NULL;
   CHAR16 *pSingleStatusStr = NULL;
@@ -649,17 +692,18 @@ GetAllNvmStatusCodeMessages(
     if (CodeSet) {
       pSingleStatusStr = GetSingleNvmStatusCodeMessage(HiiHandle, Index);
       if (Index == NVM_SUCCESS || Index == NVM_SUCCESS_FW_RESET_REQUIRED ||
-      Index == NVM_ERR_IMAGE_EXAMINE_INVALID || Index == NVM_SUCCESS_IMAGE_EXAMINE_OK ||
-      Index == NVM_ERR_IMAGE_EXAMINE_LOWER_VERSION ||
-      Index == NVM_ERR_FIRMWARE_TOO_LOW_FORCE_REQUIRED) {
-         pStatusStr = CatSPrintClean(pStatusStr, L"" FORMAT_STR L"" FORMAT_STR_NL, pPrefixString, pSingleStatusStr);
-      } else {
-         pErrorLevelStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERROR), NULL);
-         pStatusStr = CatSPrintClean(pStatusStr, L"" FORMAT_STR L"" FORMAT_STR L" (%d) - " FORMAT_STR_NL,
-            pPrefixString,
-            pErrorLevelStr,
-            Index,
-            pSingleStatusStr);
+        Index == NVM_ERR_IMAGE_EXAMINE_INVALID || Index == NVM_SUCCESS_IMAGE_EXAMINE_OK ||
+        Index == NVM_ERR_IMAGE_EXAMINE_LOWER_VERSION ||
+        Index == NVM_ERR_FIRMWARE_TOO_LOW_FORCE_REQUIRED) {
+        pStatusStr = CatSPrintClean(pStatusStr, L"" FORMAT_STR L"" FORMAT_STR_NL, pPrefixString, pSingleStatusStr);
+      }
+      else {
+        pErrorLevelStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERROR), NULL);
+        pStatusStr = CatSPrintClean(pStatusStr, L"" FORMAT_STR L"" FORMAT_STR L" %d - " FORMAT_STR_NL,
+          pPrefixString,
+          pErrorLevelStr,
+          Index,
+          pSingleStatusStr);
       }
 
       FREE_POOL_SAFE(pSingleStatusStr);
@@ -687,7 +731,7 @@ ClearNvmStatusForObject(
   IN OUT COMMAND_STATUS *pCommandStatus,
   IN     UINT32 ObjectId,
   IN     NvmStatusCode Code
-  )
+)
 {
 
   OBJECT_STATUS *pObjectStatus = NULL;
@@ -696,10 +740,10 @@ ClearNvmStatusForObject(
     NVDIMM_DBG("pCommandStatus = NULL, Invalid parameter");
   }
   else {
-      pObjectStatus = GetObjectStatus(pCommandStatus, ObjectId);
-      if (pObjectStatus != NULL) {
-          ClearNvmStatus(pObjectStatus, Code);
-      }
+    pObjectStatus = GetObjectStatus(pCommandStatus, ObjectId);
+    if (pObjectStatus != NULL) {
+      ClearNvmStatus(pObjectStatus, Code);
+    }
   }
 }
 
@@ -716,14 +760,14 @@ VOID
 ClearNvmStatus(
   IN OUT OBJECT_STATUS *pObjectStatus,
   IN     NvmStatusCode Code
-  )
+)
 {
   CONST UINT32 Index = Code / 64;
   CONST UINT64 Mod = Code % 64;
   CONST UINT64 Bit = (UINT64)1 << Mod;
 
   if (pObjectStatus != NULL) {
-      pObjectStatus->StatusBitField.BitField[Index] &= ~Bit;
+    pObjectStatus->StatusBitField.BitField[Index] &= ~Bit;
   }
 }
 
@@ -737,14 +781,14 @@ VOID
 SetNvmStatus(
   IN OUT OBJECT_STATUS *pObjectStatus,
   IN     NvmStatusCode Code
-  )
+)
 {
   CONST UINT32 Index = Code / 64;
   CONST UINT64 Mod = Code % 64;
   CONST UINT64 Bit = (UINT64)1 << Mod;
 
   if (pObjectStatus != NULL) {
-      pObjectStatus->StatusBitField.BitField[Index] |= Bit;
+    pObjectStatus->StatusBitField.BitField[Index] |= Bit;
   }
 }
 
@@ -763,7 +807,7 @@ IsSetNvmStatusForObject(
   IN OUT COMMAND_STATUS *pCommandStatus,
   IN     UINT32 ObjectId,
   IN     NVM_STATUS Status
-  )
+)
 {
   OBJECT_STATUS *pObjectStatus = NULL;
   BOOLEAN IsSetObjectStatus = FALSE;
@@ -798,7 +842,7 @@ BOOLEAN
 IsSetNvmStatus(
   IN     OBJECT_STATUS *pObjectStatus,
   IN     NvmStatusCode Code
-  )
+)
 {
   CONST UINT32 Index = Code / 64;
   CONST UINT64 Mod = Code % 64;
@@ -828,7 +872,7 @@ Finish:
 EFI_STATUS
 InitializeCommandStatus(
   IN OUT COMMAND_STATUS **ppCommandStatus
-  )
+)
 {
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   COMMAND_STATUS *pCommandStatus = NULL;
@@ -838,7 +882,7 @@ InitializeCommandStatus(
     goto Finish;
   }
 
-  pCommandStatus = (COMMAND_STATUS *) AllocateZeroPool(sizeof(*pCommandStatus));
+  pCommandStatus = (COMMAND_STATUS *)AllocateZeroPool(sizeof(*pCommandStatus));
   if (pCommandStatus == NULL) {
     ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
@@ -866,7 +910,7 @@ Finish:
 VOID
 FreeCommandStatus(
   IN COMMAND_STATUS **ppCommandStatus
-  )
+)
 {
   VOID *pTemporaryNode = NULL;
   LIST_ENTRY *pObjectStatusNode = NULL;
@@ -902,7 +946,7 @@ SetObjStatus(
   IN     CHAR16 *pObjectIdStr OPTIONAL,
   IN     UINT32 ObjectIdStrLength OPTIONAL,
   IN     NVM_STATUS Status
-  )
+)
 {
   OBJECT_STATUS *pObjectStatus = NULL;
   NVDIMM_ENTRY();
@@ -935,13 +979,14 @@ SetObjStatus(
     pObjectStatus->IsObjectIdStr = TRUE;
 
     StrnCpyS(pObjectStatus->ObjectIdStr, MAX_OBJECT_ID_STR_LEN, pObjectIdStr, MIN(ObjectIdStrLength, MAX_OBJECT_ID_STR_LEN) - 1);
-  } else {
+  }
+  else {
     pObjectStatus->IsObjectIdStr = FALSE;
   }
 
   SetNvmStatus(pObjectStatus, Status);
   pObjectStatus->Signature = OBJECT_STATUS_SIGNATURE;
-  pObjectStatus->Progress=0;
+  pObjectStatus->Progress = 0;
   InitializeListHead(&pObjectStatus->ObjectStatusNode);
   InsertTailList(&pCommandStatus->ObjectStatusList, &pObjectStatus->ObjectStatusNode);
   pCommandStatus->ObjectStatusCount++;
@@ -963,7 +1008,7 @@ SetObjProgress(
   IN OUT COMMAND_STATUS *pCommandStatus,
   IN     UINT32 ObjectId,
   IN     UINT8 Progress
-  )
+)
 {
   OBJECT_STATUS *pObjectStatus = NULL;
   NVDIMM_ENTRY();
@@ -1013,7 +1058,7 @@ VOID
 ResetCmdStatus(
   IN OUT COMMAND_STATUS *pCommandStatus,
   IN     NVM_STATUS Status
-  )
+)
 {
   OBJECT_STATUS *pObjectStatus = NULL;
   LIST_ENTRY *pObjectStatusNode = NULL;
@@ -1052,7 +1097,7 @@ VOID
 SetCmdStatus(
   IN OUT COMMAND_STATUS *pCommandStatus,
   IN     NVM_STATUS Status
-  )
+)
 {
   NVDIMM_ENTRY();
   if (pCommandStatus == NULL) {
@@ -1079,11 +1124,13 @@ OBJECT_STATUS *
 GetObjectStatus(
   IN     COMMAND_STATUS *pCommandStatus,
   IN     UINT32 ObjectId
-  )
+)
 {
   LIST_ENTRY *pObjectStatusNode = NULL;
   OBJECT_STATUS *pObjectStatus = NULL;
   OBJECT_STATUS *pSearchedObj = NULL;
+
+  NVDIMM_ENTRY();
 
   if (pCommandStatus == NULL) {
     goto Finish;
@@ -1121,7 +1168,7 @@ CountNumberOfErrorsAndWarnings(
   IN     COMMAND_STATUS *pCommandStatus,
   OUT    UINT64 *pNumberOfWarnings,
   OUT    UINT64 *pNumberOfErrors
-  )
+)
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   LIST_ENTRY *pNode = NULL;
@@ -1142,7 +1189,8 @@ CountNumberOfErrorsAndWarnings(
       if (IsSetNvmStatus(pObjectStatus, Index)) {
         if (IsSetNvmStatus(&gAllErrorNvmStatuses, Index)) {
           (*pNumberOfErrors)++;
-        } else if (IsSetNvmStatus(&gAllWarningNvmStatuses, Index)) {
+        }
+        else if (IsSetNvmStatus(&gAllWarningNvmStatuses, Index)) {
           (*pNumberOfWarnings)++;
         }
       }
@@ -1152,4 +1200,80 @@ CountNumberOfErrorsAndWarnings(
 Finish:
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
+}
+
+/**
+Erase all Nvm status codes
+
+@param[in/out] pObjectStatus pointer to object status (with Nvm Status bit field)
+**/
+VOID
+EraseNvmStatus(
+  IN OUT OBJECT_STATUS *pObjectStatus
+)
+{
+  UINT32 BitFieldCount = (NVM_LAST_STATUS_VALUE / 64) + 1;
+  ZeroMem(pObjectStatus->StatusBitField.BitField, (sizeof(UINT64) * BitFieldCount));
+}
+
+/**
+Erase status for specified ID in command status list (or create a new one with no status)
+
+@param[in, out] pCommandStatus - command status
+@param[in] ObjectId - Id for specified object
+@param[in] pObjectIdStr - Id for specified object as string representation, OPTIONAL
+@param[in] ObjectIdStrLength - Max length of pObjectIdStr, OPTIONAL
+**/
+VOID
+EraseObjStatus(
+  IN OUT COMMAND_STATUS *pCommandStatus,
+  IN     UINT32 ObjectId,
+  IN     CHAR16 *pObjectIdStr OPTIONAL,
+  IN     UINT32 ObjectIdStrLength OPTIONAL
+)
+{
+  OBJECT_STATUS *pObjectStatus = NULL;
+  NVDIMM_ENTRY();
+
+  if (pCommandStatus == NULL) {
+    NVDIMM_DBG("pCommandStatus = NULL, Invalid parameter");
+    goto Finish;
+  }
+
+  if (!IsListInitialized(pCommandStatus->ObjectStatusList)) {
+    InitializeListHead(&pCommandStatus->ObjectStatusList);
+  }
+
+  pObjectStatus = GetObjectStatus(pCommandStatus, ObjectId);
+  if (pObjectStatus != NULL) {
+    EraseNvmStatus(pObjectStatus);
+    goto Finish;
+  }
+
+  pObjectStatus = AllocateZeroPool(sizeof(*pObjectStatus));
+  if (pObjectStatus == NULL) {
+    NVDIMM_ERR("Out of memory");
+    goto Finish;
+  }
+
+  pObjectStatus->ObjectId = ObjectId;
+
+  if (pObjectIdStr != NULL && StrLen(pObjectIdStr) > 0) {
+    pObjectStatus->IsObjectIdStr = TRUE;
+
+    StrnCpyS(pObjectStatus->ObjectIdStr, MAX_OBJECT_ID_STR_LEN, pObjectIdStr, MIN(ObjectIdStrLength, MAX_OBJECT_ID_STR_LEN) - 1);
+  }
+  else {
+    pObjectStatus->IsObjectIdStr = FALSE;
+  }
+
+  EraseNvmStatus(pObjectStatus);
+  pObjectStatus->Signature = OBJECT_STATUS_SIGNATURE;
+  pObjectStatus->Progress = 0;
+  InitializeListHead(&pObjectStatus->ObjectStatusNode);
+  InsertTailList(&pCommandStatus->ObjectStatusList, &pObjectStatus->ObjectStatusNode);
+  pCommandStatus->ObjectStatusCount++;
+
+Finish:
+  NVDIMM_EXIT();
 }

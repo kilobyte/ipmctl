@@ -20,10 +20,13 @@ struct Command StartFormatCommand =
 {
   START_VERB,                                                            //!< verb
   {                                                                      //!< options
-    {FORCE_OPTION_SHORT, FORCE_OPTION, L"", L"", FALSE, ValueEmpty},
-    {L"", RECOVER_OPTION, L"", L"", FALSE, ValueEmpty}
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"",HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
+    {FORCE_OPTION_SHORT, FORCE_OPTION, L"", L"",HELP_FORCE_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", RECOVER_OPTION, L"", L"",L"Recovery Option", FALSE, ValueEmpty}
 #ifdef OS_BUILD
-    ,{ OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired }
+    ,{ OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP,HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired }
 #endif
   },
   {                                                                      //!< targets
@@ -31,8 +34,9 @@ struct Command StartFormatCommand =
     {DIMM_TARGET, L"", HELP_TEXT_DIMM_ID, TRUE, ValueOptional}
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                               //!< properties
-  L"",                                                                   //!< help
-  StartFormat
+  L"Start Format Dimms",                                                                   //!< help
+  StartFormat,								 //!< run function
+  TRUE
 };
 
 EFI_STATUS
@@ -40,7 +44,7 @@ StartFormat(
   IN     struct Command *pCmd
   )
 {
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   CHAR16 *pTargetValue = NULL;
   UINT16 *pDimmIds = NULL;
   UINT32 DimmIdsCount = 0;
@@ -55,27 +59,33 @@ StartFormat(
   BOOLEAN Recovery = FALSE;
   UINT32 DimmHandle = 0;
   UINT32 DimmIndex = 0;
+  PRINT_CONTEXT *pPrinterCtx = NULL;
 
   NVDIMM_ENTRY();
   ZeroMem(DimmStr, sizeof(DimmStr));
 
   if (pCmd == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
     ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
     goto Finish;
   }
 
+  /**
+    Printing will still work via compability mode if NULL so no need to check for NULL.
+  **/
+  pPrinterCtx = pCmd->pPrintCtx;
+
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 
   // initialize status structure
   ReturnCode = InitializeCommandStatus(&pCommandStatus);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     NVDIMM_DBG("Failed on InitializeCommandStatus");
     goto Finish;
   }
@@ -89,15 +99,15 @@ StartFormat(
     }
 
     if (DimmCount == 0) {
-      Print(FORMAT_STR_NL, CLI_INFO_NO_NON_FUNCTIONAL_DIMMS);
       ReturnCode = EFI_NOT_FOUND;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_INFO_NO_NON_FUNCTIONAL_DIMMS);
       goto Finish;
     }
 
     pDimms = AllocateZeroPool(sizeof(*pDimms) * DimmCount);
     if (pDimms == NULL) {
       ReturnCode = EFI_OUT_OF_RESOURCES;
-      Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
       goto Finish;
     }
 
@@ -106,8 +116,11 @@ StartFormat(
       goto Finish;
     }
   } else {
-    ReturnCode = GetDimmList(pNvmDimmConfigProtocol, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
+    ReturnCode = GetDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
     if (EFI_ERROR(ReturnCode)) {
+      if(ReturnCode == EFI_NOT_FOUND) {
+        PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_INFO_NO_FUNCTIONAL_DIMMS);
+    }
       goto Finish;
     }
   }
@@ -115,7 +128,7 @@ StartFormat(
   // check targets
   if (ContainTarget(pCmd, DIMM_TARGET)) {
     pTargetValue = GetTargetValue(pCmd, DIMM_TARGET);
-    ReturnCode = GetDimmIdsFromString(pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
+    ReturnCode = GetDimmIdsFromString(pCmd, pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
     if (EFI_ERROR(ReturnCode)) {
       NVDIMM_DBG("Failed on GetDimmIdsFromString");
       goto Finish;
@@ -123,8 +136,8 @@ StartFormat(
 
     if (!Recovery) {
       if (!AllDimmsInListAreManageable(pDimms, DimmCount, pDimmIds, DimmIdsCount)){
-        Print(FORMAT_STR_NL, CLI_ERR_UNMANAGEABLE_DIMM);
         ReturnCode = EFI_INVALID_PARAMETER;
+        PRINTER_SET_MSG(pPrinterCtx, ReturnCode, FORMAT_STR_NL, CLI_ERR_UNMANAGEABLE_DIMM);
         goto Finish;
       }
     }
@@ -138,7 +151,7 @@ StartFormat(
 
     if (pDimmIds == NULL) {
       ReturnCode = EFI_OUT_OF_RESOURCES;
-      Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
       goto Finish;
     }
 
@@ -166,7 +179,7 @@ StartFormat(
         goto Finish;
       }
 
-      Print(FORMAT_STR L"(" FORMAT_STR L")\n", CLI_FORMAT_DIMM_PROMPT_STR, DimmStr);
+      PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, FORMAT_STR L" " FORMAT_STR L"\n", CLI_FORMAT_DIMM_PROMPT_STR, DimmStr);
       ReturnCode = PromptYesNo(&Confirmation);
       if (EFI_ERROR(ReturnCode) || !Confirmation) {
         ReturnCode = EFI_NOT_STARTED;
@@ -175,17 +188,18 @@ StartFormat(
     }
   }
 
-  Print(FORMAT_STR_NL, CLI_FORMAT_DIMM_STARTING_FORMAT, DimmStr);
+  PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, CLI_FORMAT_DIMM_STARTING_FORMAT, DimmStr);
 
   ReturnCode = pNvmDimmConfigProtocol->DimmFormat(pNvmDimmConfigProtocol, pDimmIds, DimmIdsCount, Recovery, pCommandStatus);
   if (!EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL,CLI_FORMAT_DIMM_REBOOT_REQUIRED_STR);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_FORMAT_DIMM_REBOOT_REQUIRED_STR);
   } else {
     DisplayCommandStatus(CLI_INFO_START_FORMAT, L"", pCommandStatus);
     ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
   }
 
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
   FreeCommandStatus(&pCommandStatus);
   FREE_POOL_SAFE(pDimmIds);
   FREE_POOL_SAFE(pDimms);

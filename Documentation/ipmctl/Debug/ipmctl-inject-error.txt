@@ -8,23 +8,31 @@ endif::manpage[]
 
 NAME
 ----
-ipmctl-inject - Injects an error or clears a previously injected error
-
-DESCRIPTION
------------
-Injects an error or clears a previously injected error on one or more DCPMM for
-testing purposes.
+ipmctl-inject-error - Injects an error or clears a previously injected error
 
 SYNOPSIS
 --------
 [verse]
 ipmctl set [OPTIONS] -dimm (DimmIDs) [PROPERTIES]
 
+DESCRIPTION
+-----------
+Injects an error or clears a previously injected error on one or more DCPMM for
+testing purposes.
+
 OPTIONS
 -------
 -h::
 -help::
     Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::
@@ -111,43 +119,46 @@ FatalMediaError::
   cleared using disable trigger input parameter to clear this injected
   fatal error.
 
+  NOTE: Injecting a Fatal Media error is unsupported on Windows. Please
+  contact Microsoft for assistance in performing this action.
+
 DirtyShutdown::
   - "1": Injects an ADR failure resulting in dirty shutdown upon reboot.
 
 EXAMPLES
 --------
-Sets the media temperature on all manageable DCPMEM DIMMs to 100 degrees
+Sets the media temperature on all manageable DCPMMs to 100 degrees
 Celsius.
 [verse]
 ipmctl set -dimm Temperature=100
 
-Clears the injected media temperature on all manageable DCPMEM DIMMs.
+Clears the injected media temperature on all manageable DCPMMs.
 [verse]
 ipmctl set -dimm Clear=1 Temperature=1
 
-Poison address 0x10000200 on DCPMEM DIMM 1234.
+Poison address 0x10000200 on DCPMM 1234.
 [verse]
 ipmctl set -dimm 1234 Poison=0x10000200
 
-Clears the injected poison of address 0x10000200 on DCPMEM DIMM 1234.
+Clears the injected poison of address 0x10000200 on DCPMM 1234.
 [verse]
 ipmctl set -dimm 1234 Poison=0x10000200 Clear=1
 
-Triggers an artificial package sparing on all manageable DCPMEM DIMMs.
+Triggers an artificial package sparing on all manageable DCPMMs.
 [verse]
 ipmctl set -dimm PackageSparing=1
 
-Sets the life remaining percentage on all manageable DCPMEM DIMMs to 10%.
+Sets the life remaining percentage on all manageable DCPMMs to 10%.
 [verse]
 ipmctl set -dimm PercentageRemaining=10
 
-Clears the injected remaining life percentage on all manageable DCPMEM DIMMs. The
+Clears the injected remaining life percentage on all manageable DCPMMs. The
 value of PercentageRemaining is irrelevant.
 [verse]
 ipmctl set -dimm PercentageRemaining=10 Clear=1
 
-Triggers an artificial ADR failure on all manageable DCPMEM DIMM s resulting in a dirty
-shutdown on each DCPMEM DIMM on the next reboot.
+Triggers an artificial ADR failure on all manageable DCPMM s resulting in a dirty
+shutdown on each DCPMM on the next reboot.
 [verse]
 ipmctl set -dimm DirtyShutdown=1
 
@@ -166,27 +177,27 @@ with the remaining DCPMMs.
 SAMPLE OUTPUT
 -------------
 [verse]
-Set temperature on DCPMEM DIMM (DimmID): Success|Error (Code) -
+Set temperature on DCPMM (DimmID): Success|Error (Code) -
 (Description)
-Clear injected temperature on DCPMEM DIMM (DimmID): Success|Error
+Clear injected temperature on DCPMM (DimmID): Success|Error
 (Code) - (Description)
 ...
-Poison address (Address) on DCPMEM DIMM (DimmID): Success|Error
+Poison address (Address) on DCPMM (DimmID): Success|Error
 (Code) - (Description)
-Clear injected poison of address (Address) on DCPMEM DIMM
+Clear injected poison of address (Address) on DCPMM
 (DimmID): Success|Error (Code) - (Description)
 ...
-Trigger package sparing on DCPMEM DIMM (DimmID): Success|Error
+Trigger package sparing on DCPMM (DimmID): Success|Error
 (Code) - (Description)
-Clear injected package sparing on DCPMEM DIMM (DimmID):
+Clear injected package sparing on DCPMM (DimmID):
 Success|Error (Code) - (Description)
 ...
-Trigger a spare capacity alarm on DCPMEM DIMM (DimmID):
+Trigger a spare capacity alarm on DCPMM (DimmID):
 Success|Error (Code) - (Description)
-Clear injected spare capacity alarm on DCPMEM DIMM (DimmID):
+Clear injected spare capacity alarm on DCPMM (DimmID):
 Success|Error (Code) - (Description)
 ...
-Create a media fatal error on DCPMEM DIMM (DimmID): Success|Error
+Create a media fatal error on DCPMM (DimmID): Success|Error
 (Code) - (Description)
-Clear injected media fatal error on DCPMEM DIMM (DimmID):
+Clear injected media fatal error on DCPMM (DimmID):
 Success|Error (Code) - (Description)

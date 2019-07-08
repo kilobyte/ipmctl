@@ -2,28 +2,24 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 ifdef::manpage[]
-ipmctl-dump-goal(1)
+ipmctl-load-goal(1)
 ===================
 endif::manpage[]
 
 NAME
 ----
-ipmctl-dump-goal - Load a memory allocation goal from a file onto DCPMMs
-
-DESCRIPTION
------------
-Load a memory allocation goal from a file onto one or more DCPMMs.
-
-NOTE: Changing the memory configuration is a destructive operation which may
-result in loss of data stored in the persistent memory region. Therefore, data
-should be backed up to other storage before executing this command. Changing a
-memory allocation goal modifies how the platform maps persistent memory, but
-does not explicitly delete or modify user data found in persistent memory.
+ipmctl-load-goal - Load a memory allocation goal from a file onto DCPMMs
 
 SYNOPSIS
 --------
 [verse]
 ipmctl load [OPTIONS] -source (path) -goal [TARGETS]
+
+DESCRIPTION
+-----------
+Load a memory allocation goal from a file onto one or more DCPMMs.
+
+include::../ipmctl-change-goal-config-warning.txt[]
 
 OPTIONS
 -------
@@ -35,6 +31,22 @@ OPTIONS
 -h::
 -help::
     Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
+
+-lpmb::
+  Used to specify large transport payload size for the current invocation of ipmctl.
+
+-spmb::
+  Used to specify small transport payload size for the current invocation of ipmctl.
+
+NOTE: The -lpmb and -spmb options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::
@@ -82,18 +94,39 @@ ipmctl load -source config.txt -goal -socket 1,2
 
 LIMITATIONS
 -----------
-The specified DCPMM(s) must be manageable by the host software and unlocked if
-security is enabled. Namespaces associated with the requested DCPMM(s) must be
-deleted before running this command.
+In order to successfully execute this command:
 
-The specified DCPMM(s) must be manageable by the host software and unlocked if
-security is enabled. Namespaces associated with the requested DCPMM(s) must be
-deleted before running this command.
+- The caller must have the appropriate privileges.
+
+- The specified DCPMM(s) must be manageable by the host software and
+  must all have the same SKU.
+
+- Existing memory allocation goals that have not been applied and any namespaces
+  associated with the requested DCPMM(s) must be deleted before running
+  this command.
+
+- Security state must be disabled.
+  Changing the memory configuration is a destructive operation which results in loss of
+  data stored in the persistent memory region. Therefore, data should be backed up to
+  other storage before executing this command.
+  Targets may be limited to individual DCPMMs or sockets, but all DCPMMs
+  on affected sockets must be configured when the command finishes. If the
+  selected targets make this impossible, the command will be rejected.
+  Refer to *_Show System Capabilities_* for a list of BIOS
+  supported modes.
+
+- Some requests are dependent on BIOS and/or platform configuration. For details, refer
+  to the _Intel(R) Optane(TM) DC Persistent Memory Software Memory Allocation Rules_,
+  document number 564194. For example:
+ - Provisioning DCPMMs for Memory Mode while BIOS is configured for 1LM only
+   will result in unused capacity.
+ - Provisioning DCPMMs for Memory Mode while not all iMCs have at least one DCPMM
+   will result in unused capacity.
 
 RETURN DATA
 -----------
 If successful, the CLI will display the memory allocation goal stored on each
-DCPMM as documented in the command Section 2.2.6, “Show Memory Allocation Goal.”
+DCPMM as documented in the command Section <<Show Memory Allocation Goal>>.
 If a failure occurs, an error code and message will be displayed. If a failure
 occurs when configuring multiple DCPMMs, the process will exit and remove the
 memory allocation goal from any DCPMMs that succeeded prior to the failure.

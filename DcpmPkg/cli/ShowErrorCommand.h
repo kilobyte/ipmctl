@@ -10,8 +10,16 @@
 #include "NvmInterface.h"
 #include "Common.h"
 
-#define ERROR_THERMAL_OCCURRED_STR       L"Thermal Error occurred"
-#define ERROR_MEDIA_OCCURRED_STR         L"Media Error occurred"
+#define ERROR_MAX_STR_WIDTH           36
+#define ERROR_MIN_STR_WIDTH           8
+
+#define ERROR_MSG_EXTRA_SPACE         L" - "
+#define ERROR_MSG_BYTE_CHAR           L"B"
+#define ERROR_MSG_COMA_CHAR           L", "
+
+
+#define ERROR_THERMAL_OCCURRED_STR       L"Thermal"
+#define ERROR_MEDIA_OCCURRED_STR         L"Media"
 #define ERROR_SYSTEM_TIMESTAMP_STR       L"System Timestamp"
 #define ERROR_THERMAL_TEMPERATURE_STR    L"Temperature"
 #define ERROR_THERMAL_REPORTED_STR       L"Reported"
@@ -51,6 +59,7 @@
 #define ERROR_TYPE_LOCKED_ILLEGAL_ACCESS  0x04
 #define ERROR_TYPE_PERCENTAGE_REMAINING   0x05
 #define ERROR_TYPE_SMART_CHANGE           0x06
+#define ERROR_TYPE_PERSISTENT_WRITE_ECC   0x07
 
 #define ERROR_TYPE_UNCORRECTABLE_STR          L"Uncorrectable"
 #define ERROR_TYPE_DPA_MISMATCH_STR           L"DPA Mismatch"
@@ -59,6 +68,7 @@
 #define ERROR_TYPE_LOCKED_ILLEGAL_ACCESS_STR  L"Locked/Illegal Access"
 #define ERROR_TYPE_PERCENTAGE_REMAINING_STR   L"User Percentage Remaining Alarm Trip"
 #define ERROR_TYPE_SMART_CHANGE_STR           L"Smart Health Status Change"
+#define ERROR_TYPE_PERSISTENT_WRITE_ECC_STR   L"Persistent Write ECC"
 #define ERROR_TYPE_UNKNOWN_STR                L"Unknown"
 
 #define ERROR_FLAGS_PDA_VALID_STR  L"PDA Valid"

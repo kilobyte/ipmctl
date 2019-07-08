@@ -1,4 +1,4 @@
-// Copyright (c) 2018, Intel Corporation.
+﻿// Copyright (c) 2018, Intel Corporation.
 // SPDX-License-Identifier: BSD-3-Clause
 
 ifdef::manpage[]
@@ -10,14 +10,14 @@ NAME
 ----
 ipmctl-show-device - Shows information about one or more DCPMMs
 
-DESCRIPTION
------------
-Shows information about one or more DCPMMs
-
 SYNOPSIS
 --------
 [verse]
 ipmctl show [OPTIONS] -dimm [TARGETS]
+
+DESCRIPTION
+-----------
+Shows information about one or more DCPMMs.
 
 OPTIONS
 -------
@@ -37,6 +37,14 @@ NOTE: The all and display options are exclusive and may not be used together.
 -h::
 -help::
   Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::
@@ -83,7 +91,9 @@ RETURN DATA
 The default behavior is to display a table with the default attributes listed
 below; applying options changes the output to a more detailed format. Limited
 information (noted in the table below) is applicable if the DCPMM is not
-manageable by the software as indicated by the “ManageabilityState” property.
+manageable by the software as indicated by the "ManageabilityState" property.
+
+NOTE: Some data is endian-swapped for human readability.
 
 DimmID::
   (Default)  The DCPMM identifier.
@@ -100,7 +110,9 @@ HealthState::
   - Fatal: Data loss has occurred or is imminent. In this case, the
     firmware will disable the media and access to user data and operations
     that require use of the media will fail.
-  - Non-functional: The DCPMM is present but is non-responsive.
+  - Non-functional: The DCPMM is present but is non-responsive via the DDRT
+  communication path. It may be possible to communicate with this DCPMM via SMBus
+  for a subset of commands.
   - Unmanageable: The DCPMM is not supported by this version of
     the software
   - Unknown: Unable to determine the DCPMM health state.
@@ -118,15 +130,15 @@ HealthStateReason::
   - CAP Self-Test fail
   - Critical internal failure
    +
-  Refer to the Intel® Optane™ DC Persistent Memory Firmware
-  Interface Specification, document number 556488, Section 4.8
+  Refer to the _Intel® Optane™ DC Persistent Memory Firmware
+  Interface Specification_, document number 556488, Section 4.8
   SMART and Health.
 
 ifdef::os_build[]
 ActionRequired::
   (Default) If there are events for this device that require
-  corrective action or acknowledgment. Refer to the command Section 2.5.8,
-  “Show Events” for more information about events. One of:
+  corrective action or acknowledgment. Refer to the command Section
+  <<Show Events>> for more information about events. One of:
   - 0: No action required events
   - 1: One or more action required events
 endif::os_build[]
@@ -145,7 +157,7 @@ ManageabilityState::
     the software.
 
 PhysicalID::
-  The DCPMM physical identifier (i.e., SMBIOS Type 17 handle)
+  The DCPMM physical identifier (i.e., SMBIOS Type 17 handle).
 
 DimmHandle::
   The DCPMM handle formatted as 0xABCD.
@@ -155,46 +167,49 @@ DimmHandle::
   - D = Slot
 
 DimmUID::
-  The unique identifier of the DCPMM formatted as VVVV-ML-MDMDSNSNSNSN or
+  The unique identifier of the DCPMM formatted as VVVV-ML-MMYYSNSNSNSN or
   VVVV-SNSNSNSN (if the manufacturing information is not available) where:
   - VVVV = VendorID
   - ML = ManufacturingLocation
-  - MDMD = ManufacturingDate
+  - MMYY = ManufacturingDate
   - SNSNSNSN = SerialNumber
 
 SocketID::
-  The processor socket identifier (i.e., numa node) where the DCPMM is
+  The processor socket identifier (i.e., NUMA node) where the DCPMM is
   installed.
 
 MemControllerID::
-  The associated memory controller identifier
+  The associated memory controller identifier.
 
 ChannelID::
-  The associated channel
+  The associated channel.
 
 ChannelPos::
-  The DCPMM position in the channel
+  The DCPMM position in the channel.
 
 MemoryType::
   The memory type. One of:
   - Unknown
   - DDR4
-  - DCPMM
+  - Logical Non-Volatile Device
 
 VendorID::
-  The vendor identifier of the DCPMM
+  The vendor identifier of the DCPMM.
+  This value is presented in big endian format.
 
 DeviceID::
-  The device identifier of the DCPMM
+  The device identifier of the DCPMM.
+  This value is presented in big endian format.
 
 RevisionID::
-  The revision identifier of the DCPMM
+  The revision identifier of the DCPMM.
 
 SubsystemVendorID::
   The vendor identifier of the non-volatile memory subsystem controller.
+  This value is presented in big endian format.
 
 SubsystemDeviceID::
-  The device identifier of the non-volatile memory subsystem controller
+  The device identifier of the non-volatile memory subsystem controller.
 
 SubsystemRevisionID::
   The revision identifier of the non-volatile memory subsystem controller
@@ -207,15 +222,16 @@ ManufacturingInfoValid::
   - 1: Valid
 
 ManufacturingLocation::
-The manufacturing location assigned by the vendor or "N/A" if
-  ManufacturingInfoValid is 0.
+  The manufacturing location assigned by the vendor or "N/A" if ManufacturingInfoValid
+  is 0.
 
 ManufacturingDate::
-  The manufacturing date assigned by the vendor or "N/A" if
-  ManufacturingInfoValid is 0.
+  The manufacturing date assigned by the vendor or "N/A" if ManufacturingInfoValid
+  is 0.
 
 SerialNumber::
-  The serial number assigned by the vendor
+  The serial number assigned by the vendor.
+  This value is presented in big endian format.
 
 PartNumber::
   The part number assigned by the vendor
@@ -237,8 +253,8 @@ TotalWidth::
   the SMBIOS Type 17 Memory Device table.
 
 Speed::
-  The maximum capable speed of the device in megahertz (MHz) from the SMBIOS
-  Type 17 Memory Device table.
+  The maximum capable speed of the device in megatransfers per second (MT/s)
+  from the SMBIOS Type 17 Memory Device table.
 
 FormFactor::
   The DCPMM form factor (i.e., SMBIOS Type 17 Memory Device Form Factor). One
@@ -249,7 +265,7 @@ FormFactor::
 
 LockState::
   (Default) The current security state of the persistent memory on the DCPMM.
-  One of:
+  One ore more of:
   - Unknown - The security state cannot be determined (e.g., when the
     DCPMM is not manageable by the software).
   - Disabled - Security is not enabled.
@@ -258,6 +274,8 @@ LockState::
   - Frozen - A reboot is required to change the security state.
   - Exceeded - The passphrase limit has been reached. A power cycle is
     required to change the security state.
+  - MP Exceeded - The master passphrase limit has been reached. A power cycle
+    is required to change the security state.
   - Not Supported - Security is not supported on the DCPMM.
 
 FWVersion::
@@ -267,6 +285,7 @@ FWVersion::
   * RN = 2-digit revision number
   * SN = 2-digit security revision number
   * bbbb = 4-digit build version
+
   Value may be N/A if the DCPMM is not manageable by the software.
 
 FWAPIVersion::
@@ -277,20 +296,23 @@ FWAPIVersion::
   The firmware interface is intended to be backwards compatible. Therefore,
   the host software allows management of DCPMMs where this version is less than
   or equal to the version stored in the host software. Value may be N/A if the
-  DCPMM is not manageable by the software
+  DCPMM is not manageable by the software.
 
+ifdef::os_build[]
 ActionRequiredEvents::
   A list of the events for this device that require corrective action or
   acknowledgment in the format: Event [ID] - [Message]. Refer to the
   command Show Events for more information about events.
+endif::os_build[]
 
 *The following information is only applicable when the DCPMM is manageable by the
 software as indicated by the "ManageabilityState".*
 
 ManufacturerID::
-  The manufacturer identifier of the DCPMM
+  The manufacturer identifier of the DCPMM.
+  This value is presented in big endian format.
 
-ControllerRevisionID:
+ControllerRevisionID::
   The controller stepping and revision ID retrieved from the controller FW. This
   field uses a different encoding than SubsystemRevisionID.
 
@@ -301,10 +323,10 @@ IsNew::
   - 1: The DCPMM requires configuration.
 
 MemoryCapacity::
-  Usable DCPMM Memory Mode capacity
+  Usable DCPMM Memory Mode capacity.
 
 AppDirectCapacity::
-  Usable DCPMM App Direct capacity
+  Usable DCPMM App Direct capacity.
 
 UnconfiguredCapacity::
   DCPMM capacity that is inaccessible because it is not mapped into the system
@@ -313,11 +335,12 @@ UnconfiguredCapacity::
 InaccessibleCapacity::
   DCPMM capacity that is inaccessible due to:
   - licensing issue
-  - platform configuration prevents accessing this capacity. e.g. MemoryCapacity
-    is configured and available on a DCPMM but MemoryMode is not enabled by BIOS.
+  - platform configuration prevents accessing this capacity. For example,
+  MemoryCapacity is configured and available on a DCPMM but MemoryMode is not
+  enabled by BIOS.
 
 ReservedCapacity::
-  DCPMM capacity reserved for proper alignment
+  DCPMM capacity reserved for proper alignment.
 
 PeakPowerBudget::
   If the DCPMM firmware power management policy is enabled, the power budget in
@@ -327,6 +350,9 @@ PeakPowerBudget::
 AvgPowerBudget::
   If the DCPMM firmware power management policy is enabled, the power budget in
   mW used for average power. Refer to FIS for allowable range and default value.
+
+MaxAveragePowerBudget::
+   Maximum average power budget supported by the DCPMM.
 
 PackageSparingCapable::
   Whether or not the DCPMM supports package sparing. One of:
@@ -339,9 +365,9 @@ PackageSparingEnabled::
  - 1: Enabled
 
 PackageSparesAvailable::
-  The number of spare devices available for package sparing
+  The number of spare devices available for package sparing.
 
-LastShutdownStatus::
+LatchedLastShutdownStatus::
   The status of the last shutdown of the DCPMM. One or more of:
   - Unknown: The last shutdown status cannot be determined.
   - FW Flush Complete: FW flush completed.
@@ -358,17 +384,32 @@ LastShutdownStatus::
   - Write Data Flush Complete: Write data flush completed.
   - PM S4: Power management S4 command received.
   - PM Idle: Power management idle received
-  -DDRT Surprise Reset: Surprise reset received
+  - DDRT Surprise Reset: Surprise reset received
+
+UnlatchedLastShutdownStatus::
+  The status of the last shutdown status of the DCPMM. Same fields as the
+  Latched Last Shutdown Status with the only difference that LLS details 
+  on a dirty shutdown is logged, even if the Latch System Shutdown Status
+  was not enabled. One or more of:
+  - Unknown: The last shutdown status cannot be determined.
+  - FW Flush Complete: FW flush completed.
+  - PM ADR Command: Power management ADR command received.
+  - PM S3: Power management S3 command received.
+  - PM S5: Power management S5 command received.
+  - DDRT Power Fail Command: DDR power fail command received.
+  - PMIC 12V/DDRT 1.2V Power Loss (PLI)
+  - PM Warm Reset: Power management warm reset received.
+  - Thermal Shutdown: Thermal shutdown triggered.
+  - Controller’s FW State Flush Complete: Flush Completed.
+  - Viral Interrupt: Viral interrupt received.
+  - Surprise Clock Stop: Surprise clock stop received.
+  - Write Data Flush Complete: Write data flush completed.
+  - PM S4: Power management S4 command received.
+  - PM Idle: Power management idle received
+  - DDRT Surprise Reset: Surprise reset received
 
 LastShutdownTime::
   The time the system was last shutdown.
-
-FirstFastRefresh::
-  Whether or not acceleration of the first refresh cycle is enabled for the
-  DCPMM. One of:
-  - 0: Disabled - This is the default.
-  - 1: Enabled - Customers will have to wait a pre-determined time (5-6 minutes)
-    before starting benchmark tests.
 
 ModesSupported::
   A list of the modes supported by the DCPMM. Refer to the command
@@ -385,6 +426,12 @@ SecurityCapabilities::
   - Encryption: The DCPMM supports persistent memory encryption by
     setting a passphrase.
   - Erase: The DCPMM is erasable.
+
+MasterPassphraseEnabled::
+  This property indicates if master passphrase is enabled. If it is disabled,
+  then it cannot be enabled. One of:
+  - 0: Disabled - Cannot be enabled
+  - 1: Enabled - Master passphrase can be changed. Cannot be disabled.
 
 ConfigurationStatus::
   The status of the DCPMM memory configuration. One of:
@@ -405,21 +452,22 @@ SKUViolation::
   - 1: True
 
 ARSStatus::
-  The address range scrub (ARS) operation status for the DCPMM. One of:
+  The address range scrub (ARS) operation status for the DCPMM. The status is a
+  reflection of the last requested ARS, but not necessarily within the current
+  platform power cycle. One of:
   - Unknown - The ARS operation status cannot be determined.
-  - Not started - An ARS operation was not run on the last boot.
+  - Not started - An ARS operation has not started.
   - In progress - An ARS operation is currently in progress.
-  - Completed - An ARS operation completed since the last boot.
-  - Aborted - An ARS operation was started on the last boot but it did not
-    complete because it aborted.
+  - Completed - The last ARS operation has completed.
+  - Aborted - The last ARS operation was aborted.
 
 OverwriteStatus::
   The overwrite DIMM operation status for the DCPMM. One of:
   - Unknown - The overwrite DIMM operation status cannot be determined.
-  - Not started - A overwrite DIMM operation was not started on the last
+  - Not started - An overwrite DIMM operation was not started on the last
     boot.
-  - In progress - A overwrite DIMM operation is currently in progress.
-  - Completed - A overwrite DIMM operation completed and a reboot is
+  - In progress - An overwrite DIMM operation is currently in progress.
+  - Completed - An overwrite DIMM operation completed and a reboot is
     required to use the DCPMM.
 
 ViralPolicy::
@@ -460,6 +508,9 @@ BootStatus::
   *The following statuses indicate that communication with the firmware is not
   functional.*
   - FW Assert - The firmware reported an assert during initialization.
+
+ BootStatusRegister::
+  The raw hex value of the DCPMM Boot Status Register of the DCPMM
 
 ErrorInjectionEnabled::
   Error injection status.

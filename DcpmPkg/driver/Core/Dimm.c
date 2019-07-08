@@ -18,6 +18,10 @@
 #include <NvmWorkarounds.h>
 #include <Convert.h>
 #include <NvmDimmDriver.h>
+#ifdef OS_BUILD
+#include <os_types.h>
+#include <Common.h>
+#endif
 
 #ifndef OS_BUILD
 #include "Smbus.h"
@@ -42,6 +46,60 @@ CONST UINT64 gSupportedBlockSizes[SUPPORTED_BLOCK_SIZES_COUNT] = {
   4224  //  (512+16)*8
 };
 
+#ifdef OS_BUILD
+/*
+* Function get the ini configuration only on the first call
+*
+* It returns TRUE in case of large payload access is disabled and FALSE otherwise
+*/
+BOOLEAN ConfigIsLargePayloadDisabled()
+{
+  static BOOLEAN config_large_payload_initialized = FALSE;
+  static UINT8 large_payload_disabled = 0;
+  EFI_STATUS efi_status;
+  EFI_GUID guid = { 0 };
+  UINTN size;
+
+  if (config_large_payload_initialized)
+    return large_payload_disabled;
+
+  size = sizeof(large_payload_disabled);
+  efi_status = GET_VARIABLE(INI_PREFERENCES_LARGE_PAYLOAD_DISABLED, guid, &size, &large_payload_disabled);
+  if ((EFI_SUCCESS != efi_status) || (large_payload_disabled > 1))
+    return FALSE;
+
+  config_large_payload_initialized = TRUE;
+
+  return (BOOLEAN)large_payload_disabled;
+}
+
+/*
+* Function get the ini configuration only on the first call
+*
+* It returns TRUE in case of DDRT protocol access is disabled and FALSE otherwise
+*/
+BOOLEAN ConfigIsDdrtProtocolDisabled()
+{
+  static BOOLEAN config_ddrt_protocol_initialized = FALSE;
+  static UINT8 ddrt_protocol_disabled = 0;
+  EFI_STATUS efi_status;
+  EFI_GUID guid = { 0 };
+  UINTN size;
+
+  if (config_ddrt_protocol_initialized)
+    return ddrt_protocol_disabled;
+
+  size = sizeof(ddrt_protocol_disabled);
+  efi_status = GET_VARIABLE(INI_PREFERENCES_DDRT_PROTOCOL_DISABLED, guid, &size, &ddrt_protocol_disabled);
+  if ((EFI_SUCCESS != efi_status) || (ddrt_protocol_disabled > 1))
+    return FALSE;
+
+  config_ddrt_protocol_initialized = TRUE;
+
+  return (BOOLEAN)ddrt_protocol_disabled;
+}
+#endif // OS_BUILD
+
 /**
   Global pointers to the new processor assembler commands:
 
@@ -55,6 +113,23 @@ VOID
   VOID *pLinearAddress
   );
 
+#ifndef OS_BUILD
+
+struct {
+  UINT32 Eax;
+  union {
+    struct {
+      UINT32 Unused:23;
+      BOOLEAN ClFlushOpt:1; // EBX.CLFLUSHOPT[bit 23]
+      BOOLEAN ClWb:1; // EBX.CLWB[bit 24]
+      UINT32 Unused2:7;
+    } Separated;
+    UINT32 AsUint32;
+  } Ebx;
+  UINT32 Ecx;
+  UINT32 Edx;
+} CpuInfo;
+
 /**
   InitializeCpuCommands
 
@@ -66,22 +141,6 @@ VOID
 InitializeCpuCommands(
   )
 {
-#ifndef OS_BUILD
-	struct {
-		UINT32 Eax;
-		union {
-			struct {
-        UINT32 Unused:23;
-        BOOLEAN ClFlushOpt:1; // EBX.CLFLUSHOPT[bit 23]
-        BOOLEAN ClWb:1; // EBX.CLWB[bit 24]
-        UINT32 Unused2:7;
-			} Separated;
-			UINT32 AsUint32;
-		} Ebx;
-		UINT32 Ecx;
-		UINT32 Edx;
-	} CpuInfo;
-
   SetMem(&CpuInfo, sizeof(CpuInfo), 0x0);
 
   AsmCpuidEcx(CPUID_NEWMEM_FUNCTIONS_EAX, CPUID_NEWMEM_FUNCTIONS_ECX,
@@ -94,8 +153,13 @@ InitializeCpuCommands(
     NVDIMM_DBG("Flushing assigned to ClFlush.");
     gClFlush = &AsmFlushCl;
   }
-#endif
+
 }
+
+#endif /** !OS_BUILD **/
+
+
+STATIC EFI_STATUS PollOnArsDeviceBusy(IN DIMM *pDimm, IN UINT32 TimeoutSecs);
 
 /**
   Get dimm by Dimm ID
@@ -277,51 +341,7 @@ GetDimmByIndex(
 }
 
 /**
-  Get DIMM by Smbus address in global structure
 
-  @param[in] Address - Smbus address of Dimm
-  @param[in] pDimms - The head of the dimm list
-
-  @retval Found Dimm or NULL
-**/
-DIMM *
-GetDimmBySmbusAddress(
-  IN     SMBUS_DIMM_ADDR Address,
-  IN     LIST_ENTRY *pDimms
-  )
-{
-  DIMM *pCurDimm = NULL;
-  DIMM *pTargetDimm = NULL;
-  LIST_ENTRY *pCurDimmNode = NULL;
-  UINT32 Slot = 0;
-
-  NVDIMM_ENTRY();
-
-  if (pDimms == NULL) {
-    goto Finish;
-  }
-
-  LIST_FOR_EACH(pCurDimmNode, pDimms) {
-    pCurDimm = DIMM_FROM_NODE(pCurDimmNode);
-
-    // NfitDeviceHandle is bit struct, no data los in here
-    Slot = (UINT8)(pCurDimm->DeviceHandle.NfitDeviceHandle.MemChannel * SLOTS_PER_CHANNEL +
-        pCurDimm->DeviceHandle.NfitDeviceHandle.DimmNumber);
-
-    if (pCurDimm->DeviceHandle.NfitDeviceHandle.SocketId == Address.Cpu &&
-        pCurDimm->DeviceHandle.NfitDeviceHandle.MemControllerId == Address.Imc &&
-        Slot == Address.Slot) {
-      pTargetDimm = pCurDimm;
-      break;
-    }
-  }
-
-Finish:
-  NVDIMM_EXIT();
-  return pTargetDimm;
-}
-
-/**
   Get max Dimm ID
   Scan the dimm list for a max Dimm ID
 
@@ -1185,8 +1205,8 @@ InitializeDimmFieldsFromNfit(
   pDimm->Configured = FALSE;
   pDimm->ISsNum = 0;
   if (pNvDimmRegionTbl != NULL) {
-    pDimm->SocketId = (UINT16) pNvDimmRegionTbl->DeviceHandle.NfitDeviceHandle.SocketId;
-    // BIOS sets this to 0x0 for every non-functional (non-booting) dimm
+    pDimm->SocketId = (UINT16)NFIT_NODE_SOCKET_TO_SOCKET_INDEX(pNvDimmRegionTbl->DeviceHandle.NfitDeviceHandle.NodeControllerId,
+      pNvDimmRegionTbl->DeviceHandle.NfitDeviceHandle.SocketId);
     pDimm->DimmID = pNvDimmRegionTbl->NvDimmPhysicalId;
     pDimm->DeviceHandle.AsUint32 = pNvDimmRegionTbl->DeviceHandle.AsUint32;
     pDimm->ImcId = (UINT16)pNvDimmRegionTbl->DeviceHandle.NfitDeviceHandle.MemControllerId;
@@ -1321,18 +1341,18 @@ InsertDimm(
      OUT PMEM_DEV *pDev
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
 
   NVDIMM_ENTRY();
   if (GetDimmByPid(pDimm->DimmID, &pDev->Dimms)) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
   InsertTailList(&pDev->Dimms, &pDimm->DimmNode);
 
 Finish:
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 
@@ -1382,9 +1402,7 @@ FwCmdGetViralPolicy(
   NVDIMM_DBG("FW CMD Status %d", pFwCmd->Status);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Error detected when sending PtGetViralPolicy command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
   CopyMem_S(pViralPolicyPayload, sizeof(*pViralPolicyPayload), pFwCmd->OutPayload, sizeof(*pViralPolicyPayload));
@@ -1431,9 +1449,7 @@ FwCmdGetOptionalConfigurationDataPolicy(
   NVDIMM_DBG("FW CMD Status %d", pFwCmd->Status);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Error detected when sending PtGetOptionalDataPolicy command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
   CopyMem_S(pOptionalDataPolicyPayload, sizeof(*pOptionalDataPolicyPayload), pFwCmd->OutPayload, sizeof(*pOptionalDataPolicyPayload));
@@ -1481,9 +1497,7 @@ FwCmdSetOptionalConfigurationDataPolicy(
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Error detected when sending PtGetOptionalDataPolicy command (Dimm(%d), RC = " FORMAT_EFI_STATUS ", Status = %d)",
         pDimm->DeviceHandle.AsUint32 ,pFwCmd->Status ,ReturnCode);
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
 
@@ -1512,34 +1526,92 @@ FwCmdGetSecurityInfo(
   )
 {
   FW_CMD *pFwCmd = NULL;
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
 
   NVDIMM_ENTRY();
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
 
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
   pFwCmd->DimmID = pDimm->DimmID;
   pFwCmd->Opcode = PtGetSecInfo;
-  pFwCmd->OutputPayloadSize = 8;
+  pFwCmd->SubOpcode= SubopGetSecState;
+  pFwCmd->OutputPayloadSize = sizeof(*pSecurityPayload);
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_DBG("Error detected when sending PtGetSecInfo command (RC = " FORMAT_EFI_STATUS ")", Rc);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Error detected when sending PtGetSecInfo command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
+
   CopyMem_S(pSecurityPayload, sizeof(*pSecurityPayload), pFwCmd->OutPayload, sizeof(*pSecurityPayload));
 
 Finish:
   FREE_POOL_SAFE(pFwCmd);
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+
+/**
+  Firmware command to disable ARS
+
+  @param[in] pDimm Pointer to the DIMM to disable ARS on
+
+  @retval EFI_SUCCESS           Success
+  @retval EFI_INVALID_PARAMETER One or more parameters are NULL
+  @retval EFI_OUT_OF_RESOURCES  Memory allocation failure
+  @retval Various errors from FW
+**/
+EFI_STATUS
+FwCmdDisableARS(
+  IN     DIMM *pDimm
+)
+{
+  FW_CMD *pFwCmd = NULL;
+  PT_PAYLOAD_SET_ADDRESS_RANGE_SCRUB *pARSInpugPayload = NULL;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+
+  NVDIMM_ENTRY();
+
+  if (pDimm == NULL) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
+  if (pFwCmd == NULL) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    goto Finish;
+  }
+
+  pFwCmd->DimmID = pDimm->DimmID;
+  pFwCmd->Opcode = PtSetFeatures;
+  pFwCmd->SubOpcode = SubopAddressRangeScrub;
+
+  pARSInpugPayload = (PT_PAYLOAD_SET_ADDRESS_RANGE_SCRUB*)pFwCmd->InputPayload;
+  pARSInpugPayload->Enable = 0;
+
+  pFwCmd->InputPayloadSize = sizeof(PT_PAYLOAD_SET_ADDRESS_RANGE_SCRUB);
+
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Error detected when sending Firmware Set AddressRangeScrub command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
+    goto Finish;
+  }
+
+  NVDIMM_DBG("Polling ARS long op status to verify ARS disabled completed.");
+  ReturnCode = PollOnArsDeviceBusy(pDimm, DISABLE_ARS_TOTAL_TIMEOUT_SEC);
+  NVDIMM_DBG("Finished polling long op, return val = %x", ReturnCode);
+
+Finish:
+  FREE_POOL_SAFE(pFwCmd);
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -1561,19 +1633,19 @@ FwCmdGetARS(
 {
   FW_CMD *pFwCmd = NULL;
   PT_PAYLOAD_ADDRESS_RANGE_SCRUB *pARSPayload = NULL;
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
 
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || pDimmARSStatus == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   *pDimmARSStatus = ARS_STATUS_UNKNOWN;
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -1582,26 +1654,24 @@ FwCmdGetARS(
   pFwCmd->SubOpcode = SubopAddressRangeScrub;
   pFwCmd->OutputPayloadSize = sizeof(*pARSPayload);
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_DBG("Error detected when sending Firmware Get AddressRangeScrub command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Error detected when sending Firmware Get AddressRangeScrub command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
   pARSPayload = (PT_PAYLOAD_ADDRESS_RANGE_SCRUB *) pFwCmd->OutPayload;
 
-  Rc = GetDimmARSStatusFromARSPayload(pARSPayload, pDimmARSStatus);
-  if (EFI_ERROR(Rc)) {
+  ReturnCode = GetDimmARSStatusFromARSPayload(pARSPayload, pDimmARSStatus);
+  if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Error detected when retrieving ARSStatus from ARS Payload");
     goto Finish;
   }
 
 Finish:
   FREE_POOL_SAFE(pFwCmd);
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -1631,16 +1701,18 @@ GetDimmARSStatusFromARSPayload(
 
   *pDimmARSStatus = ARS_STATUS_UNKNOWN;
 
-  if (pARSPayload->Enable) {
-    *pDimmARSStatus = ARS_STATUS_IN_PROGRESS;
-  } else if (pARSPayload->DPACurrentAddress < pARSPayload->DPAEndAddress) {
+  if ((pARSPayload->DPACurrentAddress == pARSPayload->DPAEndAddress) && !(pARSPayload->Enable)) {
+    *pDimmARSStatus = ARS_STATUS_COMPLETED;
+  }  else if ((pARSPayload->DPACurrentAddress > pARSPayload->DPAStartAddress) &&
+             (pARSPayload->DPACurrentAddress < pARSPayload->DPAEndAddress) &&
+             !(pARSPayload->Enable)) {
     *pDimmARSStatus = ARS_STATUS_ABORTED;
-  } else if (pARSPayload->DPACurrentAddress == pARSPayload->DPAEndAddress) {
-    if (pARSPayload->DPACurrentAddress == 0x00) {
-      *pDimmARSStatus = ARS_STATUS_NOT_STARTED;
-    } else {
-      *pDimmARSStatus = ARS_STATUS_COMPLETED;
-    }
+  } else if ((pARSPayload->DPACurrentAddress == 0x00) || (pARSPayload->DPACurrentAddress == pARSPayload->DPAStartAddress)) {
+    *pDimmARSStatus = ARS_STATUS_NOT_STARTED;
+  } else if ((pARSPayload->DPACurrentAddress > pARSPayload->DPAStartAddress) && (pARSPayload->Enable)) {
+    *pDimmARSStatus = ARS_STATUS_IN_PROGRESS;
+  } else {
+    *pDimmARSStatus = ARS_STATUS_UNKNOWN;
   }
 
 Finish:
@@ -1653,7 +1725,6 @@ Finish:
   Execute a FW command to get information about DIMM.
 
   @param[in] pDimm The Intel NVM Dimm to retrieve identify info on
-  @param[in] Execute on Smbus mailbox instead of DDRT
   @param[out] pPayload Area to place the identity info returned from FW
 
   @retval EFI_SUCCESS: Success
@@ -1662,7 +1733,6 @@ Finish:
 EFI_STATUS
 FwCmdIdDimm (
   IN     DIMM *pDimm,
-  IN     BOOLEAN Smbus,
      OUT PT_ID_DIMM_PAYLOAD *pPayload
   )
 {
@@ -1687,20 +1757,12 @@ FwCmdIdDimm (
 	pFwCmd->Opcode = PtIdentifyDimm;
 	pFwCmd->SubOpcode = SubopIdentify;
 	pFwCmd->OutputPayloadSize = 128;
-#ifndef OS_BUILD
-	if (Smbus) {
-		ReturnCode = SmbusPassThru(pDimm->SmbusAddress, pFwCmd, PT_TIMEOUT_INTERVAL);
-  } else {
-#endif
-		ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-#ifndef OS_BUILD
-	}
-#endif
+
+	ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+
 	if (EFI_ERROR(ReturnCode)) {
 		NVDIMM_DBG("Error detected when sending PtIdentifyDimm command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
-		if (FW_ERROR(pFwCmd->Status)) {
-			ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-		}
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
 		goto Finish;
 	}
 	CopyMem_S(pPayload, sizeof(*pPayload), pFwCmd->OutPayload, sizeof(*pPayload));
@@ -1757,9 +1819,7 @@ FwCmdDeviceCharacteristics (
   ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Error detected when sending Device Characteristics command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto FinishError;
   }
   CopyMem_S(*ppPayload, sizeof(**ppPayload), pFwCmd->OutPayload, sizeof(**ppPayload));
@@ -1818,9 +1878,7 @@ FwCmdGetDimmPartitionInfo(
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Error detected when sending GetAdminFeatures command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
     NVDIMM_DBG("FW CMD Status %d", pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
   CopyMem_S(pPayload, sizeof(*pPayload), pFwCmd->OutPayload, sizeof(*pPayload));
@@ -1828,6 +1886,123 @@ FwCmdGetDimmPartitionInfo(
 Finish:
   FREE_POOL_SAFE(pFwCmd);
   NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+
+/**
+  Firmware command access/read Platform Config Data using small payload only.
+
+  The function allows to specify the requested data offset and the size.
+  The funciton is going to allocate the ppRawData buffer if it is not allocated.
+  The buffer's minimal size is the size of the Partition!
+
+  @param[in] pDimm The Intel NVM Dimm to retrieve identity info on
+  @param[in] PartitionId Partition number to get data from
+  @param[in] ReqOffset Data read starting point
+  @param[in] ReqDataSize Number of bytes to read
+  @param[out] Pointer to the buffer pointer for storing retrieved data
+
+  @retval EFI_SUCCESS: Success, otherwise: Error
+**/
+EFI_STATUS
+FwGetPCDFromOffsetSmallPayload(
+  IN  DIMM *pDimm,
+  IN  UINT8 PartitionId,
+  IN  UINT32 ReqOffset,
+  IN  UINT32 ReqDataSize,
+  OUT UINT8 **ppRawData)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  FW_CMD *pFwCmd = NULL;
+  PT_INPUT_PAYLOAD_GET_PLATFORM_CONFIG_DATA InputPayload;
+  UINT32 StartingPageOffset = ((ReqOffset / PCD_GET_SMALL_PAYLOAD_DATA_SIZE)*PCD_GET_SMALL_PAYLOAD_DATA_SIZE);
+  UINT32 ReadOffset = 0;
+  UINT32 PcdSize = 0;
+
+  SetMem(&InputPayload, sizeof(InputPayload), 0x0);
+
+  if (pDimm == NULL || ppRawData == NULL || 0 == ReqDataSize) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  if (PartitionId == PCD_OEM_PARTITION_ID) {
+    PcdSize = pDimm->PcdOemPartitionSize;
+  }
+  else if (PartitionId == PCD_LSA_PARTITION_ID) {
+    PcdSize = pDimm->PcdLsaPartitionSize;
+  }
+  else {
+    ReturnCode = EFI_UNSUPPORTED;
+    goto Finish;
+  }
+
+  /*
+  * PcdSize is 0 if Media is disabled.
+  * PcdSize was retrieved at driver load time so it is possible that since load time there
+  * was a fatal media error that this would not catch.
+  */
+  if (PcdSize == 0) {
+    ReturnCode = FwCmdGetPlatformConfigDataSize(pDimm, PartitionId, &PcdSize);
+    if (EFI_ERROR(ReturnCode) || PcdSize == 0) {
+      NVDIMM_DBG("FW CMD Error: %d", ReturnCode);
+      goto Finish;
+    }
+    else if (PartitionId == PCD_OEM_PARTITION_ID) {
+      pDimm->PcdOemPartitionSize = PcdSize;
+    }
+    else if (PartitionId == PCD_LSA_PARTITION_ID) {
+      pDimm->PcdLsaPartitionSize = PcdSize;
+    }
+  }
+
+  if (PcdSize < (StartingPageOffset + ReqDataSize)) {
+    return EFI_BUFFER_TOO_SMALL;
+  }
+
+  if (NULL == *ppRawData)
+  {
+    *ppRawData = AllocateZeroPool(PcdSize);
+    if (*ppRawData == NULL) {
+      NVDIMM_WARN("Can't allocate memory for Platform Config Data (%d bytes)", PcdSize);
+      ReturnCode = EFI_OUT_OF_RESOURCES;
+      goto Finish;
+    }
+  }
+
+  pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
+  if (pFwCmd == NULL) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    goto Finish;
+  }
+
+  /**
+    Retrieve the PCD/LSA data
+  **/
+  pFwCmd->DimmID = pDimm->DimmID;
+  pFwCmd->Opcode = PtGetAdminFeatures;
+  pFwCmd->SubOpcode = SubopPlatformDataInfo;
+  InputPayload.PartitionId = PartitionId;
+  InputPayload.CmdOptions.RetrieveOption = PCD_CMD_OPT_PARTITION_DATA;
+  pFwCmd->InputPayloadSize = sizeof(InputPayload);
+  /** Get PCD by small payload in loop in 128 byte chunks **/
+  pFwCmd->LargeOutputPayloadSize = 0;
+  pFwCmd->OutputPayloadSize = PCD_GET_SMALL_PAYLOAD_DATA_SIZE;
+  InputPayload.CmdOptions.PayloadType = PCD_CMD_OPT_SMALL_PAYLOAD;
+  for (ReadOffset = StartingPageOffset; ReadOffset < (ReqOffset+ReqDataSize); ReadOffset += PCD_GET_SMALL_PAYLOAD_DATA_SIZE) {
+    InputPayload.Offset = ReadOffset;
+    CopyMem_S(pFwCmd->InputPayload, sizeof(pFwCmd->InputPayload), &InputPayload, pFwCmd->InputPayloadSize);
+    ReturnCode = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("Error detected when sending Platform Config Data (Get Data) command (Offset = %d, RC = " FORMAT_EFI_STATUS ")", ReadOffset, ReturnCode);
+      FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
+      goto Finish;
+    }
+    CopyMem_S(*ppRawData + ReadOffset, PcdSize - ReadOffset, pFwCmd->OutPayload, PCD_GET_SMALL_PAYLOAD_DATA_SIZE);
+  }
+
+Finish:
+  FREE_POOL_SAFE(pFwCmd);
   return ReturnCode;
 }
 
@@ -1852,27 +2027,28 @@ FwCmdGetPlatformConfigData(
   OUT UINT8 **ppRawData
 )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   FW_CMD *pFwCmd = NULL;
   PT_INPUT_PAYLOAD_GET_PLATFORM_CONFIG_DATA InputPayload;
   UINT8 *pBuffer = NULL;
   UINT32 Offset = 0;
   UINT32 PcdSize = 0;
-  BOOLEAN UseSmallPayload = FALSE;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
 
   NVDIMM_ENTRY();
 
   // Don't support using this function to retrieve PCD OEM Config data.
   // Use FwCmdGetPcdSmallPayload
   if (PartitionId == PCD_OEM_PARTITION_ID) {
-    Rc = EFI_UNSUPPORTED;
+    ReturnCode = EFI_UNSUPPORTED;
     goto Finish;
   }
 
   SetMem(&InputPayload, sizeof(InputPayload), 0x0);
 
   if (pDimm == NULL || ppRawData == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
@@ -1881,7 +2057,7 @@ FwCmdGetPlatformConfigData(
   } else if (PartitionId == PCD_LSA_PARTITION_ID) {
     PcdSize = pDimm->PcdLsaPartitionSize;
   } else {
-    Rc = EFI_UNSUPPORTED;
+    ReturnCode = EFI_UNSUPPORTED;
     goto Finish;
   }
 
@@ -1894,9 +2070,9 @@ FwCmdGetPlatformConfigData(
   */
   if (PcdSize == 0) {
     gPCDCacheEnabled = 0;
-    Rc = FwCmdGetPlatformConfigDataSize(pDimm, PartitionId, &PcdSize);
-    if (EFI_ERROR(Rc) || PcdSize == 0) {
-      NVDIMM_DBG("FW CMD Error: %d", Rc);
+    ReturnCode = FwCmdGetPlatformConfigDataSize(pDimm, PartitionId, &PcdSize);
+    if (EFI_ERROR(ReturnCode) || PcdSize == 0) {
+      NVDIMM_DBG("FW CMD Error: %d", ReturnCode);
       goto Finish;
     } else if (PartitionId == PCD_OEM_PARTITION_ID){
       pDimm->PcdOemPartitionSize = PcdSize;
@@ -1908,7 +2084,7 @@ FwCmdGetPlatformConfigData(
   *ppRawData = AllocateZeroPool(PcdSize);
   if (*ppRawData == NULL) {
     NVDIMM_WARN("Can't allocate memory for Platform Config Data (%d bytes)", PcdSize);
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -1924,7 +2100,7 @@ FwCmdGetPlatformConfigData(
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -1938,11 +2114,21 @@ FwCmdGetPlatformConfigData(
   InputPayload.CmdOptions.RetrieveOption = PCD_CMD_OPT_PARTITION_DATA;
   pFwCmd->InputPayloadSize = sizeof(InputPayload);
 
-  if (UseSmallPayload) {
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetFisTransportAttributes(pNvmDimmConfigProtocol, &pAttribs);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  if (IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
     pBuffer = AllocateZeroPool(PcdSize);
     if (pBuffer == NULL) {
       NVDIMM_ERR("Can't allocate memory for PCD partition buffer (%d bytes)", PcdSize);
-      Rc = EFI_OUT_OF_RESOURCES;
+      ReturnCode = EFI_OUT_OF_RESOURCES;
       goto Finish;
     }
     /** Get PCD by small payload in loop in 128 byte chunks **/
@@ -1953,15 +2139,13 @@ FwCmdGetPlatformConfigData(
       InputPayload.Offset = Offset;
       CopyMem_S(pFwCmd->InputPayload, sizeof(pFwCmd->InputPayload), &InputPayload, pFwCmd->InputPayloadSize);
 #ifdef OS_BUILD
-      Rc = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+      ReturnCode = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
 #else
-      Rc = PassThruWithRetryOnFwAborted(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+      ReturnCode = PassThruWithRetryOnFwAborted(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
 #endif
-      if (EFI_ERROR(Rc)) {
-        NVDIMM_DBG("Error detected when sending Platform Config Data (Get Data) command (Offset = %d, RC = " FORMAT_EFI_STATUS ")", Offset, Rc);
-        if (FW_ERROR(pFwCmd->Status)) {
-          Rc = MatchFwReturnCode(pFwCmd->Status);
-        }
+      if (EFI_ERROR(ReturnCode)) {
+        NVDIMM_DBG("Error detected when sending Platform Config Data (Get Data) command (Offset = %d, RC = " FORMAT_EFI_STATUS ")", Offset, ReturnCode);
+        FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
         goto Finish;
       }
       CopyMem_S(pBuffer + Offset, PcdSize - Offset, pFwCmd->OutPayload, PCD_GET_SMALL_PAYLOAD_DATA_SIZE);
@@ -1979,15 +2163,13 @@ FwCmdGetPlatformConfigData(
     }
     CopyMem_S(pFwCmd->InputPayload, sizeof(pFwCmd->InputPayload), &InputPayload, pFwCmd->InputPayloadSize);
 #ifdef OS_BUILD
-    Rc = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+    ReturnCode = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
 #else
-    Rc = PassThruWithRetryOnFwAborted(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+    ReturnCode = PassThruWithRetryOnFwAborted(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
 #endif
-    if (EFI_ERROR(Rc)) {
-      NVDIMM_DBG("Error detected when sending Platform Config Data (Get Data) command (RC = " FORMAT_EFI_STATUS ")", Rc);
-      if (FW_ERROR(pFwCmd->Status)) {
-        Rc = MatchFwReturnCode(pFwCmd->Status);
-      }
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("Error detected when sending Platform Config Data (Get Data) command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
+      FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
       goto Finish;
     }
 #ifdef OS_BUILD
@@ -2009,7 +2191,7 @@ FwCmdGetPlatformConfigData(
       pTempCacheSz = pDimm->PcdOemPartitionSize;
     }
 
-    if (UseSmallPayload) {
+    if (IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
       CopyMem_S(*ppRawData, PcdSize, pBuffer, PcdSize);
       if (NULL != pTempCache) {
         CopyMem_S(pTempCache, pTempCacheSz, pBuffer, PcdSize);
@@ -2022,7 +2204,7 @@ FwCmdGetPlatformConfigData(
     }
     goto Finish;
   }
-  if (UseSmallPayload) {
+  if (IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
     CopyMem_S(*ppRawData, PcdSize, pBuffer, PcdSize);
   } else {
     CopyMem_S(*ppRawData, PcdSize, pFwCmd->LargeOutputPayload, PcdSize);
@@ -2030,8 +2212,8 @@ FwCmdGetPlatformConfigData(
 Finish:
   FREE_POOL_SAFE(pFwCmd);
   FREE_POOL_SAFE(pBuffer);
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -2052,7 +2234,7 @@ FwCmdGetPlatformConfigDataSize (
      OUT UINT32 *pPcdSize
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   FW_CMD *pFwCmd = NULL;
   PT_INPUT_PAYLOAD_GET_PLATFORM_CONFIG_DATA InputPayload;
   PT_OUTPUT_PAYLOAD_GET_PLATFORM_CONFIG_DATA_SIZE OutputPcdSize;
@@ -2060,7 +2242,7 @@ FwCmdGetPlatformConfigDataSize (
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || pPcdSize == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
@@ -2069,7 +2251,7 @@ FwCmdGetPlatformConfigDataSize (
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -2087,12 +2269,10 @@ FwCmdGetPlatformConfigDataSize (
   pFwCmd->OutputPayloadSize = PCD_GET_SMALL_PAYLOAD_DATA_SIZE;
   InputPayload.CmdOptions.PayloadType = PCD_CMD_OPT_SMALL_PAYLOAD;
   CopyMem_S(pFwCmd->InputPayload, sizeof(pFwCmd->InputPayload), &InputPayload, pFwCmd->InputPayloadSize);
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_DBG("Error detected when sending Platform Config Data (Get Data) command (RC = " FORMAT_EFI_STATUS ")", Rc);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Error detected when sending Platform Config Data (Get Data) command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
   CopyMem_S(&OutputPcdSize, sizeof(OutputPcdSize), pFwCmd->OutPayload, PCD_GET_SMALL_PAYLOAD_DATA_SIZE);
@@ -2101,8 +2281,8 @@ FwCmdGetPlatformConfigDataSize (
 
 Finish:
   FREE_POOL_SAFE(pFwCmd);
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -2124,6 +2304,12 @@ EFI_STATUS ValidatePcdOemHeader(
 
   if (pOemHeader->Header.Signature != NVDIMM_CONFIGURATION_HEADER_SIG) {
     NVDIMM_WARN("Incorrect signature of the DIMM Configuration Header table");
+    return EFI_VOLUME_CORRUPTED;
+  }
+
+  if ((pOemHeader->Header.Revision > NVDIMM_CONFIGURATION_HEADER_REVISION) ||
+  (pOemHeader->Header.Revision < NVDIMM_CONFIGURATION_HEADER_LOWEST_COMPATIBLE_REVISION)){
+    NVDIMM_WARN("Unsupported revision of the DIMM Configuration Header table");
     return EFI_VOLUME_CORRUPTED;
   }
 
@@ -2281,9 +2467,7 @@ FwCmdGetPcdSmallPayload(
 #endif
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Error detected when sending Platform Config Data (Get Data) command (Offset = %d, RC = " FORMAT_EFI_STATUS ")", Offset, ReturnCode);
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
 
@@ -2319,14 +2503,14 @@ GetPcdOemConfigDataUsingSmallPayload(
   OUT UINT32 *pRawDataSize
 )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   UINT8 *pBuffer = NULL;
   UINT32 Offset = 0;
   UINT8 TmpBuf[PCD_GET_SMALL_PAYLOAD_DATA_SIZE];
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || ppRawData == NULL || pRawDataSize == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
@@ -2340,7 +2524,7 @@ GetPcdOemConfigDataUsingSmallPayload(
     *ppRawData = AllocateZeroPool(pDimm->PcdOemSize);
     if (*ppRawData == NULL) {
       NVDIMM_WARN("Can't allocate memory for Platform Config Data (%d bytes)", pDimm->PcdOemSize);
-      Rc = EFI_OUT_OF_RESOURCES;
+      ReturnCode = EFI_OUT_OF_RESOURCES;
       goto Finish;
     }
 
@@ -2350,20 +2534,20 @@ GetPcdOemConfigDataUsingSmallPayload(
   }
 
   // Read first block which includes config header
-  Rc = FwCmdGetPcdSmallPayload(pDimm, PCD_OEM_PARTITION_ID, 0, TmpBuf, sizeof(TmpBuf));
-  if (EFI_ERROR(Rc)) {
+  ReturnCode = FwCmdGetPcdSmallPayload(pDimm, PCD_OEM_PARTITION_ID, 0, TmpBuf, sizeof(TmpBuf));
+  if (EFI_ERROR(ReturnCode)) {
     goto Finish;
   }
 
   // Validate the Header
   NVDIMM_CONFIGURATION_HEADER *pOemHeader = (NVDIMM_CONFIGURATION_HEADER*) TmpBuf;
 
-  Rc = ValidatePcdOemHeader(pOemHeader);
-  if (EFI_ERROR(Rc)) {
+  ReturnCode = ValidatePcdOemHeader(pOemHeader);
+  if (EFI_ERROR(ReturnCode)) {
     BOOLEAN IsZero = TRUE;
     EFI_STATUS tmpRc = IsPcdOemHeaderZero(pOemHeader, &IsZero);
     if ((EFI_SUCCESS == tmpRc) && (TRUE == IsZero)) {
-      Rc = EFI_NOT_FOUND;
+      ReturnCode = EFI_NOT_FOUND;
     }
 
     goto Finish;
@@ -2372,8 +2556,8 @@ GetPcdOemConfigDataUsingSmallPayload(
   // Get size of OEM Config Data
   UINT32 OemDataSize = 0;
   /*Instead of making one more Passthru call to get the PCD size, get it from the OemHeader*/
-  Rc = GetPcdOemDataSize(pOemHeader, &OemDataSize);
-  if (EFI_ERROR(Rc)) {
+  ReturnCode = GetPcdOemDataSize(pOemHeader, &OemDataSize);
+  if (EFI_ERROR(ReturnCode)) {
     goto Finish;
   }
 
@@ -2383,7 +2567,7 @@ GetPcdOemConfigDataUsingSmallPayload(
   pBuffer = AllocateZeroPool(BufferSize);
   if (pBuffer == NULL) {
     NVDIMM_ERR("Can't allocate memory for PCD partition buffer (%d bytes)", BufferSize);
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -2393,8 +2577,8 @@ GetPcdOemConfigDataUsingSmallPayload(
   /** Get PCD by small payload in loop in 128 byte chunks **/
   for (Offset = PCD_GET_SMALL_PAYLOAD_DATA_SIZE; Offset < OemDataSize; Offset += PCD_GET_SMALL_PAYLOAD_DATA_SIZE) {
 
-    Rc = FwCmdGetPcdSmallPayload(pDimm, PCD_OEM_PARTITION_ID, Offset, pBuffer + Offset, (UINT8)PCD_GET_SMALL_PAYLOAD_DATA_SIZE);
-    if (EFI_ERROR(Rc)) {
+    ReturnCode = FwCmdGetPcdSmallPayload(pDimm, PCD_OEM_PARTITION_ID, Offset, pBuffer + Offset, (UINT8)PCD_GET_SMALL_PAYLOAD_DATA_SIZE);
+    if (EFI_ERROR(ReturnCode)) {
       goto Finish;
     }
   }
@@ -2416,16 +2600,114 @@ GetPcdOemConfigDataUsingSmallPayload(
   *pRawDataSize = OemDataSize;
 
 Finish:
-  if (EFI_ERROR(Rc)) {
+  if (EFI_ERROR(ReturnCode)) {
     // If error, free the buffer
     FREE_POOL_SAFE(pBuffer);
     if(NULL != ppRawData)
       *ppRawData = NULL;
   }
 
-  NVDIMM_EXIT_I64(Rc);
+  NVDIMM_EXIT_I64(ReturnCode);
 
-  return Rc;
+  return ReturnCode;
+}
+
+/**
+  Firmware command access/write Platform Config Data using small payload only.
+
+  The function allows to specify the requested data offset and the size.
+  The buffer's minimal size is the size of the Partition!
+  The offset and the data size needs to be alligned to the SET_SMALL_PAYLOAD_DATA_SIZE
+  which is 64 bytes.
+
+  @param[in] pDimm The Intel NVM Dimm to send Platform Config Data to
+  @param[in] PartitionId Partition number for data to be send to
+  @param[in] pRawData Pointer to a data buffer that will be sent to the DIMM
+  @param[in] ReqOffset Data write starting point
+  @param[in] ReqDataSize Number of bytes to write
+
+  @retval EFI_SUCCESS: Success, otherwise: Error
+**/
+EFI_STATUS
+FwSetPCDFromOffsetSmallPayload(
+  IN  DIMM *pDimm,
+  IN  UINT8 PartitionId,
+  IN  UINT8 *pRawData,
+  IN  UINT32 ReqOffset,
+  IN  UINT32 ReqDataSize)
+{
+
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  FW_CMD *pFwCmd = NULL;
+  PT_INPUT_PAYLOAD_SET_DATA_PLATFORM_CONFIG_DATA InPayloadSetData;
+  UINT32 StartingPageOffset = ((ReqOffset / PCD_SET_SMALL_PAYLOAD_DATA_SIZE)*PCD_SET_SMALL_PAYLOAD_DATA_SIZE);
+  UINT32 WriteOffset = 0;
+
+  SetMem(&InPayloadSetData, sizeof(InPayloadSetData), 0x0);
+
+  if ((pDimm == NULL) || (pRawData == NULL) ||
+    ((ReqOffset+ReqDataSize) > PCD_PARTITION_SIZE) ||
+    (0 == ReqDataSize) ||
+    (ReqOffset % PCD_SET_SMALL_PAYLOAD_DATA_SIZE) ||
+    (ReqDataSize % PCD_SET_SMALL_PAYLOAD_DATA_SIZE)) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  if (PartitionId == PCD_OEM_PARTITION_ID) {
+    // Using small payload transactions.
+    // Only allow up to 64kb to protect upper 64kb for OEM data.
+    if ((ReqOffset + ReqDataSize) > PCD_OEM_PARTITION_INTEL_CFG_REGION_SIZE) {
+      ReturnCode = EFI_BUFFER_TOO_SMALL;
+      goto Finish;
+    }
+    // If partition size is 0, then prevent write
+    if (0 == pDimm->PcdOemPartitionSize) {
+      ReturnCode = EFI_BAD_BUFFER_SIZE;
+      goto Finish;
+    }
+  }
+  else if (PartitionId == PCD_LSA_PARTITION_ID) {
+    // If partition size is 0, then prevent write
+    if (0 == pDimm->PcdLsaPartitionSize) {
+      ReturnCode = EFI_BAD_BUFFER_SIZE;
+      goto Finish;
+    }
+  }
+
+  pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
+  if (pFwCmd == NULL) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    goto Finish;
+  }
+
+  /**
+    Set the Platform Config Data
+  **/
+  pFwCmd->DimmID = pDimm->DimmID;
+  pFwCmd->Opcode = PtSetAdminFeatures;
+  pFwCmd->SubOpcode = SubopPlatformDataInfo;
+  InPayloadSetData.PartitionId = PartitionId;
+  pFwCmd->InputPayloadSize = sizeof(InPayloadSetData);
+  /** Set PCD by small payload in loop in 64 byte chunks **/
+  InPayloadSetData.PayloadType = PCD_CMD_OPT_SMALL_PAYLOAD;
+  pFwCmd->LargeInputPayloadSize = 0;
+  for (WriteOffset = StartingPageOffset; WriteOffset < (ReqOffset+ReqDataSize); WriteOffset += PCD_SET_SMALL_PAYLOAD_DATA_SIZE) {
+    InPayloadSetData.Offset = WriteOffset;
+    CopyMem_S(InPayloadSetData.Data, sizeof(InPayloadSetData.Data), pRawData + (WriteOffset - StartingPageOffset), PCD_SET_SMALL_PAYLOAD_DATA_SIZE);
+    CopyMem_S(pFwCmd->InputPayload, sizeof(pFwCmd->InputPayload), &InPayloadSetData, pFwCmd->InputPayloadSize);
+    pFwCmd->OutputPayloadSize = 0;
+    ReturnCode = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("Error detected when sending Platform Config Data (Offset=%d ReturnCode=" FORMAT_EFI_STATUS ", FWStatus=%d)", WriteOffset, ReturnCode, pFwCmd->Status);
+      FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
+      goto Finish;
+    }
+  }
+
+Finish:
+  FREE_POOL_SAFE(pFwCmd);
+  return ReturnCode;
 }
 
 /**
@@ -2448,15 +2730,16 @@ FwCmdSetPlatformConfigData (
   IN     UINT32 RawDataSize
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   FW_CMD *pFwCmd = NULL;
   PT_INPUT_PAYLOAD_SET_DATA_PLATFORM_CONFIG_DATA InPayloadSetData;
   UINT8 *pPartition = NULL;
   UINT32 Offset = 0;
   UINT32 PcdSize = 0;
-  BOOLEAN UseSmallPayload = FALSE;
   VOID *pTempCache = NULL;
   UINTN pTempCacheSz = 0;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
 
   NVDIMM_ENTRY();
 
@@ -2465,19 +2748,15 @@ FwCmdSetPlatformConfigData (
   if ((pDimm == NULL) || (pRawData == NULL) ||
     (RawDataSize > PCD_PARTITION_SIZE) ||
     (0 == RawDataSize)) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
 	if (PartitionId == PCD_OEM_PARTITION_ID) {
-    // Force OEM writes to use small payload.
-    // DON'T CHANGE THIS unless you understand related repercussions!
-    UseSmallPayload = TRUE;
-
     // Using small payload transactions.
     // Only allow up to 64kb to protect upper 64kb for OEM data.
     if (RawDataSize > PCD_OEM_PARTITION_INTEL_CFG_REGION_SIZE) {
-      Rc = EFI_INVALID_PARAMETER;
+      ReturnCode = EFI_INVALID_PARAMETER;
       goto Finish;
     }
     if (gPCDCacheEnabled) {
@@ -2490,7 +2769,7 @@ FwCmdSetPlatformConfigData (
     }
     // If partition size is 0, then prevent write
     if (0 == pDimm->PcdOemPartitionSize) {
-      Rc = EFI_INVALID_PARAMETER;
+      ReturnCode = EFI_INVALID_PARAMETER;
       goto Finish;
     }
     PcdSize = RawDataSize;
@@ -2505,25 +2784,25 @@ FwCmdSetPlatformConfigData (
     PcdSize = pDimm->PcdLsaPartitionSize;
 	}
 	if (PcdSize == 0) {
-		Rc = EFI_INVALID_PARAMETER;
+		ReturnCode = EFI_INVALID_PARAMETER;
 		goto Finish;
 	}
 
   if (RawDataSize > PcdSize) {
     NVDIMM_DBG("Partition's data is greater than the size of partition.");
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
   pPartition = AllocateZeroPool(PcdSize);
   if (pPartition == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -2543,7 +2822,17 @@ FwCmdSetPlatformConfigData (
     NVDIMM_DBG("Size of command parameters is greater than the size of the small payload.");
   }
 
-  if (UseSmallPayload) {
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetFisTransportAttributes(pNvmDimmConfigProtocol, &pAttribs);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  if (IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
     /** Set PCD by small payload in loop in 64 byte chunks **/
     InPayloadSetData.PayloadType = PCD_CMD_OPT_SMALL_PAYLOAD;
     pFwCmd->LargeInputPayloadSize = 0;
@@ -2552,12 +2841,11 @@ FwCmdSetPlatformConfigData (
       InPayloadSetData.Offset = Offset;
       CopyMem_S(InPayloadSetData.Data, sizeof(InPayloadSetData.Data), pPartition + Offset, PCD_SET_SMALL_PAYLOAD_DATA_SIZE);
       CopyMem_S(pFwCmd->InputPayload, sizeof(pFwCmd->InputPayload), &InPayloadSetData, pFwCmd->InputPayloadSize);
-      Rc = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
-      if (EFI_ERROR(Rc)) {
-        NVDIMM_DBG("Error detected when sending Platform Config Data (Offset=%d Rc=" FORMAT_EFI_STATUS ", FWStatus=%d)", Offset, Rc, pFwCmd->Status);
-        if (FW_ERROR(pFwCmd->Status)) {
-          Rc = MatchFwReturnCode(pFwCmd->Status);
-        }
+      pFwCmd->OutputPayloadSize = 0;
+      ReturnCode = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+      if (EFI_ERROR(ReturnCode)) {
+        NVDIMM_DBG("Error detected when sending Platform Config Data (Offset=%d ReturnCode=" FORMAT_EFI_STATUS ", FWStatus=%d)", Offset, ReturnCode, pFwCmd->Status);
+        FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
         goto Finish;
       } else if (gPCDCacheEnabled){
         if (pTempCache) {
@@ -2575,15 +2863,13 @@ FwCmdSetPlatformConfigData (
     /** Save 128KB partition to Large Payload **/
     CopyMem_S(pFwCmd->LargeInputPayload, sizeof(pFwCmd->LargeInputPayload), pPartition, PcdSize);
 #ifdef OS_BUILD
-    Rc = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+    ReturnCode = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
 #else
-    Rc = PassThruWithRetryOnFwAborted(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+    ReturnCode = PassThruWithRetryOnFwAborted(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
 #endif
-    if (EFI_ERROR(Rc)) {
-      NVDIMM_WARN("Error detected when sending Platform Config Data (Rc=" FORMAT_EFI_STATUS ", FWStatus=%d)", Rc, pFwCmd->Status);
-      if (FW_ERROR(pFwCmd->Status)) {
-        Rc = MatchFwReturnCode(pFwCmd->Status);
-      }
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_WARN("Error detected when sending Platform Config Data (ReturnCode=" FORMAT_EFI_STATUS ", FWStatus=%d)", ReturnCode, pFwCmd->Status);
+      FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     } else if (gPCDCacheEnabled) {
       if (pTempCache) {
         CopyMem_S(pTempCache, pTempCacheSz, pPartition, PcdSize);
@@ -2594,8 +2880,8 @@ FwCmdSetPlatformConfigData (
 Finish:
   FREE_POOL_SAFE(pPartition);
   FREE_POOL_SAFE(pFwCmd);
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -2615,19 +2901,19 @@ FwCmdGetAlarmThresholds (
      OUT PT_PAYLOAD_ALARM_THRESHOLDS **ppPayloadAlarmThresholds
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   FW_CMD *pFwCmd = NULL;
 
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || ppPayloadAlarmThresholds == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -2638,29 +2924,27 @@ FwCmdGetAlarmThresholds (
 
   *ppPayloadAlarmThresholds = AllocateZeroPool(sizeof(**ppPayloadAlarmThresholds));
   if (*ppPayloadAlarmThresholds == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto FinishAfterFwCmdAlloc;
   }
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_WARN("Error detected when sending AlarmThresholds command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Error detected when sending AlarmThresholds command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto FinishAfterPayloadAlloc;
   }
   CopyMem_S(*ppPayloadAlarmThresholds, sizeof(**ppPayloadAlarmThresholds), pFwCmd->OutPayload, sizeof(**ppPayloadAlarmThresholds));
 
 FinishAfterPayloadAlloc:
-  if (EFI_ERROR(Rc)){
+  if (EFI_ERROR(ReturnCode)){
     FREE_POOL_SAFE(*ppPayloadAlarmThresholds);
   }
 FinishAfterFwCmdAlloc:
   FREE_POOL_SAFE(pFwCmd);
 Finish:
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -2680,19 +2964,19 @@ FwCmdSetAlarmThresholds (
   IN     PT_PAYLOAD_ALARM_THRESHOLDS *pPayloadAlarmThresholds
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   FW_CMD *pFwCmd = NULL;
 
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || pPayloadAlarmThresholds == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -2702,20 +2986,18 @@ FwCmdSetAlarmThresholds (
   pFwCmd->InputPayloadSize = sizeof(PT_PAYLOAD_ALARM_THRESHOLDS);
   CopyMem_S(pFwCmd->InputPayload, sizeof(pFwCmd->InputPayload), pPayloadAlarmThresholds, pFwCmd->InputPayloadSize);
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_WARN("Error detected when sending AlarmThresholds command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Error detected when sending AlarmThresholds command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto FinishAfterFwCmdAlloc;
   }
 
 FinishAfterFwCmdAlloc:
   FreePool(pFwCmd);
 Finish:
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
  /**
@@ -2729,7 +3011,7 @@ Finish:
   @retval EFI_OUT_OF_RESOURCES memory allocation failure
 **/
 EFI_STATUS
-FwCmdGetFWDebugLogSize(
+FwCmdGetFwDebugLogSize(
   IN     DIMM *pDimm,
      OUT UINT64 *pLogSizeInMb
   )
@@ -2759,13 +3041,11 @@ FwCmdGetFWDebugLogSize(
   pInputPayload = (PT_INPUT_PAYLOAD_FW_DEBUG_LOG *) &pFwCmd->InputPayload;
   pInputPayload->LogAction = ActionRetrieveDbgLogSize;
 
-  /** Get FW debug log page (in MBs) **/
   ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_WARN("Failed to get FW debug log size");
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
   pDbgSmallOutPayload = (PT_OUTPUT_PAYLOAD_FW_DEBUG_LOG *)pFwCmd->OutPayload;
@@ -2778,42 +3058,49 @@ Finish:
 }
 
 /**
-  Firmware command to get debug logs
+  Firmware command to get a specified debug log
 
-  @param[in] pDimm Target DIMM structure pointer
-  @param[in] LogSizeInMbs - number of MB to be fetched
-  @param[out] pBytesWritten - number of MB fetched
-  @param[out] ppOutPayload - pointer to buffer start
+  @param[in]  pDimm Target DIMM structure pointer
+  @param[in]  LogSource Debug log source buffer to retrieve
+  @param[out] ppDebugLogBuffer - an allocated buffer containing the raw debug logs
+  @param[out] pDebugLogBufferSize - the size of the raw debug log buffer
+  @param[out] pCommandStatus structure containing detailed NVM error codes
+
+  Note: The caller is responsible for freeing the returned buffers
 
   @retval EFI_SUCCESS Success
   @retval EFI_DEVICE_ERROR if failed to open PassThru protocol
   @retval EFI_OUT_OF_RESOURCES memory allocation failure
 **/
 EFI_STATUS
-FwCmdGetFWDebugLog (
+FwCmdGetFwDebugLog (
   IN     DIMM *pDimm,
-  IN     UINT64 LogSizeInMbs,
-     OUT UINT64 *pBytesWritten,
-     OUT VOID *pOutputBuffer,
-  IN UINTN OutputBufferSz
+  IN     UINT8 LogSource,
+     OUT VOID **ppDebugLogBuffer,
+     OUT UINTN *pDebugLogBufferSize,
+     OUT COMMAND_STATUS *pCommandStatus
   )
 {
   FW_CMD *pFwCmd = NULL;
   EFI_STATUS ReturnCode = EFI_SUCCESS;
-  UINT8 Index = 0;
-  UINT64 CurrentLogSizeInMbs = 0;
-  UINT64 LogSizeToFetchInMbs = 0;
+  UINT32 LogPageOffset = 0;
+  UINT64 CurrentDebugLogSizeInMbs = 0;
+  UINT64 LogSizeBytesToFetch = 0;
   PT_INPUT_PAYLOAD_FW_DEBUG_LOG *pInputPayload = NULL;
+  UINT64 ChunkSize = 0;
+  UINT64 BytesToCopy = 0;
+  UINT64 BytesReadTotal = 0;
+  UINT8 LogAction = 0;
+  UINT8 *OutputPayload = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
 
   NVDIMM_ENTRY();
 
-  if (pOutputBuffer == NULL || pBytesWritten == NULL || LogSizeInMbs == 0) {
-    // If LogSizeInMbs is zero, this function shouldn't be called.
+  if (pDimm == NULL || ppDebugLogBuffer == NULL || pDebugLogBufferSize == NULL) {
     ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
-
-  *pBytesWritten = 0;
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
@@ -2821,37 +3108,100 @@ FwCmdGetFWDebugLog (
     goto Finish;
   }
 
-  ReturnCode = FwCmdGetFWDebugLogSize(pDimm, &CurrentLogSizeInMbs);
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    ReturnCode = EFI_DEVICE_ERROR;
     goto Finish;
   }
-  LogSizeToFetchInMbs = MIN(LogSizeInMbs, CurrentLogSizeInMbs);
-  /** Fetch whole buffer, iterate by 1Mb chunk size **/
-  for (Index = 0; Index < LogSizeToFetchInMbs; ++Index) {
-    ZeroMem(pFwCmd, sizeof(*pFwCmd));
-    pFwCmd->DimmID = pDimm->DimmID;
-    pFwCmd->Opcode = PtGetLog;
-    pFwCmd->SubOpcode = SubopFwDbg;
-    pFwCmd->InputPayloadSize = sizeof(*pInputPayload);
+
+  ReturnCode = pNvmDimmConfigProtocol->GetFisTransportAttributes(pNvmDimmConfigProtocol, &pAttribs);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  // Populate log size bytes to fetch
+  switch (LogSource)
+  {
+    case FW_DEBUG_LOG_SOURCE_MEDIA:
+      LogAction = ActionGetDbgLogPage;
+      ReturnCode = FwCmdGetFwDebugLogSize(pDimm, &CurrentDebugLogSizeInMbs);
+      if (EFI_ERROR(ReturnCode)) {
+        if (ReturnCode == EFI_SECURITY_VIOLATION) {
+          SetObjStatusForDimm(pCommandStatus, pDimm, NVM_ERR_INVALID_SECURITY_STATE);
+        } else {
+          SetObjStatusForDimm(pCommandStatus, pDimm, NVM_ERR_FW_DBG_LOG_FAILED_TO_GET_SIZE);
+        }
+        goto Finish;
+      }
+      LogSizeBytesToFetch = MIB_TO_BYTES(CurrentDebugLogSizeInMbs);
+      break;
+    case FW_DEBUG_LOG_SOURCE_SRAM:
+      LogAction = ActionGetSramLogPage;
+      LogSizeBytesToFetch = SRAM_LOG_PAGE_SIZE_BYTES;
+      break;
+    case FW_DEBUG_LOG_SOURCE_SPI:
+      LogAction = ActionGetSpiLogPage;
+      LogSizeBytesToFetch = SPI_LOG_PAGE_SIZE_BYTES;
+      break;
+    default:
+      ReturnCode = EFI_INVALID_PARAMETER;
+      goto Finish;
+  }
+
+  if (LogSizeBytesToFetch == 0)
+  {
+    SetObjStatusForDimm(pCommandStatus, pDimm, NVM_INFO_FW_DBG_LOG_NO_LOGS_TO_FETCH);
+    ReturnCode = EFI_NOT_STARTED;
+    goto Finish;
+  }
+
+  *ppDebugLogBuffer = AllocateZeroPool(LogSizeBytesToFetch);
+  if (*ppDebugLogBuffer == NULL) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    goto Finish;
+  }
+
+  pFwCmd->Opcode = PtGetLog;
+  pFwCmd->SubOpcode = SubopFwDbg;
+  pFwCmd->InputPayloadSize = sizeof(*pInputPayload);
+  pInputPayload = (PT_INPUT_PAYLOAD_FW_DEBUG_LOG *) &pFwCmd->InputPayload;
+  pInputPayload->LogAction = LogAction;
+
+  // Default for DDRT large payload transactions. 128 bytes for smbus
+  if (IS_SMBUS_ENABLED(pAttribs) || IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
+    ChunkSize = SMALL_PAYLOAD_SIZE;
+    OutputPayload = pFwCmd->OutPayload;
+    pInputPayload->PayloadType = DEBUG_LOG_PAYLOAD_TYPE_SMALL;
+    pFwCmd->OutputPayloadSize = SMALL_PAYLOAD_SIZE;
+    pFwCmd->LargeOutputPayloadSize = 0;
+  } else {
+    ChunkSize = MIB_TO_BYTES(1);
+    OutputPayload = pFwCmd->LargeOutputPayload;
+    pInputPayload->PayloadType = DEBUG_LOG_PAYLOAD_TYPE_LARGE;
     pFwCmd->OutputPayloadSize = 0;
     pFwCmd->LargeOutputPayloadSize = OUT_MB_SIZE;
-    pInputPayload = (PT_INPUT_PAYLOAD_FW_DEBUG_LOG *) &pFwCmd->InputPayload;
-    pInputPayload->LogAction = ActionGetDbgLogPage;
-    pInputPayload->LogPageOffset = Index;
+  }
 
+  /** Fetch whole buffer, iterate by chunk size **/
+  LogPageOffset = 0;
+  BytesReadTotal = 0;
+  while (BytesReadTotal < LogSizeBytesToFetch) {
+
+    pInputPayload->LogPageOffset = LogPageOffset;
     ReturnCode = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
+
     if (EFI_ERROR(ReturnCode)) {
-      NVDIMM_WARN("Failed to get error log, LogPageOffset = %d\n", Index);
-      if (FW_ERROR(pFwCmd->Status)) {
-        ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-      }
+      NVDIMM_WARN("Failed to get firmware debug log, LogPageOffset = %d\n", LogPageOffset);
+      FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
       goto Finish;
     }
 
-    CopyMem_S((UINT8 *)pOutputBuffer + *pBytesWritten, OutputBufferSz - *pBytesWritten, pFwCmd->LargeOutputPayload, MIB_TO_BYTES(1));
-    *pBytesWritten = MIB_TO_BYTES(Index + 1);
+    BytesToCopy = MIN(LogSizeBytesToFetch - BytesReadTotal, ChunkSize);
+    CopyMem_S((UINT8 *)*ppDebugLogBuffer + BytesReadTotal, BytesToCopy, OutputPayload, BytesToCopy);
+    LogPageOffset++;
+    BytesReadTotal += BytesToCopy;
   }
+  *(pDebugLogBufferSize) = BytesReadTotal;
+
 
 Finish:
   FREE_POOL_SAFE(pFwCmd);
@@ -2912,9 +3262,7 @@ FwCmdGetErrorLog (
   ReturnCode = PassThru(pDimm, pFwCmd, PT_LONG_TIMEOUT_INTERVAL);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_WARN("Failed to get error log\n");
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
 
@@ -2949,19 +3297,19 @@ FwCmdGetSmartAndHealth (
      OUT PT_PAYLOAD_SMART_AND_HEALTH **ppPayloadSmartAndHealth
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   FW_CMD *pFwCmd = NULL;
 
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || ppPayloadSmartAndHealth == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -2970,26 +3318,24 @@ FwCmdGetSmartAndHealth (
   pFwCmd->SubOpcode = SubopSmartHealth;
   pFwCmd->OutputPayloadSize = sizeof(**ppPayloadSmartAndHealth);
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_WARN("Error detected when sending SmartAndHealth command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Error detected when sending SmartAndHealth command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
 
   *ppPayloadSmartAndHealth = AllocateZeroPool(sizeof(**ppPayloadSmartAndHealth));
   if (*ppPayloadSmartAndHealth == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
   CopyMem_S(*ppPayloadSmartAndHealth, sizeof(**ppPayloadSmartAndHealth), pFwCmd->OutPayload, sizeof(**ppPayloadSmartAndHealth));
 
 Finish:
   FREE_POOL_SAFE(pFwCmd);
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -3013,7 +3359,7 @@ FwCmdGetMemoryInfoPage (
      OUT VOID **ppPayloadMemoryInfoPage
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   FW_CMD *pFwCmd = NULL;
   PT_INPUT_PAYLOAD_MEMORY_INFO InputPayload;
 
@@ -3022,13 +3368,13 @@ FwCmdGetMemoryInfoPage (
   SetMem(&InputPayload, sizeof(InputPayload), 0x0);
 
   if (pDimm == NULL || ppPayloadMemoryInfoPage == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -3041,18 +3387,16 @@ FwCmdGetMemoryInfoPage (
   pFwCmd->OutputPayloadSize = PageSize;
 
   CopyMem_S(pFwCmd->InputPayload, sizeof(pFwCmd->InputPayload), &InputPayload, pFwCmd->InputPayloadSize);
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_WARN("Error detected when sending MemoryInfoPage command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Error detected when sending MemoryInfoPage command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto FinishAfterFwCmdAlloc;
   }
 
   *ppPayloadMemoryInfoPage = AllocateZeroPool(PageSize);
   if (*ppPayloadMemoryInfoPage == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto FinishAfterFwCmdAlloc;
   }
   CopyMem_S(*ppPayloadMemoryInfoPage, PageSize, pFwCmd->OutPayload, pFwCmd->OutputPayloadSize);
@@ -3060,8 +3404,8 @@ FwCmdGetMemoryInfoPage (
 FinishAfterFwCmdAlloc:
   FREE_POOL_SAFE(pFwCmd);
 Finish:
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -3081,19 +3425,19 @@ FwCmdGetFirmwareImageInfo (
      OUT PT_PAYLOAD_FW_IMAGE_INFO **ppPayloadFwImage
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   FW_CMD *pFwCmd = NULL;
 
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || ppPayloadFwImage == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -3102,18 +3446,16 @@ FwCmdGetFirmwareImageInfo (
   pFwCmd->SubOpcode = SubopFwImageInfo;
   pFwCmd->OutputPayloadSize = sizeof(**ppPayloadFwImage);
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_WARN("Error detected when sending FirmwareImageInfo command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Error detected when sending FirmwareImageInfo command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto FinishError;
   }
 
   *ppPayloadFwImage = AllocateZeroPool(sizeof(**ppPayloadFwImage));
   if (*ppPayloadFwImage == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto FinishError;
   }
   CopyMem_S(*ppPayloadFwImage, sizeof(**ppPayloadFwImage), pFwCmd->OutPayload, sizeof(**ppPayloadFwImage));
@@ -3121,8 +3463,8 @@ FwCmdGetFirmwareImageInfo (
 FinishError:
   FREE_POOL_SAFE(pFwCmd);
 Finish:
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -3142,19 +3484,19 @@ FwCmdGetPowerManagementPolicy(
      OUT PT_PAYLOAD_POWER_MANAGEMENT_POLICY *pPayloadPowerManagementPolicy
   )
 {
-  EFI_STATUS Rc = EFI_INVALID_PARAMETER;
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   FW_CMD *pFwCmd = NULL;
 
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || pPayloadPowerManagementPolicy == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -3163,12 +3505,10 @@ FwCmdGetPowerManagementPolicy(
   pFwCmd->SubOpcode = SubopPolicyPowMgmt;
   pFwCmd->OutputPayloadSize = sizeof(*pPayloadPowerManagementPolicy);
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_WARN("Error detected when sending PowerManagementPolicy command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Error detected when sending PowerManagementPolicy command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
 
@@ -3176,8 +3516,8 @@ FwCmdGetPowerManagementPolicy(
 
 Finish:
   FREE_POOL_SAFE(pFwCmd);
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 #ifdef OS_BUILD
@@ -3200,19 +3540,19 @@ FwCmdGetPMONRegisters(
   OUT    PMON_REGISTERS *pPayloadPMONRegisters
   )
 {
-  EFI_STATUS Rc = EFI_INVALID_PARAMETER;
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   FW_CMD *pFwCmd = NULL;
 
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || pPayloadPMONRegisters == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -3220,14 +3560,13 @@ FwCmdGetPMONRegisters(
   pFwCmd->Opcode = PtGetFeatures;
   pFwCmd->SubOpcode = SubopPMONRegisters;
   pFwCmd->InputPayload[0] = SmartDataMask;
+  pFwCmd->InputPayloadSize = sizeof(SmartDataMask);
   pFwCmd->OutputPayloadSize = sizeof(*pPayloadPMONRegisters);
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_WARN("Error detected when sending PMONRegisters command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Error detected when sending PMONRegisters command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
 
@@ -3235,8 +3574,8 @@ FwCmdGetPMONRegisters(
 
 Finish:
   FREE_POOL_SAFE(pFwCmd);
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -3255,7 +3594,7 @@ FwCmdSetPMONRegisters(
   IN     UINT8 PMONGroupEnable
   )
 {
-  EFI_STATUS Rc = EFI_INVALID_PARAMETER;
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   FW_CMD *pFwCmd = NULL;
 
 
@@ -3265,13 +3604,13 @@ FwCmdSetPMONRegisters(
 ...Valid  PMON groups -0xA -0xF
 **/
   if (pDimm == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -3281,19 +3620,17 @@ FwCmdSetPMONRegisters(
   pFwCmd->InputPayload[0] = PMONGroupEnable;
   pFwCmd->InputPayloadSize = sizeof(PMONGroupEnable);
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_WARN("Error detected when sending PMONRegisters command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Error detected when sending PMONRegisters command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
 
 Finish:
   FREE_POOL_SAFE(pFwCmd);
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 #endif
 /**
@@ -3313,19 +3650,19 @@ FwCmdGetPackageSparingPolicy (
      OUT PT_PAYLOAD_GET_PACKAGE_SPARING_POLICY **ppPayloadPackageSparingPolicy
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
   FW_CMD *pFwCmd = NULL;
 
   NVDIMM_ENTRY();
 
   if (pDimm == NULL || ppPayloadPackageSparingPolicy == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
   if (pFwCmd == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
 
@@ -3334,18 +3671,16 @@ FwCmdGetPackageSparingPolicy (
   pFwCmd->SubOpcode = SubopPolicyPackageSparing;
   pFwCmd->OutputPayloadSize = sizeof(**ppPayloadPackageSparingPolicy);
 
-  Rc = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(Rc)) {
-    NVDIMM_WARN("Error detected when sending GetPackageSparingPolicy command (RC = " FORMAT_EFI_STATUS ", Status = %d)", Rc, pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      Rc = MatchFwReturnCode(pFwCmd->Status);
-    }
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Error detected when sending GetPackageSparingPolicy command (RC = " FORMAT_EFI_STATUS ", Status = %d)", ReturnCode, pFwCmd->Status);
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto FinishAfterFwCmdAlloc;
   }
 
   *ppPayloadPackageSparingPolicy = AllocateZeroPool(sizeof(**ppPayloadPackageSparingPolicy));
   if (*ppPayloadPackageSparingPolicy == NULL) {
-    Rc = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_OUT_OF_RESOURCES;
     goto FinishAfterFwCmdAlloc;
   }
   CopyMem_S(*ppPayloadPackageSparingPolicy, sizeof(**ppPayloadPackageSparingPolicy), pFwCmd->OutPayload, sizeof(**ppPayloadPackageSparingPolicy));
@@ -3353,8 +3688,8 @@ FwCmdGetPackageSparingPolicy (
 FinishAfterFwCmdAlloc:
   FreePool(pFwCmd);
 Finish:
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -3404,9 +3739,7 @@ FwCmdGetLongOperationStatus(
       NVDIMM_WARN("Error detected when sending LongOperationStatus command (RC = " FORMAT_EFI_STATUS ", Status = %d)",
           ReturnCode, pFwCmd->Status);
     }
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
 
@@ -3479,20 +3812,20 @@ AssignSpaAddress(
      OUT VOID **ppField
   )
 {
-  EFI_STATUS Rc = EFI_INVALID_PARAMETER;
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   UINT64 SpaAddr = 0;
 
   if (pNvDimmRegionTable == NULL || pSpaRangeTable == NULL) {
     goto Finish;
   }
 
-  Rc = RdpaToSpa(Rdpa, pNvDimmRegionTable, pSpaRangeTable, pIntTbl, &SpaAddr);
-  if (!EFI_ERROR(Rc)) {
+  ReturnCode = RdpaToSpa(Rdpa, pNvDimmRegionTable, pSpaRangeTable, pIntTbl, &SpaAddr);
+  if (!EFI_ERROR(ReturnCode)) {
     *ppField = (VOID *) SpaAddr;
   }
 
 Finish:
-  return Rc;
+  return ReturnCode;
 }
 
 /**
@@ -3740,7 +4073,7 @@ RefreshDimm(
     goto Finish;
   }
 
-  ReturnCode = FwCmdIdDimm(pDimm, FALSE, pPayload);
+  ReturnCode = FwCmdIdDimm(pDimm, pPayload);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("FW CMD Error: " FORMAT_EFI_STATUS "", ReturnCode);
     goto Finish;
@@ -4138,19 +4471,20 @@ GetAndParseFwErrorLogForDimm(
   PT_INPUT_PAYLOAD_GET_ERROR_LOG InputPayload;
   VOID *pLargeOutputPayload = NULL;
   PT_OUTPUT_PAYLOAD_GET_ERROR_LOG OutPayloadGetErrorLog;
-  BOOLEAN FIS_1_2 = FALSE;
+  LOG_INFO_DATA_RETURN OutPayloadGetErrorLogInfoData;
   UINT16 ReturnCount = 0;
   TEMPERATURE Temperature;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
 
   ZeroMem(&InputPayload, sizeof(InputPayload));
   ZeroMem(&OutPayloadGetErrorLog, sizeof(OutPayloadGetErrorLog));
+  ZeroMem(&OutPayloadGetErrorLogInfoData, sizeof(OutPayloadGetErrorLogInfoData));
   ZeroMem(&Temperature, sizeof(Temperature));
 
   if (pDimm == NULL || pErrorsFetched == NULL || pErrorLogs == NULL) {
     goto Finish;
   }
-
-  FIS_1_2 = pDimm->FwVer.FwApiMajor == 1 && pDimm->FwVer.FwApiMinor <= 2;
 
   pLargeOutputPayload = AllocateZeroPool(OUT_MB_SIZE);
   if (pLargeOutputPayload == NULL) {
@@ -4161,34 +4495,92 @@ GetAndParseFwErrorLogForDimm(
   InputPayload.LogParameters.Separated.LogLevel = HighLevel ? ErrorLogHighPriority : ErrorLogLowPriority;
   InputPayload.LogParameters.Separated.LogType = ThermalError ? ErrorLogTypeThermal : ErrorLogTypeMedia;
   InputPayload.SequenceNumber = SequenceNumber;
-  InputPayload.LogParameters.Separated.LogEntriesPayloadReturn = ErrorLogLargePayload;
-  if (FIS_1_2) {
-    InputPayload.RequestCount.RequestCountFis1_2 =
-        (MaxErrorsToSave >= MAX_UINT8) ? MAX_UINT8 : (UINT8) MaxErrorsToSave;
-  } else {
-    InputPayload.RequestCount.RequestCountFis1_3 =
-        (MaxErrorsToSave >= MAX_UINT16) ? MAX_UINT16 : (UINT16) MaxErrorsToSave;
-  }
+  InputPayload.RequestCount = (MaxErrorsToSave >= MAX_UINT16) ? MAX_UINT16 : (UINT16) MaxErrorsToSave;
 
-  ReturnCode = FwCmdGetErrorLog(pDimm, &InputPayload, &OutPayloadGetErrorLog, sizeof(OutPayloadGetErrorLog),
-      pLargeOutputPayload, OUT_MB_SIZE);
-
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_WARN("Failed to fetch error log for Dimm %x\n", pDimm->DeviceHandle.AsUint32);
-    ReturnCode = EFI_DEVICE_ERROR;
     goto Finish;
   }
 
-  if ((FIS_1_2 && OutPayloadGetErrorLog.Params.FIS_1_2.ReturnInfo.Separated.ReturnCount > 0) ||
-      (!FIS_1_2 && OutPayloadGetErrorLog.Params.FIS_1_3.ReturnCount > 0)) {
+  ReturnCode = pNvmDimmConfigProtocol->GetFisTransportAttributes(pNvmDimmConfigProtocol, &pAttribs);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  if (IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
+    InputPayload.LogParameters.Separated.LogInfo = ErrorLogInfoData;
+
+    ReturnCode = FwCmdGetErrorLog(pDimm, &InputPayload, &OutPayloadGetErrorLogInfoData, sizeof(OutPayloadGetErrorLogInfoData),
+      pLargeOutputPayload, 0);
+
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_WARN("Failed to fetch error log for Dimm %x\n", pDimm->DeviceHandle.AsUint32);
+      ReturnCode = EFI_DEVICE_ERROR;
+      goto Finish;
+    }
+
+    UINT16 PayloadsProcessed = 0;
+    InputPayload.LogParameters.Separated.LogInfo = ErrorLogInfoEntries;
+    InputPayload.LogParameters.Separated.LogEntriesPayloadReturn = ErrorLogSmallPayload;
+    InputPayload.SequenceNumber = OutPayloadGetErrorLogInfoData.OldestSequenceNum;
+    UINT16 LogEntrySize = ThermalError ? sizeof(PT_OUTPUT_PAYLOAD_GET_ERROR_LOG_THERMAL_ENTRY) : sizeof(PT_OUTPUT_PAYLOAD_GET_ERROR_LOG_MEDIA_ENTRY);
+    UINT16 SmallPayloadRawSize = 0;
+    UINT64 LargeOutputOffset = (UINT64)pLargeOutputPayload;
+
+    while (ReturnCount < OutPayloadGetErrorLogInfoData.MaxLogEntries) {
+      ReturnCode = FwCmdGetErrorLog(pDimm, &InputPayload, &OutPayloadGetErrorLog, sizeof(OutPayloadGetErrorLog),
+        pLargeOutputPayload, 0);
+
+      if (EFI_ERROR(ReturnCode)) {
+        NVDIMM_WARN("Failed to fetch error log for Dimm %x\n", pDimm->DeviceHandle.AsUint32);
+        ReturnCode = EFI_DEVICE_ERROR;
+        goto Finish;
+      }
+
+      if (0 == OutPayloadGetErrorLog.ReturnCount) {
+        break;
+      }
+
+      SmallPayloadRawSize = (LogEntrySize * OutPayloadGetErrorLog.ReturnCount);
+      CopyMem_S((VOID *)LargeOutputOffset,
+        SmallPayloadRawSize,
+        OutPayloadGetErrorLog.LogEntries, 
+        SmallPayloadRawSize);
+
+      if (OUT_MB_SIZE >= LargeOutputOffset + SmallPayloadRawSize - (UINT64)pLargeOutputPayload) {
+        LargeOutputOffset += SmallPayloadRawSize;
+      }
+      else {
+        NVDIMM_WARN("Buffer limit reached while fetching error log for Dimm %x\n", pDimm->DeviceHandle.AsUint32);
+        break;
+      }
+
+      InputPayload.SequenceNumber += OutPayloadGetErrorLog.ReturnCount;
+      ReturnCount += OutPayloadGetErrorLog.ReturnCount;
+      PayloadsProcessed++;
+    }
+  }
+  else {
+    InputPayload.LogParameters.Separated.LogEntriesPayloadReturn = ErrorLogLargePayload;
+
+    ReturnCode = FwCmdGetErrorLog(pDimm, &InputPayload, &OutPayloadGetErrorLog, sizeof(OutPayloadGetErrorLog),
+      pLargeOutputPayload, OUT_MB_SIZE);
+
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_WARN("Failed to fetch error log for Dimm %x\n", pDimm->DeviceHandle.AsUint32);
+      ReturnCode = EFI_DEVICE_ERROR;
+      goto Finish;
+    }
+
+    ReturnCount = OutPayloadGetErrorLog.ReturnCount;
+  }
+
+  if (ReturnCount > 0) {
     if (ThermalError) {
       pThermalLogEntry = (PT_OUTPUT_PAYLOAD_GET_ERROR_LOG_THERMAL_ENTRY *) pLargeOutputPayload;
     } else {
       pMediaLogEntry = (PT_OUTPUT_PAYLOAD_GET_ERROR_LOG_MEDIA_ENTRY *) pLargeOutputPayload;
     }
-
-    ReturnCount = (FIS_1_2) ? OutPayloadGetErrorLog.Params.FIS_1_2.ReturnInfo.Separated.ReturnCount :
-        OutPayloadGetErrorLog.Params.FIS_1_3.ReturnCount;
 
     for (Index = 0; Index < ReturnCount; ++Index) {
       pErrorLogs[Index].DimmID = pDimm->DimmID;
@@ -4205,9 +4597,7 @@ GetAndParseFwErrorLogForDimm(
 
         pThermalErrorInfo->Reported = (UINT8)pThermalLogEntry->HostReportedTempData.Separated.Reported;
         pThermalErrorInfo->Type = (UINT8)pThermalLogEntry->HostReportedTempData.Separated.Type;
-        if (!FIS_1_2) {
-          pThermalErrorInfo->SequenceNum = pThermalLogEntry->SequenceNum;
-        }
+        pThermalErrorInfo->SequenceNum = pThermalLogEntry->SequenceNum;
 
         pThermalLogEntry++;
       } else {
@@ -4224,9 +4614,7 @@ GetAndParseFwErrorLogForDimm(
         pMediaErrorInfo->Interrupt = pMediaLogEntry->ErrorFlags.Spearated.Interrupt;
         pMediaErrorInfo->Viral = pMediaLogEntry->ErrorFlags.Spearated.Viral;
         pMediaErrorInfo->TransactionType = pMediaLogEntry->TransactionType;
-        if (!FIS_1_2) {
-          pMediaErrorInfo->SequenceNum = pMediaLogEntry->SequenceNum;
-        }
+        pMediaErrorInfo->SequenceNum = pMediaLogEntry->SequenceNum;
 
         pMediaLogEntry++;
       }
@@ -4661,13 +5049,6 @@ InitializeDimm (
 
   if (pNewDimm->pCtrlTbl != NULL) {
     pNewDimm->NvDimmStateFlags = pNewDimm->pCtrlTbl->NvDimmStateFlags;
-    if ((BIT6 & pNewDimm->NvDimmStateFlags) != 0) {
-       NVDIMM_WARN("Bit6 is set in NVDIMM State Flags, this dimm is non-functional.");
-       // This could be due to various issues such as a device initialization error,
-       // device error, insufficient hardware resources to map the device, or a disabled device.
-       ReturnCode = EFI_DEVICE_ERROR;
-       goto after_dimm;
-    }
 
     if (pNewDimm->pCtrlTbl->InterleaveStructureIndex != 0) {
       ReturnCode = GetInterleaveTable(pFitHead, pNewDimm->pCtrlTbl->InterleaveStructureIndex, &pMbITbl);
@@ -4691,21 +5072,21 @@ InitializeDimm (
 
   if ((SPD_INTEL_VENDOR_ID == pNewDimm->SubsystemVendorId) &&
     IsSubsystemDeviceIdSupported(pNewDimm)) {
-
+#ifndef OS_BUILD
     pNewDimm->pHostMailbox = CreateMailbox(pNewDimm, pMbITbl);
 
     if (!pNewDimm->pHostMailbox) {
       ReturnCode = EFI_DEVICE_ERROR;
       goto after_dimm;
     }
-
+#endif // OS_BUILD
     pPayload = AllocateZeroPool(sizeof(*pPayload));
     if (!pPayload) {
       ReturnCode = EFI_OUT_OF_RESOURCES;
       goto after_mailbox;
     }
 
-    ReturnCode = FwCmdIdDimm(pNewDimm, FALSE, pPayload);
+    ReturnCode = FwCmdIdDimm(pNewDimm, pPayload);
     if (EFI_ERROR(ReturnCode)) {
       NVDIMM_DBG("FW CMD Error: %d", ReturnCode);
       goto after_mailbox;
@@ -4716,7 +5097,7 @@ InitializeDimm (
     pNewDimm->FlushRequired = (pPayload->Fswr & BIT0) != 0;
     pNewDimm->ControlWindowLatch = (pPayload->Fswr & BIT1) != 0;
 
-    /** pPayload->Rc in 4KiB multiples **/
+    /** pPayload->ReturnCode in 4KiB multiples **/
     pNewDimm->RawCapacity = (UINT64)pPayload->Rc * (4 * 1024);
     pNewDimm->Manufacturer = pPayload->Mf;
     pNewDimm->SkuInformation = *((SKU_INFORMATION *)&pPayload->DimmSku);
@@ -4817,10 +5198,10 @@ InitializeDimm (
         Otherwise we will get more errors on each feature that we will try to use.
       **/
       ReturnCode = EFI_SUCCESS;
-      pDimmSecurityPayload->SecurityStatus = 0;
+      pDimmSecurityPayload->SecurityStatus.AsUint32 = 0;
     }
 
-    pNewDimm->EncryptionEnabled = ((pDimmSecurityPayload->SecurityStatus & SECURITY_MASK_ENABLED) != 0);
+    pNewDimm->EncryptionEnabled = (BOOLEAN) pDimmSecurityPayload->SecurityStatus.Separated.SecurityEnabled;
 
     if (pNewDimm->pDataTbl != NULL && pNewDimm->pDataTbl->InterleaveStructureIndex != 0) {
       ReturnCode = GetInterleaveTable(pFitHead, pNewDimm->pDataTbl->InterleaveStructureIndex, &pBwITbl);
@@ -4846,7 +5227,9 @@ InitializeDimm (
   goto out;
 
 after_mailbox:
+#ifndef OS_BUILD
   FreeMailbox(pNewDimm->pHostMailbox);
+#endif // OS_BUILD
 after_dimm:
   FREE_POOL_SAFE(pNewDimm);
   *ppDimm = NULL;
@@ -4904,7 +5287,9 @@ FreeDimm(
   if (pDimm == NULL) {
     return;
   }
+#ifndef OS_BUILD
   FreeMailbox(pDimm->pHostMailbox);
+#endif // OS_BUILD
   FreeBlockWindow(pDimm->pBw);
   FREE_POOL_SAFE(pDimm);
   NVDIMM_EXIT();
@@ -4931,11 +5316,11 @@ RemoveDimm(
   IN     INT32 Force
   )
 {
-  EFI_STATUS Rc = EFI_SUCCESS;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
 
   NVDIMM_ENTRY();
   if (pDimm == NULL) {
-    Rc = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
   } else {
     /**
       test if DIMM is used in any volume
@@ -4952,8 +5337,8 @@ RemoveDimm(
     FreeDimm(pDimm);
   }
 
-  NVDIMM_EXIT_I64(Rc);
-  return Rc;
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 /**
@@ -5396,6 +5781,7 @@ GenerateOemPcdHeader (
   The caller is responsible for a memory deallocation of the ppPlatformConfigData
 
   @param[in] pDimm The Intel NVM Dimm to retrieve PCD from
+  @param[in] RetoreCorrupt If true will generate a default PCD when a corrupt header is found
   @param[out] ppPlatformConfigData Pointer to a new buffer pointer for storing retrieved data
 
   @retval EFI_SUCCESS Success
@@ -5405,6 +5791,7 @@ GenerateOemPcdHeader (
 EFI_STATUS
 GetPlatformConfigDataOemPartition (
   IN     DIMM *pDimm,
+  IN     BOOLEAN RestoreCorrupt,
      OUT NVDIMM_CONFIGURATION_HEADER **ppPlatformConfigData
   )
 {
@@ -5419,8 +5806,8 @@ GetPlatformConfigDataOemPartition (
 
   /** Get current Platform Config Data oem partition from dimm **/
   ReturnCode = GetPcdOemConfigDataUsingSmallPayload(pDimm, (UINT8 **)ppPlatformConfigData, &PcdDataSize);
-  if(EFI_NOT_FOUND == ReturnCode) {
-    NVDIMM_WARN("Empty Platform Configuration Data Discovered, Generating new OemPcdHeader");
+  if(RestoreCorrupt && (EFI_NOT_FOUND == ReturnCode || EFI_VOLUME_CORRUPTED == ReturnCode)) {
+    NVDIMM_WARN("Generating new OemPcdHeader due to missing or corrupt PCD config header.");
     *ppPlatformConfigData = AllocateZeroPool(sizeof(NVDIMM_CONFIGURATION_HEADER));
   if (*ppPlatformConfigData == NULL) {
     ReturnCode = EFI_OUT_OF_RESOURCES;
@@ -5611,12 +5998,16 @@ MatchFwReturnCode (
     ReturnCode = EFI_SECURITY_VIOLATION;
     break;
 
+  case FW_DATA_NOT_SET:
+    ReturnCode = EFI_NOT_STARTED;
+    break;
+
   case FW_TIMEOUT_OCCURED:
     ReturnCode = EFI_TIMEOUT;
     break;
 
   case FW_SYSTEM_TIME_NOT_SET:
-  case FW_DATA_NOT_SET:
+
   case FW_REVISION_FAILURE:
   case FW_INCOMPATIBLE_DIMM_TYPE:
   case FW_ABORTED:
@@ -5632,6 +6023,36 @@ MatchFwReturnCode (
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
+
+#ifdef OS_BUILD
+/**
+  Matches DSM return code to one of available EFI_STATUS EFI base types
+
+  @param[in] DsmStatus - status byte returned from FW command
+
+  @retval - Appropriate EFI_STATUS
+**/
+EFI_STATUS
+MatchDsmReturnCode(
+  IN     UINT8 DsmStatus
+)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+
+  NVDIMM_ENTRY();
+
+  switch (DsmStatus) {
+  case DSM_VENDOR_SUCCESS:
+    break;
+  default:
+    ReturnCode = EFI_ABORTED;
+    break;
+  }
+
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+#endif
 
 /**
   Check if SKU conflict occurred.
@@ -5672,7 +6093,8 @@ Finish:
 }
 
 /**
-  Calculate a size of capacity lost to volatile alignment and space that is not partitioned
+  Calculate a size of capacity considered Reserved. It is the aligned PM
+  capacity less the AD capacity
 
   @param[in] Dimm to retrieve reserved size for
 
@@ -5683,7 +6105,7 @@ GetReservedCapacity(
   IN     DIMM *pDimm
   )
 {
-  return pDimm->RawCapacity - pDimm->VolatileCapacity - pDimm->PmCapacity;
+  return ROUNDDOWN(pDimm->PmCapacity, REGION_PERSISTENT_SIZE_ALIGNMENT_B) - pDimm->MappedPersistentCapacity;
 }
 
 #define FW_TEMPERATURE_CONST_1 625
@@ -5790,17 +6212,64 @@ Finish:
 }
 
 /**
+  Set Obj Status when DIMM is not found using Id expected by end user
+
+  @param[in] DimmId the Pid for the DIMM that was not found
+  @param[in] pDimms Pointer to head of list where DimmId should be found
+  @param[out] pCommandStatus Pointer to command status structure
+
+**/
+VOID
+SetObjStatusForDimmNotFound(
+  IN     UINT16 DimmId,
+  IN     LIST_ENTRY *pDimms,
+  OUT COMMAND_STATUS *pCommandStatus
+)
+{
+  DIMM *pCurrentDimm = NULL;
+
+  pCurrentDimm = GetDimmByPid(DimmId, pDimms);
+  if (pCurrentDimm != NULL) {
+    SetObjStatusForDimm(pCommandStatus, pCurrentDimm, NVM_ERR_DIMM_NOT_FOUND);
+    pCurrentDimm = NULL;
+  }
+  else
+  {
+    SetObjStatus(pCommandStatus, DimmId, NULL, 0, NVM_ERR_DIMM_NOT_FOUND);
+  }
+}
+
+/**
+Set object status for DIMM
+
+@param[out] pCommandStatus Pointer to command status structure
+@param[in] pDimm DIMM for which the object status is being set
+@param[in] Status Object status to set
+**/
+VOID
+SetObjStatusForDimm(
+  OUT COMMAND_STATUS *pCommandStatus,
+  IN     DIMM *pDimm,
+  IN     NVM_STATUS Status
+)
+{
+  SetObjStatusForDimmWithErase(pCommandStatus, pDimm, Status, FALSE);
+}
+
+/**
   Set object status for DIMM
 
   @param[out] pCommandStatus Pointer to command status structure
   @param[in] pDimm DIMM for which the object status is being set
   @param[in] Status Object status to set
+  @param[in] If TRUE - clear all other status before setting this one
 **/
 VOID
-SetObjStatusForDimm(
+SetObjStatusForDimmWithErase(
      OUT COMMAND_STATUS *pCommandStatus,
   IN     DIMM *pDimm,
-  IN     NVM_STATUS Status
+  IN     NVM_STATUS Status,
+  IN     BOOLEAN EraseFirst
   )
 {
   CHAR16 DimmUid[MAX_DIMM_UID_LENGTH];
@@ -5816,6 +6285,11 @@ SetObjStatusForDimm(
     return;
   }
 
+  if (EraseFirst) {
+    EraseObjStatus(pCommandStatus, pDimm->DeviceHandle.AsUint32, DimmUid, MAX_DIMM_UID_LENGTH);
+  }
+
+  pCommandStatus->ObjectType = ObjectTypeDimm;
   SetObjStatus(pCommandStatus, pDimm->DeviceHandle.AsUint32, DimmUid, MAX_DIMM_UID_LENGTH, Status);
 }
 
@@ -5854,22 +6328,26 @@ GetOverwriteDimmStatus(
       *pOverwriteDimmStatus = OVERWRITE_DIMM_STATUS_NOT_STARTED;
       ReturnCode = EFI_SUCCESS;
     }
+    else {
+      *pOverwriteDimmStatus = OVERWRITE_DIMM_STATUS_UNKNOWN;
+      goto Finish;
+    }
   }
 
   if (LongOpStatus.CmdOpcode == PtSetSecInfo && LongOpStatus.CmdSubcode == SubopOverwriteDimm) {
     switch (LongOpStatus.Status) {
-      case FW_SUCCESS:
-        *pOverwriteDimmStatus = OVERWRITE_DIMM_STATUS_COMPLETED;
-        break;
       case FW_DEVICE_BUSY:
         *pOverwriteDimmStatus = OVERWRITE_DIMM_STATUS_IN_PROGRESS;
         break;
+      case FW_DATA_NOT_SET:
+        *pOverwriteDimmStatus = OVERWRITE_DIMM_STATUS_NOT_STARTED;
+        break;
       default:
-        *pOverwriteDimmStatus = OVERWRITE_DIMM_STATUS_UNKNOWN;
+        *pOverwriteDimmStatus = OVERWRITE_DIMM_STATUS_COMPLETED;
         break;
     }
   } else {
-    *pOverwriteDimmStatus = OVERWRITE_DIMM_STATUS_NOT_STARTED;
+    *pOverwriteDimmStatus = OVERWRITE_DIMM_STATUS_UNKNOWN;
   }
 
   ReturnCode = EFI_SUCCESS;
@@ -5880,19 +6358,80 @@ Finish:
 }
 
 /**
+  Poll while ARS long operation status reports DEVICE BUSY
+
+  @param[in] pDimm DIMM to retrieve overwrite DIMM operation status from
+  @parma[in] TimeoutSecs - Poll timeout in seconds
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_TIMEOUT Timeout expired and did not receive something other than FW_DEVICE_BUSY
+  @retval EFI_INVALID_PARAMETER One or more parameters are NULL
+  @retval EFI_DEVICE_ERROR Retrieved an unexpeced opcode/subopcode when requesting long op status
+**/
+EFI_STATUS
+PollOnArsDeviceBusy(
+  IN     DIMM *pDimm,
+  IN     UINT32 TimeoutSecs
+)
+{
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
+  UINT8 FwStatus = FW_SUCCESS;
+  PT_OUTPUT_PAYLOAD_FW_LONG_OP_STATUS LongOpStatus;
+  UINT32 RetryMax = 0;
+  UINT32 RetryCount = 0;
+
+  NVDIMM_ENTRY();
+
+  ZeroMem(&LongOpStatus, sizeof(LongOpStatus));
+
+  if (pDimm == NULL) {
+    goto Finish;
+  }
+
+  RetryMax = (TimeoutSecs * 1000000) / POLL_ARS_LONG_OP_DELAY_US;
+
+  for(RetryCount = 0; RetryCount < RetryMax; ++RetryCount) {
+    ReturnCode = FwCmdGetLongOperationStatus(pDimm, &FwStatus, &LongOpStatus);
+    if (EFI_ERROR(ReturnCode)) {
+        NVDIMM_ERR("Error occured while polling for ARS enable/disable state.\n");
+        break;
+    }
+
+    if (LongOpStatus.CmdOpcode == PtSetFeatures && LongOpStatus.CmdSubcode == SubopAddressRangeScrub) {
+      if (FW_DEVICE_BUSY != LongOpStatus.Status) {
+        ReturnCode = EFI_SUCCESS;
+        goto Finish;
+      }
+    }
+    else {
+      NVDIMM_ERR("Unexpected opcode/subopcodes retrieved with Get Long Op Status\n");
+      ReturnCode = EFI_DEVICE_ERROR;
+      break;
+    }
+    gBS->Stall(POLL_ARS_LONG_OP_DELAY_US);
+    ZeroMem(&LongOpStatus, sizeof(LongOpStatus));
+  }
+
+  if (EFI_SUCCESS == ReturnCode && RetryCount == RetryMax) {
+    ReturnCode = EFI_TIMEOUT;
+  }
+Finish:
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+
+/**
   Customer Format Dimm
   Send a customer format command through the smbus
 
   @param[in] pDimm The dimm to attempt to format
-  @param[in] Smbus Execute on SMBUS mailbox or DDRT
 
   @retval EFI_SUCCESS Success
   @retval EFI_INVALID_PARAMETER Invalid FW Command Parameter
 **/
 EFI_STATUS
 FwCmdFormatDimm(
-  IN    DIMM *pDimm,
-  IN    BOOLEAN Smbus
+  IN    DIMM *pDimm
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
@@ -5913,20 +6452,11 @@ FwCmdFormatDimm(
   }
 
 	pFwCmd->Opcode = PtCustomerFormat;
-#ifndef OS_BUILD
-	if (Smbus) {
-		ReturnCode = SmbusPassThru(pDimm->SmbusAddress, pFwCmd, PT_TIMEOUT_INTERVAL);
-  } else {
-#endif
-		ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-#ifndef OS_BUILD
-	}
-#endif
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+
 	if (EFI_ERROR(ReturnCode) && ReturnCode != EFI_TIMEOUT) {
 		NVDIMM_DBG("Error detected when sending PtCustomerFormat command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
-		if (FW_ERROR(pFwCmd->Status)) {
-			ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-		}
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
 		goto Finish;
 	}
 
@@ -5940,7 +6470,6 @@ FwCmdFormatDimm(
   Firmware command to get DDRT IO init info
 
   @param[in] pDimm Target DIMM structure pointer
-  @param[in] Execute on Smbus mailbox instead of DDRT
   @param[out] pDdrtIoInitInfo pointer to filled payload with DDRT IO init info
 
   @retval EFI_SUCCESS Success
@@ -5951,7 +6480,6 @@ FwCmdFormatDimm(
 EFI_STATUS
 FwCmdGetDdrtIoInitInfo(
   IN     DIMM *pDimm,
-  IN     BOOLEAN Smbus,
      OUT PT_OUTPUT_PAYLOAD_GET_DDRT_IO_INIT_INFO *pDdrtIoInitInfo
   )
 {
@@ -5974,20 +6502,11 @@ FwCmdGetDdrtIoInitInfo(
 	pFwCmd->Opcode = PtGetAdminFeatures;
 	pFwCmd->SubOpcode = SubopDdrtIoInitInfo;
 	pFwCmd->OutputPayloadSize = sizeof(*pDdrtIoInitInfo);
-#ifndef OS_BUILD
-	if (Smbus) {
-		ReturnCode = SmbusPassThru(pDimm->SmbusAddress, pFwCmd, PT_TIMEOUT_INTERVAL);
-  } else {
-#endif
-		ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-#ifndef OS_BUILD
-	}
-#endif
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+
 	if (EFI_ERROR(ReturnCode)) {
 		NVDIMM_WARN("Failed to get DDRT IO init info");
-		if (FW_ERROR(pFwCmd->Status)) {
-			ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-		}
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
 		goto Finish;
 	}
 
@@ -6004,7 +6523,7 @@ Finish:
   @param[IN] pDimm Target DIMM structure pointer
   @param[IN] Opcode for the command
   @param[IN] SubOpcode for the command
-  @param[OUT] pRestricted TRUE if restricted, else FALSE
+  @param[OUT] pRestricted code for applied restriction (0-3)
 
   @retval EFI_SUCCESS Success
   @retval EFI_DEVICE_ERROR if failed to open PassThru protocol
@@ -6016,7 +6535,7 @@ FwCmdGetCommandAccessPolicy(
   IN  DIMM *pDimm,
   IN  UINT8 Opcode,
   IN  UINT8 Subopcode,
-  OUT BOOLEAN *pRestricted
+  OUT UINT8 *pRestriction
 )
 {
   FW_CMD *pFwCmd = NULL;
@@ -6026,7 +6545,7 @@ FwCmdGetCommandAccessPolicy(
 
   NVDIMM_ENTRY();
 
-  if (pDimm == NULL || pRestricted == NULL) {
+  if (pDimm == NULL || pRestriction == NULL) {
     goto Finish;
   }
 
@@ -6038,7 +6557,7 @@ FwCmdGetCommandAccessPolicy(
 
   pFwCmd->DimmID = pDimm->DimmID;
   pFwCmd->Opcode = PtGetAdminFeatures;
-  pFwCmd->SubOpcode = SubopDimmPartitionInfo;
+  pFwCmd->SubOpcode = SubopCommandAccessPolicy;
   pFwCmd->OutputPayloadSize = sizeof(PT_OUTPUT_PAYLOAD_GET_COMMAND_ACCESS_POLICY);
 
   pInputCAP = (PT_INPUT_PAYLOAD_GET_COMMAND_ACCESS_POLICY*) pFwCmd->InputPayload;
@@ -6050,20 +6569,12 @@ FwCmdGetCommandAccessPolicy(
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Error detected when sending GetCommandAccessPolicy command (RC = %d)", ReturnCode);
     NVDIMM_DBG("FW CMD Status %d", pFwCmd->Status);
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
 
   pOutputCAP = (PT_OUTPUT_PAYLOAD_GET_COMMAND_ACCESS_POLICY*) pFwCmd->OutPayload;
-
-  if (0 != pOutputCAP->Restricted) {
-    *pRestricted = TRUE;
-  }
-  else {
-    *pRestricted = FALSE;
-  }
+  *pRestriction = pOutputCAP->Restriction;
 
 Finish:
   FREE_POOL_SAFE(pFwCmd);
@@ -6116,12 +6627,10 @@ FwCmdInjectError(
 	ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
 	if (EFI_ERROR(ReturnCode)) {
 		NVDIMM_WARN("Failed to inject error, error: %x\n", ReturnCode);
-		if (FW_ERROR(pFwCmd->Status)) {
-			if (pFwCmd->Status == FW_INJECTION_NOT_ENABLED) {
-				NVDIMM_DBG("FW Error injection is not enabled");
-			}
-			ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-		}
+    if (pFwCmd->Status == FW_INJECTION_NOT_ENABLED) {
+      NVDIMM_DBG("FW Error injection is not enabled");
+    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
 		goto Finish;
 	}
 
@@ -6174,9 +6683,7 @@ FwCmdGetSystemTime(
 
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_ERR("Error detected when sending FwCmdGetSystemTime command (RC = " FORMAT_EFI_STATUS ")", ReturnCode);
-    if (FW_ERROR(pFwCmd->Status)) {
-      ReturnCode = MatchFwReturnCode(pFwCmd->Status);
-    }
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
     goto Finish;
   }
   CopyMem_S(pSystemTimePayload, sizeof(*pSystemTimePayload), pFwCmd->OutPayload, sizeof(*pSystemTimePayload));
@@ -6299,4 +6806,40 @@ EFI_STATUS ClearPcdCacheOnDimmList(VOID)
   }
 #endif // PCD_CACHE_ENABLED
   return EFI_SUCCESS;
+}
+
+EFI_STATUS
+PassThru(
+  IN     struct _DIMM *pDimm,
+  IN OUT FW_CMD *pCmd,
+  IN     UINT64 Timeout
+)
+{
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
+
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetFisTransportAttributes(pNvmDimmConfigProtocol, &pAttribs);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  if (IS_SMBUS_ENABLED(pAttribs)) {
+#ifndef OS_BUILD
+    ReturnCode = SmbusPassThru(pDimm->SmbusAddress, pCmd, PT_LONG_TIMEOUT_INTERVAL);
+#else
+    ReturnCode = EFI_UNSUPPORTED;
+#endif // !OS_BUILD
+  }
+  else {
+    ReturnCode = DefaultPassThru(pDimm, pCmd, PT_TIMEOUT_INTERVAL);
+  }
+
+Finish:
+  return ReturnCode;
 }

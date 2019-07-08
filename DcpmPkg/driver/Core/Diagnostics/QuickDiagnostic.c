@@ -7,6 +7,11 @@
 
 extern NVMDIMMDRIVER_DATA *gNvmDimmData;
 
+#define MANAGEABILITY_TEST_INDEX 0
+#define BOOTSTATUS_TEST_INDEX 1
+#define SMARTHEALTH_TEST_INDEX 2
+
+//  [ATTENTION] : Do not use this function for implementing diagnostic tests. This is kept maintain the backward compatibility.
 /**
   Run quick diagnostics for list of DIMMs, and appropriately
   populate the result messages, and test-state.
@@ -121,6 +126,112 @@ Finish:
 }
 
 /**
+  Run quick diagnostics for list of DIMMs, and appropriately
+  populate the result messages, and test-state.
+
+  @param[in] ppDimms The DIMM pointers list
+  @param[in] DimmCount DIMMs count
+  @param[in] DimmIdPreference Preference for Dimm ID display (UID/Handle)
+  @param[out] pResult Pointer to the result structure of quick diagnostics message
+
+  @retval EFI_SUCCESS Test executed correctly
+  @retval EFI_DEVICE_ERROR Test wasn't executed correctly
+  @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL.
+**/
+EFI_STATUS
+RunQuickDiagnosticsDetail(
+  IN     DIMM **ppDimms,
+  IN     CONST UINT16 DimmCount,
+  IN     UINT8 DimmIdPreference,
+  OUT DIAG_INFO *pResult
+)
+{
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
+  CHAR16 DimmStr[MAX_DIMM_UID_LENGTH];
+  CHAR16 DimmUid[MAX_DIMM_UID_LENGTH];
+  UINT8 TmpDiagState = 0;
+  UINT16 Index = 0;
+
+  NVDIMM_ENTRY();
+
+  ZeroMem(DimmStr, sizeof(DimmStr));
+  ZeroMem(DimmUid, sizeof(DimmUid));
+
+  if (pResult == NULL || DimmCount > MAX_DIMMS) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    NVDIMM_ERR("The quick diagnostics test aborted due to an internal error.");
+    goto Finish;
+  }
+
+  if (ppDimms == NULL || DimmCount == 0) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  pResult->SubTestName[MANAGEABILITY_TEST_INDEX] = CatSPrint(NULL, L"Manageability");
+  pResult->SubTestName[BOOTSTATUS_TEST_INDEX] = CatSPrint(NULL, L"Boot status");
+  pResult->SubTestName[SMARTHEALTH_TEST_INDEX] = CatSPrint(NULL, L"Health");
+
+  for (Index = 0; Index < DimmCount; ++Index) {
+    TmpDiagState = 0;
+
+    if (ppDimms[Index] == NULL) {
+      ReturnCode = EFI_INVALID_PARAMETER;
+      continue;
+    }
+
+    ReturnCode = GetDimmUid(ppDimms[Index], DimmUid, MAX_DIMM_UID_LENGTH);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("GetDimmUid function for DIMM ID 0x%x failed.", ppDimms[Index]->DeviceHandle.AsUint32);
+      continue;
+    }
+
+    ReturnCode = GetPreferredValueAsString(ppDimms[Index]->DeviceHandle.AsUint32, DimmUid, DimmIdPreference == DISPLAY_DIMM_ID_HANDLE,
+      DimmStr, MAX_DIMM_UID_LENGTH);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("GetPreferredValueAsString function for DIMM ID 0x%x failed.", ppDimms[Index]->DeviceHandle.AsUint32);
+      continue;
+    }
+
+    ReturnCode = DiagnosticsManageabilityCheck(ppDimms[Index], DimmStr, &pResult->Message[MANAGEABILITY_TEST_INDEX], &pResult->SubTestStateVal[MANAGEABILITY_TEST_INDEX]);
+    if (EFI_ERROR(ReturnCode) || (!IsDimmManageable(ppDimms[Index]))) {
+      NVDIMM_DBG("The check for manageability for DIMM ID 0x%x failed.", ppDimms[Index]->DeviceHandle.AsUint32);
+      if ((pResult->SubTestStateVal[MANAGEABILITY_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
+        APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_QUICK_ABORTED_DIMM_INTERNAL_ERROR), EVENT_CODE_540, DIAG_STATE_MASK_ABORTED,
+          &pResult->Message[MANAGEABILITY_TEST_INDEX], &pResult->SubTestStateVal[MANAGEABILITY_TEST_INDEX], DimmStr);
+      }
+      continue;
+    }
+
+    ReturnCode = BootStatusDiagnosticsCheck(ppDimms[Index], DimmStr, &pResult->Message[BOOTSTATUS_TEST_INDEX], &pResult->SubTestStateVal[BOOTSTATUS_TEST_INDEX]);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("The BSR check for DIMM ID 0x%x failed.", ppDimms[Index]->DeviceHandle.AsUint32);
+      if ((pResult->SubTestStateVal[BOOTSTATUS_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
+        APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_QUICK_ABORTED_DIMM_INTERNAL_ERROR), EVENT_CODE_540, DIAG_STATE_MASK_ABORTED,
+          &pResult->Message[BOOTSTATUS_TEST_INDEX], &pResult->SubTestStateVal[BOOTSTATUS_TEST_INDEX], DimmStr);
+      }
+      continue;
+    }
+
+    ReturnCode = SmartAndHealthCheck(ppDimms[Index], DimmStr, &pResult->Message[SMARTHEALTH_TEST_INDEX], &pResult->SubTestStateVal[SMARTHEALTH_TEST_INDEX]);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("The smart and health check for DIMM ID 0x%x failed.", ppDimms[Index]->DeviceHandle.AsUint32);
+      if ((TmpDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
+        APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_QUICK_ABORTED_DIMM_INTERNAL_ERROR), EVENT_CODE_540, DIAG_STATE_MASK_ABORTED,
+          &pResult->Message[SMARTHEALTH_TEST_INDEX], &pResult->SubTestStateVal[SMARTHEALTH_TEST_INDEX], DimmStr);
+      }
+      continue;
+    }
+  }
+
+  ReturnCode = EFI_SUCCESS;
+
+Finish:
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+
+/**
   Check manageability for a DIMM, and accordingly append to
   the quick diagnostics result.
   Also, accordingly modifies the test-state.
@@ -196,7 +307,7 @@ SmartAndHealthCheck(
   IN     CHAR16 *pDimmStr,
   IN OUT CHAR16 **ppResultStr,
   IN OUT UINT8 *pDiagState
-  )
+)
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   SENSOR_INFO SensorInfo;
@@ -204,7 +315,6 @@ SmartAndHealthCheck(
   INT16 ControllerTemperatureThreshold = 0;
   INT16 PercentageRemainingThreshold = 0;
   UINT8 AitDramEnabled = 0;
-  BOOLEAN FIS_1_3 = FALSE;
   DIMM_INFO DimmInfo;
   CHAR16 *pActualHealthStr = NULL;
   CHAR16 *pActualHealthReasonStr = NULL;
@@ -218,11 +328,11 @@ SmartAndHealthCheck(
     if (pDiagState != NULL) {
       *pDiagState |= DIAG_STATE_MASK_ABORTED;
     }
-     ReturnCode = EFI_INVALID_PARAMETER;
+    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
-  ReturnCode = GetSmartAndHealth(NULL, pDimm->DimmID, &SensorInfo, NULL, NULL, &AitDramEnabled);
+  ReturnCode = GetSmartAndHealth(NULL, pDimm->DimmID, &SensorInfo, NULL, NULL, NULL, &AitDramEnabled);
   if (EFI_ERROR(ReturnCode)) {
     if (EFI_NO_RESPONSE == ReturnCode) {
       APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_FW_BUSY), EVENT_CODE_541, DIAG_STATE_MASK_OK, ppResultStr, pDiagState,
@@ -233,8 +343,8 @@ SmartAndHealthCheck(
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
     goto Finish;
   }
-  if (SensorInfo.LastShutdownStatus) {
-    // LastShutdownStatus != 0 - Dirty Shutdown
+  if (SensorInfo.LatchedLastShutdownStatus) {
+    // LatchedLastShutdownStatus != 0 - Dirty Shutdown
     APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_DIRTY_SHUTDOWN), EVENT_CODE_530, DIAG_STATE_MASK_OK, ppResultStr, pDiagState,
       pDimm->DeviceHandle.AsUint32);
   }
@@ -242,11 +352,14 @@ SmartAndHealthCheck(
   if (SensorInfo.HealthStatus != CONTROLLER_HEALTH_NORMAL) {
     if ((SensorInfo.HealthStatus & HealthStatusFatal) != 0) {
       pActualHealthStr = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_FATAL_FAILURE), NULL);
-    } else if ((SensorInfo.HealthStatus & HealthStatusCritical) != 0) {
+    }
+    else if ((SensorInfo.HealthStatus & HealthStatusCritical) != 0) {
       pActualHealthStr = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CRITICAL_FAILURE), NULL);
-    } else if ((SensorInfo.HealthStatus & HealthStatusNoncritical) != 0) {
+    }
+    else if ((SensorInfo.HealthStatus & HealthStatusNoncritical) != 0) {
       pActualHealthStr = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_NON_CRITICAL_FAILURE), NULL);
-    } else {
+    }
+    else {
       pActualHealthStr = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_UNKNOWN), NULL);
     }
 
@@ -265,13 +378,18 @@ SmartAndHealthCheck(
 
     FREE_POOL_SAFE(pActualHealthStr);
     FREE_POOL_SAFE(pActualHealthReasonStr);
+
+  }
+  else if ((pDimm->NvDimmStateFlags & BIT6) == BIT6) {
+    // If BIT6 is set FW did not map a region to SPA on DIMM
+    APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_ACPI_NVDIMM_SPA_NOT_MAPPED), EVENT_CODE_542, DIAG_STATE_MASK_OK, ppResultStr, pDiagState, pDimmStr);
   }
 
   ReturnCode = GetDimm(&gNvmDimmData->NvmDimmConfig, pDimm->DimmID,
-      DIMM_INFO_CATEGORY_PACKAGE_SPARING |
-      DIMM_INFO_CATEGORY_OPTIONAL_CONFIG_DATA_POLICY |
-      DIMM_INFO_CATEGORY_FW_IMAGE_INFO,
-      &DimmInfo);
+    DIMM_INFO_CATEGORY_PACKAGE_SPARING |
+    DIMM_INFO_CATEGORY_OPTIONAL_CONFIG_DATA_POLICY |
+    DIMM_INFO_CATEGORY_FW_IMAGE_INFO,
+    &DimmInfo);
 
   if (EFI_ERROR(ReturnCode)) {
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
@@ -287,11 +405,11 @@ SmartAndHealthCheck(
 
   //Temperature and capacity checks
   ReturnCode = GetAlarmThresholds(NULL,
-      pDimm->DimmID,
-      SENSOR_TYPE_MEDIA_TEMPERATURE,
-      &MediaTemperatureThreshold,
-      NULL,
-      NULL);
+    pDimm->DimmID,
+    SENSOR_TYPE_MEDIA_TEMPERATURE,
+    &MediaTemperatureThreshold,
+    NULL,
+    NULL);
   if (EFI_ERROR(ReturnCode)) {
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
     NVDIMM_DBG("Failed to get %s alarm threshold DimmID 0x%x", MEDIA_TEMPERATURE_STR, pDimm->DeviceHandle.AsUint32);
@@ -304,11 +422,11 @@ SmartAndHealthCheck(
   }
 
   ReturnCode = GetAlarmThresholds(NULL,
-      pDimm->DimmID,
-      SENSOR_TYPE_CONTROLLER_TEMPERATURE,
-      &ControllerTemperatureThreshold,
-      NULL,
-      NULL);
+    pDimm->DimmID,
+    SENSOR_TYPE_CONTROLLER_TEMPERATURE,
+    &ControllerTemperatureThreshold,
+    NULL,
+    NULL);
   if (EFI_ERROR(ReturnCode)) {
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
     NVDIMM_DBG("Failed to get %s alarm threshold DimmID 0x%x", CONTROLLER_TEMPERATURE_STR, pDimm->DeviceHandle.AsUint32);
@@ -321,11 +439,11 @@ SmartAndHealthCheck(
   }
 
   ReturnCode = GetAlarmThresholds(NULL,
-      pDimm->DimmID,
-      SENSOR_TYPE_PERCENTAGE_REMAINING,
-      &PercentageRemainingThreshold,
-      NULL,
-      NULL);
+    pDimm->DimmID,
+    SENSOR_TYPE_PERCENTAGE_REMAINING,
+    &PercentageRemainingThreshold,
+    NULL,
+    NULL);
   if (EFI_ERROR(ReturnCode)) {
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
     NVDIMM_DBG("Failed to get %s alarm threshold DimmID 0x%x", SPARE_CAPACITY_STR, pDimm->DeviceHandle.AsUint32);
@@ -353,15 +471,9 @@ SmartAndHealthCheck(
     APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_VIRAL_STATE), EVENT_CODE_523, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState, pDimmStr);
   }
 
-  if (pDimm->FwVer.FwApiMajor == 1 && pDimm->FwVer.FwApiMinor <= 3) {
-    FIS_1_3 = TRUE;
-  }
-
   //AIT DRAM disbaled check
-  if (!FIS_1_3) {
-    if (AitDramEnabled == AIT_DRAM_DISABLED) {
-      APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_AIT_DISABLED), EVENT_CODE_535, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState, pDimmStr);
-    }
+  if (AitDramEnabled == AIT_DRAM_DISABLED) {
+    APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_AIT_DISABLED), EVENT_CODE_535, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState, pDimmStr);
   }
 
 Finish:
@@ -393,9 +505,9 @@ BootStatusDiagnosticsCheck(
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   DIMM_BSR Bsr;
-  BOOLEAN FIS_1_4 = FALSE;
+  BOOLEAN FIS_1_14 = FALSE;
   UINT8 DdrtTrainingStatus = DDRT_TRAINING_UNKNOWN;
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
 
   NVDIMM_ENTRY();
 
@@ -418,8 +530,9 @@ BootStatusDiagnosticsCheck(
     goto Finish;
   }
 
-  if (pDimm->FwVer.FwApiMajor == 1 && pDimm->FwVer.FwApiMinor <= 4) {
-    FIS_1_4 = TRUE;
+  /* Check to make sure the FW Version is bigger than 1.14*/
+  if (pDimm->FwVer.FwApiMajor == 1 && pDimm->FwVer.FwApiMinor >= 14) {
+    FIS_1_14 = TRUE;
   }
 
    ReturnCode = pNvmDimmConfigProtocol->GetBSRAndBootStatusBitMask(pNvmDimmConfigProtocol, pDimm->DimmID, &Bsr.AsUint64, NULL);
@@ -453,10 +566,16 @@ BootStatusDiagnosticsCheck(
       APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_BSR_MAILBOX_NOT_READY), EVENT_CODE_539, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
         pDimmStr);
     }
-    if ((FIS_1_4 && (Bsr.Separated_FIS_1_4.DR != DIMM_BSR_AIT_DRAM_READY)) ||
-        (!FIS_1_4 && (Bsr.Separated_Current_FIS.DR != DIMM_BSR_AIT_DRAM_TRAINED_LOADED_READY))) {
+    if (Bsr.Separated_Current_FIS.DR != DIMM_BSR_AIT_DRAM_TRAINED_LOADED_READY) {
       APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_AIT_DRAM_NOT_READY), EVENT_CODE_533, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
         pDimmStr);
+    }
+    if (FIS_1_14) {
+      if ((Bsr.Separated_Current_FIS.DTS == DDRT_TRAINING_NOT_COMPLETE) ||
+        (Bsr.Separated_Current_FIS.DTS == DDRT_TRAINING_FAILURE)) {
+        APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_DDRT_TRAINING_NOT_COMPLETE_FAILED), EVENT_CODE_543, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
+          pDimmStr);
+      }
     }
     if (Bsr.Separated_Current_FIS.MR == DIMM_BSR_MEDIA_NOT_TRAINED) {
       APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_QUICK_BSR_MEDIA_NOT_READY), EVENT_CODE_514, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,

@@ -17,10 +17,14 @@ public:
 
 TEST_F(NvmApi_Tests, GetPmonRegs)
 {
-  device_discovery *p_devices = (device_discovery *)malloc(sizeof(device_discovery));
+  unsigned int dimm_cnt = 0;
   NVM_UINT8 SmartDataMask;
 
-  nvm_get_devices(p_devices, 1);
+  nvm_get_number_of_devices(&dimm_cnt);
+
+  device_discovery *p_devices = (device_discovery *)malloc(sizeof(device_discovery) * dimm_cnt);
+
+  nvm_get_devices(p_devices, dimm_cnt);
   //Valid SmartDataMask 0x0 to 0x3
   for (SmartDataMask = 0; SmartDataMask < 4; SmartDataMask++)
   {
@@ -51,10 +55,13 @@ TEST_F(NvmApi_Tests, GetPmonRegs)
 
 TEST_F(NvmApi_Tests, SetPmonRegs)
 {
-  device_discovery *p_devices = (device_discovery *)malloc(sizeof(device_discovery));
+  unsigned int dimm_cnt = 0;
   NVM_UINT8 PMONGroupEnable;
 
-  nvm_get_devices(p_devices, 1);
+  nvm_get_number_of_devices(&dimm_cnt);
+  device_discovery *p_devices = (device_discovery *)malloc(sizeof(device_discovery) * dimm_cnt);
+
+  nvm_get_devices(p_devices, dimm_cnt);
   //Valid PMON groups from 0xA to 0xF
   for (PMONGroupEnable = 10; PMONGroupEnable < 16; PMONGroupEnable++)
   {
@@ -67,9 +74,12 @@ TEST_F(NvmApi_Tests, SetPmonRegs)
 
 TEST_F(NvmApi_Tests, GetDeviceStatus)
 {
-  device_discovery *p_devices = (device_discovery *)malloc(sizeof(device_discovery));
+  unsigned int dimm_cnt = 0;
 
-  nvm_get_devices(p_devices, 1);
+  nvm_get_number_of_devices(&dimm_cnt);
+  device_discovery *p_devices = (device_discovery *)malloc(sizeof(device_discovery) * dimm_cnt);
+
+  nvm_get_devices(p_devices, dimm_cnt);
   device_status *p_status = (device_status *)malloc(sizeof(device_status));
 
   EXPECT_EQ(nvm_get_device_status(p_devices->uid, p_status), NVM_SUCCESS);
@@ -82,10 +92,12 @@ TEST_F(NvmApi_Tests, GetDeviceStatus)
 TEST_F(NvmApi_Tests, GetDimmIdPassThru)
 {
   struct device_pt_cmd get_dimm_id_pt;
+  unsigned int dimm_cnt = 0;
 
-  device_discovery *p_devices = (device_discovery *)malloc(sizeof(device_discovery));
+  nvm_get_number_of_devices(&dimm_cnt);
+  device_discovery *p_devices = (device_discovery *)malloc(sizeof(device_discovery) * dimm_cnt);
 
-  nvm_get_devices(p_devices, 1);
+  nvm_get_devices(p_devices, dimm_cnt);
   get_dimm_id_pt.opcode = 0x1;
   get_dimm_id_pt.sub_opcode = 0x0;
   get_dimm_id_pt.output_payload_size = 128;
@@ -133,5 +145,36 @@ TEST_F(NvmApi_Tests, VerifyMemTopology)
 TEST_F(NvmApi_Tests, SetPreferences)
 {
   int retval = nvm_set_user_preference("PERFORMANCE_MONITOR_INTERVAL_MINUTES","2");
+}
+
+/*
+ * This should be harmless as unless the passphrase is "secret" it should just return
+ * unsupported or incorrect master passphrase. If the passphrase is "secret" we will
+ * just set it to "secret again.
+ */
+
+TEST_F(NvmApi_Tests, SetMasterPassphrase)
+{
+  unsigned int dimm_cnt = 0;
+
+  char *passphrase = "secret";
+
+  NVM_PASSPHRASE new_passphrase = {0};
+  NVM_PASSPHRASE old_passphrase = {0};
+
+  memcpy(new_passphrase, passphrase, sizeof(passphrase));
+  memcpy(old_passphrase, passphrase, sizeof(passphrase));
+
+  nvm_get_number_of_devices(&dimm_cnt);
+  device_discovery *p_devices = (device_discovery *)malloc(sizeof(device_discovery) * dimm_cnt);
+
+  nvm_get_devices(p_devices, dimm_cnt);
+
+  for (unsigned int i = 0; i < dimm_cnt; i++) {
+    EXPECT_EQ(nvm_set_master_passphrase(p_devices[i].uid, old_passphrase, 32, new_passphrase, 32),
+              NVM_ERR_OPERATION_NOT_SUPPORTED);
+  }
+
+  free(p_devices);
 }
 #endif //NVM_API_TESTS_H

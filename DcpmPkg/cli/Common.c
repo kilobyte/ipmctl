@@ -15,7 +15,8 @@
 #include <Version.h>
 #include <NvmInterface.h>
 #include <NvmTypes.h>
-#include <Show.h>
+#include <Printer.h>
+#include <ReadRunTimePreferences.h>
 #ifdef OS_BUILD
 #include <stdio.h>
 #include <errno.h>
@@ -60,10 +61,51 @@ CONST CHAR16 *mpDefaultDimmIds[DISPLAY_DIMM_ID_MAX_SIZE] = {
 #define WARNING_DIMMS_SKU_MIXED     L"Warning: Mixed SKU detected. Driver functionalities limited.\n"
 
 /**
+  Compare DimmID field in DIMM_INFO Struct
+
+  @param[in] pFirst First item to compare
+  @param[in] pSecond Second item to compare
+
+  @retval -1 if first is less than second
+  @retval  0 if first is equal to second
+  @retval  1 if first is greater than second
+**/
+STATIC
+INT32
+CompareDimmIdInDimmInfo(
+  IN     VOID *pFirst,
+  IN     VOID *pSecond
+)
+{
+  DIMM_INFO *pDimmInfo = NULL;
+  DIMM_INFO *pDimmInfo2 = NULL;
+
+  if (pFirst == NULL || pSecond == NULL) {
+    NVDIMM_DBG("NULL pointer found.");
+    return 0;
+  }
+
+  pDimmInfo = (DIMM_INFO*)pFirst;
+  pDimmInfo2 = (DIMM_INFO*)pSecond;
+
+  if (pDimmInfo->DimmID < pDimmInfo2->DimmID) {
+    return -1;
+  }
+  else if (pDimmInfo->DimmID > pDimmInfo2->DimmID) {
+    return 1;
+  }
+  else {
+    return 0;
+  }
+}
+
+/**
   Retrieve a populated array and count of DIMMs in the system. The caller is
   responsible for freeing the returned array
 
-  @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG_PROTOCOL instance.
+  @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance.
+  @param[in] pCmd A pointer to a COMMAND struct.  Used to obtain the Printer context.
+             printed to stdout, otherwise will be directed to the printer module.
   @param[in] dimmInfoCategories Categories that will be populated in
              the DIMM_INFO struct.
   @param[out] ppDimms A pointer to the dimm list found in NFIT.
@@ -76,7 +118,8 @@ CONST CHAR16 *mpDefaultDimmIds[DISPLAY_DIMM_ID_MAX_SIZE] = {
 **/
 EFI_STATUS
 GetDimmList(
-  IN     EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol,
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
+  IN     struct Command *pCmd,
   IN     DIMM_INFO_CATEGORIES dimmInfoCategories,
   OUT DIMM_INFO **ppDimms,
   OUT UINT32 *pDimmCount
@@ -85,20 +128,20 @@ GetDimmList(
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   NVDIMM_ENTRY();
 
-  if (pNvmDimmConfigProtocol == NULL || ppDimms == NULL || pDimmCount == NULL) {
+  if (pNvmDimmConfigProtocol == NULL || ppDimms == NULL || pDimmCount == NULL || pCmd == NULL) {
+    NVDIMM_CRIT("NULL input parameter.\n");
     ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   ReturnCode = pNvmDimmConfigProtocol->GetDimmCount(pNvmDimmConfigProtocol, pDimmCount);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     NVDIMM_DBG("Failed on GetDimmCount.");
     goto Finish;
   }
 
   if (*pDimmCount == 0) {
-    Print(FORMAT_STR_NL, CLI_INFO_NO_DIMMS);
     ReturnCode = EFI_NOT_FOUND;
     goto Finish;
   }
@@ -107,14 +150,14 @@ GetDimmList(
 
   if (*ppDimms == NULL) {
     ReturnCode = EFI_OUT_OF_RESOURCES;
-    Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
     goto Finish;
   }
 
   /** retrieve the DIMM list **/
   ReturnCode = pNvmDimmConfigProtocol->GetDimms(pNvmDimmConfigProtocol, *pDimmCount, dimmInfoCategories, *ppDimms);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     NVDIMM_DBG("Failed to retrieve the DIMM inventory");
     goto FinishError;
   }
@@ -127,6 +170,111 @@ Finish:
   return ReturnCode;
 }
 
+
+/**
+  Retrieve a populated array and count of all DCPMMs (initialized and uninitialized)
+  in the system. The caller is responsible for freeing the returned array
+
+  @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance.
+  @param[in] pCmd A pointer to a COMMAND struct.  Used to obtain the Printer context.
+             printed to stdout, otherwise will be directed to the printer module.
+  @param[in] dimmInfoCategories Categories that will be populated in
+             the DIMM_INFO struct.
+  @param[out] ppDimms A pointer to a combined DCPMM list (initialized and
+              uninitialized) from NFIT. The initialized DIMM_INFO entries
+              occur first, then the uninitialized DIMM_INFO entries. So
+              0 to pInitializedDimmCount-1 = initialized DCPMMs, and
+              pInitializedDimmCount to pDimmCount - 1 contain the uninitialized DCPMMs
+  @param[out] pDimmCount A pointer to the total number of DCPMMs found in NFIT.
+  @param[out] pInitializedDimmCount A pointer to the number of initialized DCPMMs in ppDimms
+  @param[out] pUninitializedDimmCount A pointer to the number of uninitialized DCPMMs in ppDimms.
+
+  @retval EFI_SUCCESS  the dimm list was returned properly
+  @retval EFI_INVALID_PARAMETER one or more parameters are NULL
+  @retval EFI_OUT_OF_RESOURCES memory allocation failure
+  @retval EFI_NOT_FOUND dimm not found
+**/
+EFI_STATUS
+GetAllDimmList(
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
+  IN     struct Command *pCmd,
+  IN     DIMM_INFO_CATEGORIES dimmInfoCategories,
+  OUT DIMM_INFO **ppDimms,
+  OUT UINT32 *pDimmCount,
+  OUT UINT32 *pInitializedDimmCount,
+  OUT UINT32 *pUninitializedDimmCount
+)
+{
+
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  NVDIMM_ENTRY();
+
+  if (pNvmDimmConfigProtocol == NULL || ppDimms == NULL || pDimmCount == NULL || pCmd == NULL ||
+      pInitializedDimmCount == NULL || pUninitializedDimmCount == NULL) {
+    NVDIMM_CRIT("NULL input parameter.\n");
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetDimmCount(pNvmDimmConfigProtocol, pInitializedDimmCount);
+  if (EFI_ERROR(ReturnCode)) {
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
+    NVDIMM_DBG("Failed on GetDimmCount.");
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetUninitializedDimmCount(pNvmDimmConfigProtocol, pUninitializedDimmCount);
+  if (EFI_ERROR(ReturnCode)) {
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
+    goto Finish;
+  }
+
+
+  if (0 == (*pInitializedDimmCount + *pUninitializedDimmCount)) {
+    ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_INFO_NO_DIMMS);
+    goto Finish;
+  }
+  *pDimmCount = *pInitializedDimmCount + *pUninitializedDimmCount;
+  *ppDimms = AllocateZeroPool(sizeof(**ppDimms) * (*pDimmCount));
+
+  if (*ppDimms == NULL) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
+    goto Finish;
+  }
+
+  /** retrieve the DIMM list **/
+  ReturnCode = pNvmDimmConfigProtocol->GetDimms(pNvmDimmConfigProtocol, *pInitializedDimmCount, dimmInfoCategories, *ppDimms);
+  if (EFI_ERROR(ReturnCode)) {
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
+    NVDIMM_DBG("Failed to retrieve the DIMM inventory");
+    goto FinishError;
+  }
+
+  // Append the uninitialized dimms after the initialized dimms in the dimms array
+  ReturnCode = pNvmDimmConfigProtocol->GetUninitializedDimms(pNvmDimmConfigProtocol, *pUninitializedDimmCount, &((*ppDimms)[*pInitializedDimmCount]));
+
+  if (EFI_ERROR(ReturnCode)) {
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
+    NVDIMM_WARN("Failed to retrieve the DIMM inventory found thru SMBUS");
+    goto FinishError;
+  }
+
+  ReturnCode = BubbleSort((VOID*)*ppDimms, *pDimmCount, sizeof(**ppDimms), CompareDimmIdInDimmInfo);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Dimms list may not be sorted");
+    goto FinishError;
+  }
+
+  goto Finish;
+
+FinishError:
+  FREE_POOL_SAFE(*ppDimms);
+Finish:
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
 /**
   Parse the string and return the array of unsigned integers
 
@@ -219,6 +367,7 @@ Finish:
     Array[1]: 30
     Array[2]: 34
 
+  @param[in] pCmd A pointer to a COMMAND struct.  Used to obtain the Printer context.
   @param[in] pDimmString The dimm target string to parse.
   @param[in] pDimmInfo The dimm list found in NFIT.
   @param[in] DimmCount Size of the pDimmInfo array.
@@ -232,6 +381,7 @@ Finish:
 **/
 EFI_STATUS
 GetDimmIdsFromString(
+  IN     struct Command *pCmd,
   IN     CHAR16 *pDimmString,
   IN     DIMM_INFO *pDimmInfo,
   IN     UINT32 DimmCount,
@@ -250,7 +400,8 @@ GetDimmIdsFromString(
 
   NVDIMM_ENTRY();
 
-  if ((pDimmString == NULL) || (pDimmInfo == NULL) || (ppDimmIds == NULL) || (pDimmIdsCount == NULL)) {
+  if ((pDimmString == NULL) || (pDimmInfo == NULL) || (ppDimmIds == NULL) || (pDimmIdsCount == NULL) || (pCmd == NULL)) {
+    NVDIMM_CRIT("NULL input parameter.\n");
     Rc = EFI_INVALID_PARAMETER;
     goto Finish;
   }
@@ -268,6 +419,7 @@ GetDimmIdsFromString(
   ppDimmIdTokensStr = StrSplit(pDimmString, L',', pDimmIdsCount);
   if (ppDimmIdTokensStr == NULL) {
     Rc = EFI_OUT_OF_RESOURCES;
+    PRINTER_SET_MSG(pCmd->pPrintCtx, Rc, CLI_ERR_OUT_OF_MEMORY);
     goto Finish;
   }
 
@@ -276,15 +428,15 @@ GetDimmIdsFromString(
   pIsDimmIdNumber = AllocateZeroPool(*pDimmIdsCount * sizeof(*pIsDimmIdNumber));
   if ((*ppDimmIds == NULL) || (pParsedDimmIdNumber == NULL) || (pIsDimmIdNumber == NULL)) {
     Rc = EFI_OUT_OF_RESOURCES;
-    Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+    PRINTER_SET_MSG(pCmd->pPrintCtx, Rc, CLI_ERR_OUT_OF_MEMORY);
     goto FinishError;
   }
 
   for (Index = 0; Index < *pDimmIdsCount; Index++) {
     pIsDimmIdNumber[Index] = GetU64FromString(ppDimmIdTokensStr[Index], &DimmIdNumberTmp);
     if ((pIsDimmIdNumber[Index]) && (DimmIdNumberTmp > MAX_UINT32)) {
-      Print(L"\nDimmID size cannot exceed 32 bits. Invalid DimmID: " FORMAT_STR_NL, ppDimmIdTokensStr[Index]);
       Rc = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pCmd->pPrintCtx, Rc, L"DimmID size cannot exceed 32 bits. Invalid DimmID: " FORMAT_STR_NL, ppDimmIdTokensStr[Index]);
       goto FinishError;
     }
 
@@ -302,11 +454,10 @@ GetDimmIdsFromString(
       if ((!pIsDimmIdNumber[Index] && StrICmp(ppDimmIdTokensStr[Index], pDimmInfo[Index2].DimmUid) == 0) ||
         (pIsDimmIdNumber[Index] && pDimmInfo[Index2].DimmHandle == pParsedDimmIdNumber[Index]))
       {
-        // Note: For uninitialized dimms, the DimmID is always 0x0
-        // It can cause havok later on if you care about those dimms
-        // We should switch to using DimmHandle at some point, as we
-        // don't accept DimmID as a command line dimm specifier!
-        // (we only accept positional handle and uid)
+        // This DimmID is unique for all dimms on the platform regardless of
+        // state and is assigned by UEFI FW. We use it for all our APIs.
+        // Handle seems to be a better identifier since it corresponds to the
+        // position on the board, but this is good enough and cheap to look up.
         (*ppDimmIds)[Index] = pDimmInfo[Index2].DimmID;
         DimmIdFound = TRUE;
         break;
@@ -315,7 +466,7 @@ GetDimmIdsFromString(
 
     if (!DimmIdFound) {
       Rc = EFI_NOT_FOUND;
-      Print(L"\nDIMM not found. Invalid DimmID: " FORMAT_STR_NL, ppDimmIdTokensStr[Index]);
+      PRINTER_SET_MSG(pCmd->pPrintCtx, Rc, L"DIMM not found. Invalid DimmID: " FORMAT_STR_NL, ppDimmIdTokensStr[Index]);
       goto FinishError;
     }
   }
@@ -327,7 +478,7 @@ GetDimmIdsFromString(
     for (Index2 = (Index + 1); Index2 < *pDimmIdsCount; Index2++) {
       if ((*ppDimmIds)[Index] == (*ppDimmIds)[Index2]) {
         Rc = EFI_INVALID_PARAMETER;
-        Print(L"\nDuplicated DimmID: " FORMAT_STR_NL, ppDimmIdTokensStr[Index2]);
+        PRINTER_SET_MSG(pCmd->pPrintCtx, Rc, L"Duplicated DimmID: " FORMAT_STR_NL, ppDimmIdTokensStr[Index2]);
         goto FinishError;
       }
     }
@@ -380,6 +531,7 @@ GetDimmUidFromString(
   NVDIMM_ENTRY();
 
   if ((pDimmString == NULL) || (pDimmInfo == NULL) || (pDimmUid == NULL)) {
+    NVDIMM_CRIT("NULL input parameter.\n");
     Rc = EFI_INVALID_PARAMETER;
     goto Finish;
   }
@@ -394,7 +546,7 @@ GetDimmUidFromString(
 
   IsDimmIdNumber = GetU64FromString(pDimmString, &DimmIdNumberTmp);
   if ((IsDimmIdNumber) && (DimmIdNumberTmp > MAX_UINT32)) {
-    Print(L"\nDimmID size cannot exceed 32 bits. Invalid DimmID: " FORMAT_STR_NL, pDimmString);
+    NVDIMM_DBG("DimmID size cannot exceed 32 bits.");
     Rc = EFI_INVALID_PARAMETER;
     goto Finish;
   }
@@ -418,7 +570,7 @@ GetDimmUidFromString(
 
   if (!DimmIdFound) {
     Rc = EFI_NOT_FOUND;
-    Print(L"\nDIMM not found. Invalid DimmID: " FORMAT_STR_NL, pDimmString);
+    NVDIMM_DBG("DIMM not found.");
   }
 
 Finish:
@@ -507,6 +659,7 @@ Finish:
 /**
   Gets number of Manageable Dimms and their IDs
 
+  @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance.
   @param[out] DimmIdsCount  is the pointer to variable, where number of dimms will be stored.
   @param[out] ppDimmIds is the pointer to variable, where IDs of dimms will be stored.
 
@@ -517,11 +670,11 @@ Finish:
 **/
 EFI_STATUS
 GetManageableDimmsNumberAndId(
+  IN  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
   OUT UINT32 *pDimmIdsCount,
   OUT UINT16 **ppDimmIds
 )
 {
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   DIMM_INFO *pDimms = NULL;
   UINT16 Index = 0;
@@ -529,21 +682,15 @@ GetManageableDimmsNumberAndId(
 
   NVDIMM_ENTRY();
 
-  if (pDimmIdsCount == NULL || ppDimmIds == NULL) {
+  if (pDimmIdsCount == NULL || ppDimmIds == NULL || pNvmDimmConfigProtocol == NULL) {
+    NVDIMM_CRIT("NULL input parameter.\n");
     ReturnCode = EFI_INVALID_PARAMETER;
-    goto Finish;
-  }
-
-  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
-  if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
-    ReturnCode = EFI_NOT_FOUND;
     goto Finish;
   }
 
   ReturnCode = pNvmDimmConfigProtocol->GetDimmCount(pNvmDimmConfigProtocol, pDimmIdsCount);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
+      NVDIMM_ERR("Error: Communication with the device driver failed.");
     goto Finish;
   }
 
@@ -551,14 +698,13 @@ GetManageableDimmsNumberAndId(
   *ppDimmIds = AllocateZeroPool(sizeof(**ppDimmIds) * (*pDimmIdsCount));
   if (pDimms == NULL || *ppDimmIds == NULL) {
     ReturnCode = EFI_OUT_OF_RESOURCES;
-    Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+    NVDIMM_ERR("Error: Out of memory\n");
     goto Finish;
   }
 
   ReturnCode = pNvmDimmConfigProtocol->GetDimms(pNvmDimmConfigProtocol, *pDimmIdsCount, DIMM_INFO_CATEGORY_NONE, pDimms);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
-    NVDIMM_DBG("Failed to retrieve the DIMM inventory found in NFIT");
+    NVDIMM_ERR("Failed to retrieve the DIMM inventory found in NFIT");
     goto Finish;
   }
 
@@ -620,7 +766,6 @@ CheckDisplayList(
 
   ppSplitDisplayValues = StrSplit(pDisplayValues, L',', &SplitDisplayValuesSize);
   if (ppSplitDisplayValues == NULL) {
-    Print(L"Error: Out of memory.\n");
     ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
@@ -660,14 +805,14 @@ Finish:
     strings considered as the valid values for the -d|-display option.
   @param[in] AllowedDisplayValuesCount is a UINT32 value that represents
     the number of elements in the array pointed by ppAllowedDisplayValues.
-  @param[out] pAllOptionSet is a pointer to a BOOLEAN value that will
+  @param[out] pDispOptions contains the following.
+    A BOOLEAN value that will
     represent the presence of the -a|-all option in the Command pointed
     by pCommand.
-  @param[out] pDisplayOptionSet is a pointer to a BOOLEAN value that will
+    A BOOLEAN value that will
     represent the presence of the -d|-display option in the Command pointed
     by pCommand.
-  @param[out] ppDisplayOptionValue is a pointer to an Unicode string
-    pointer. If the -d|-display option is present, this pointer will
+    A pointer to an Unicode string. If the -d|-display option is present, this pointer will
     be set to the option value Unicode string.
 
   @retval EFI_SUCCESS the check went fine, there were no errors
@@ -681,9 +826,7 @@ CheckAllAndDisplayOptions(
   IN     struct Command *pCommand,
   IN     CHAR16 **ppAllowedDisplayValues,
   IN     UINT32 AllowedDisplayValuesCount,
-  OUT BOOLEAN *pAllOptionSet,
-  OUT BOOLEAN *pDisplayOptionSet,
-  OUT CHAR16 **ppDisplayOptionValue
+  OUT CMD_DISPLAY_OPTIONS *pDispOptions
 )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
@@ -691,43 +834,53 @@ CheckAllAndDisplayOptions(
 
   NVDIMM_ENTRY();
 
-  if (pAllOptionSet == NULL || ppAllowedDisplayValues == NULL || pCommand == NULL
-    || pDisplayOptionSet == NULL || ppDisplayOptionValue == NULL) {
+  if (pDispOptions == NULL || ppAllowedDisplayValues == NULL || pCommand == NULL
+    || pCommand == NULL) {
+    NVDIMM_CRIT("NULL input parameter.\n");
     ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   /** if the all option was specified **/
   if (containsOption(pCommand, ALL_OPTION) || containsOption(pCommand, ALL_OPTION_SHORT)) {
-    *pAllOptionSet = TRUE;
+    pDispOptions->AllOptionSet = TRUE;
   }
   /** if the display option was specified **/
   pDisplayValues = getOptionValue(pCommand, DISPLAY_OPTION);
   if (pDisplayValues) {
-    *pDisplayOptionSet = TRUE;
+    pDispOptions->DisplayOptionSet = TRUE;
   }
   else {
     pDisplayValues = getOptionValue(pCommand, DISPLAY_OPTION_SHORT);
     if (pDisplayValues) {
-      *pDisplayOptionSet = TRUE;
+      pDispOptions->DisplayOptionSet = TRUE;
     }
   }
 
-  *ppDisplayOptionValue = pDisplayValues;
-
+  pDispOptions->pDisplayValues = pDisplayValues;
   /** make sure they didn't specify both the all and display options **/
-  if (*pAllOptionSet && *pDisplayOptionSet) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPTIONS_ALL_DISPLAY_USED_TOGETHER);
+  if (pDispOptions->AllOptionSet && pDispOptions->DisplayOptionSet) {
     ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pCommand->pPrintCtx, ReturnCode, CLI_ERR_OPTIONS_ALL_DISPLAY_USED_TOGETHER);
     goto Finish;
   }
 
   /** Check that the display parameters are correct (if display option is set) **/
-  if (*pDisplayOptionSet) {
+  if (pDispOptions->DisplayOptionSet) {
     ReturnCode = CheckDisplayList(pDisplayValues, ppAllowedDisplayValues,
       (UINT16)AllowedDisplayValuesCount);
     if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_OPTION_DISPLAY);
+      PRINTER_SET_MSG(pCommand->pPrintCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_OPTION_DISPLAY);
+    }
+  }
+
+  /** Set the text output type (table vs. list view) **/
+  if(pCommand->pPrintCtx && pCommand->PrinterCtrlSupported == TRUE) {
+    if (!(pDispOptions->AllOptionSet) && !(pDispOptions->DisplayOptionSet)) {
+      PRINTER_ENABLE_TEXT_TABLE_FORMAT(pCommand->pPrintCtx);
+    }
+    else {
+      PRINTER_ENABLE_LIST_TABLE_FORMAT(pCommand->pPrintCtx);
     }
   }
 
@@ -736,34 +889,6 @@ Finish:
   return ReturnCode;
 }
 
-/**
-  Checks if the DIMMs Sku is mixed.
-  If it is - displays a message to notify the user.
-  Also if there was an error while getting the
-  DIMMs status a proper message is printed.
-**/
-VOID
-WarnUserIfSkuIsMixed(
-)
-{
-  BOOLEAN SkuMixed = FALSE;
-  EFI_STATUS ReturnCode = EFI_SUCCESS;
-
-  NVDIMM_ENTRY();
-
-  ReturnCode = IsSkuMixed(&SkuMixed);
-
-  if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, ERROR_CHECKING_MIXED_SKU);
-  }
-  else {
-    if (SkuMixed) {
-      Print(FORMAT_STR_NL, WARNING_DIMMS_SKU_MIXED);
-    }
-  }
-
-  NVDIMM_EXIT();
-}
 
 /**
   Display command status with specified command message.
@@ -812,47 +937,6 @@ Finish:
   FREE_POOL_SAFE(pOutputBuffer);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
-}
-
-/**
-  Print namespace operation status
-
-  @param[in] pCommandStatus - Command status
-  @param[in] pStatusOperation - Type of operation
-  @param[in] pStatusFailure - Failure text
-  @param[in] NamespaceGuid - Namespace ID
-
-  @retval EFI_INVALID_PARAMETER if pCommandStatus is NULL
-  @retval EFI_SUCCESS
-**/
-EFI_STATUS
-DisplayNamespaceOperationStatus(
-  IN     COMMAND_STATUS *pCommandStatus,
-  IN     CONST CHAR16 *pStatusOperation,
-  IN     CONST CHAR16 *pStatusFailure,
-  IN     UINT16 NamespaceId
-)
-{
-  CHAR16 *pSingleStatusCodeMessage = NULL;
-
-  NVDIMM_ENTRY();
-
-  if (pCommandStatus == NULL) {
-    return EFI_INVALID_PARAMETER;
-  }
-
-  if (!NVM_ERROR(pCommandStatus->GeneralStatus)) {
-    Print(FORMAT_STR_SPACE L"namespace (0x%04x): Success\n", pStatusOperation, NamespaceId);
-  }
-  else {
-    pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(gNvmDimmCliHiiHandle, pCommandStatus->GeneralStatus);
-    Print(FORMAT_STR_SPACE L"namespace (0x%04x): " FORMAT_STR L" (%d) (" FORMAT_STR L")\n", pStatusOperation, NamespaceId, pStatusFailure,
-      pCommandStatus->GeneralStatus, pSingleStatusCodeMessage);
-    FREE_POOL_SAFE(pSingleStatusCodeMessage);
-  }
-
-  NVDIMM_EXIT();
-  return EFI_SUCCESS;
 }
 
 /**
@@ -959,7 +1043,6 @@ GetDeviceAndFilePath(
   NVDIMM_ENTRY();
 
   if (pUserFilePath == NULL || pOutFilePath == NULL || ppDevicePath == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
     goto Finish;
   }
 #ifdef OS_BUILD
@@ -968,7 +1051,6 @@ GetDeviceAndFilePath(
 #endif
   pTmpWorkingDir = AllocateZeroPool(OPTION_VALUE_LEN * sizeof(*pTmpWorkingDir));
   if (pTmpWorkingDir == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
     ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
@@ -981,7 +1063,6 @@ GetDeviceAndFilePath(
     pCurDirPath = CatSPrint(NULL, pUserFilePath);
   }
   if (pCurDirPath == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
     ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
@@ -1015,7 +1096,6 @@ GetDeviceAndFilePath(
       goto Finish;
     }
     if (StrLen(pCurDir) + 1 > OPTION_VALUE_LEN) {
-      Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
       ReturnCode = EFI_OUT_OF_RESOURCES;
       goto Finish;
     }
@@ -1037,8 +1117,8 @@ GetDeviceAndFilePath(
   // Get Path to Device
   pDevPathInternal = pEfiShell->GetDevicePathFromFilePath(pTmpWorkingDir);
   if (pDevPathInternal == NULL) {
-    ReturnCode = EFI_INVALID_PARAMETER;
-    Print(FORMAT_STR_NL, CLI_ERR_WRONG_FILE_PATH);
+    ReturnCode = EFI_NOT_FOUND;
+    NVDIMM_ERR("Error: Wrong file path.");
     goto Finish;
   }
 
@@ -1128,7 +1208,8 @@ MatchCliReturnCode(
   case NVM_ERR_SOCKET_ID_DUPLICATED:
   case NVM_ERR_UNABLE_TO_GET_SECURITY_STATE:
   case NVM_ERR_INCONSISTENT_SECURITY_STATE:
-  case NVM_ERR_SECURITY_COUNT_EXPIRED:
+  case NVM_ERR_SECURITY_USER_PP_COUNT_EXPIRED:
+  case NVM_ERR_SECURITY_MASTER_PP_COUNT_EXPIRED:
   case NVM_ERR_REGION_GOAL_CONF_AFFECTS_UNSPEC_DIMM:
   case NVM_ERR_REGION_CURR_CONF_AFFECTS_UNSPEC_DIMM:
   case NVM_ERR_REGION_GOAL_CURR_CONF_AFFECTS_UNSPEC_DIMM:
@@ -1154,14 +1235,22 @@ MatchCliReturnCode(
   case NVM_ERR_REGION_GOAL_NAMESPACE_EXISTS:
   case NVM_ERR_REGION_REMAINING_SIZE_NOT_IN_LAST_PROPERTY:
   case NVM_ERR_ARS_IN_PROGRESS:
+  case NVM_ERR_FWUPDATE_IN_PROGRESS:
+  case NVM_ERR_OVERWRITE_DIMM_IN_PROGRESS:
+  case NVM_ERR_UNKNOWN_LONG_OP_IN_PROGRESS:
   case NVM_ERR_APPDIRECT_IN_SYSTEM:
   case NVM_ERR_OPERATION_NOT_SUPPORTED_BY_MIXED_SKU:
   case NVM_ERR_SECURE_ERASE_NAMESPACE_EXISTS:
+  case NVM_ERR_CREATE_NAMESPACE_NOT_ALLOWED:
     ReturnCode = EFI_ABORTED;
     break;
 
   case NVM_ERR_OPERATION_NOT_SUPPORTED:
     ReturnCode = EFI_UNSUPPORTED;
+    break;
+
+  case NVM_ERR_FIRMWARE_ALREADY_LOADED:
+    ReturnCode = EFI_ALREADY_STARTED;
     break;
 
   default:
@@ -1227,10 +1316,8 @@ FileExists(
   OUT BOOLEAN* pExists
 )
 {
-  EFI_DEVICE_PATH_PROTOCOL *pDevicePathProtocol = NULL;
-  EFI_FILE_HANDLE pFileHandle = NULL;
-  CHAR16 *pDumpFilePath = NULL;
 
+  EFI_FILE_HANDLE pFileHandle = NULL;
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   *pExists = FALSE;
 
@@ -1239,14 +1326,22 @@ FileExists(
 #ifdef OS_BUILD
   pFileHandle = NULL;
   ReturnCode = OpenFile(pDumpUserPath, &pFileHandle, NULL, FALSE);
-  *pExists = ReturnCode != EFI_NOT_FOUND;
-  ReturnCode = EFI_SUCCESS;
-  goto Finish;
+  if (EFI_NOT_FOUND == ReturnCode)
+  {
+    *pExists = FALSE;
+    ReturnCode = EFI_SUCCESS;
+  }
+  else if (EFI_SUCCESS == ReturnCode)
+  {
+    *pExists = TRUE;
+    pFileHandle->Close(pFileHandle);
+  }
 #else
+  EFI_DEVICE_PATH_PROTOCOL *pDevicePathProtocol = NULL;
+  CHAR16 *pDumpFilePath = NULL;
 
   pDumpFilePath = AllocateZeroPool(OPTION_VALUE_LEN * sizeof(*pDumpFilePath));
   if (pDumpFilePath == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
     ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
@@ -1262,9 +1357,11 @@ FileExists(
     *pExists = TRUE;
     pFileHandle->Close(pFileHandle);
   }
-#endif
+
 Finish:
   FREE_POOL_SAFE(pDumpFilePath);
+#endif
+
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
@@ -1291,7 +1388,6 @@ DeleteFile(
 
   pDumpFilePath = AllocateZeroPool(OPTION_VALUE_LEN * sizeof(*pDumpFilePath));
   if (pDumpFilePath == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
     ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
@@ -1358,7 +1454,7 @@ DumpToFile(
     FreePool(path);
     return EFI_INVALID_PARAMETER;
   }
-  size_t bytes_written = fwrite(pBuffer, 1, BufferSize, destFile);
+  size_t bytes_written = fwrite(pBuffer, 1, (size_t)BufferSize, destFile);
   if (bytes_written != BufferSize) {
     NVDIMM_WARN("Failed to write file (%s) errno: (%d)", path, errno);
     ReturnCode = EFI_INVALID_PARAMETER;
@@ -1384,7 +1480,7 @@ DumpToFile(
 
   pDumpFilePath = AllocateZeroPool(OPTION_VALUE_LEN * sizeof(*pDumpFilePath));
   if (pDumpFilePath == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+    NVDIMM_CRIT("Out of memory\n");
     ReturnCode = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
@@ -1468,8 +1564,9 @@ Finish:
   @param[in] PrintRecommended if TRUE Recommended settings will be printed
              if FALSE Supported settings will be printed
   @param[in] Mode Set mode to print different format
+  @retval String representing AppDirect settings.  Null on error.
 **/
-VOID
+CHAR16*
 PrintAppDirectSettings(
   IN    INTERLEAVE_FORMAT *pFormatList,
   IN    UINT16 FormatNum,
@@ -1484,18 +1581,11 @@ PrintAppDirectSettings(
   UINT32 ImcStringIndex = 0;
   UINT32 ChannelStringIndex = 0;
   BOOLEAN First = TRUE;
+  CHAR16 *pTempBuffer = NULL;
 
   if (pFormatList == NULL) {
-    return;
-  }
-
-  if (Mode == PRINT_SETTINGS_FORMAT_FOR_SHOW_SYS_CAP_CMD) {
-    if (PrintRecommended) {
-      Print(L"RecommendedAppDirectSettings=");
-    }
-    else {
-      Print(L"SupportedAppDirectSettings=");
-    }
+    NVDIMM_CRIT("NULL input parameter.\n");
+    return NULL;
   }
 
   for (Index = 0; Index < FormatNum; Index++) {
@@ -1595,7 +1685,7 @@ PrintAppDirectSettings(
       }
 
       if (!First) {
-        Print(L", ");
+        pTempBuffer = CatSPrintClean(pTempBuffer, L", ");
       }
       else {
         First = FALSE;
@@ -1603,30 +1693,31 @@ PrintAppDirectSettings(
 
       if (Mode == PRINT_SETTINGS_FORMAT_FOR_SHOW_SYS_CAP_CMD) {
         if (InterleaveWay == INTERLEAVE_SET_1_WAY) {
-          Print(L"x1 (ByOne)");
+          pTempBuffer = CatSPrintClean(pTempBuffer, L"x1 (ByOne)");
         }
         else {
-          Print(L"x%d - " FORMAT_STR L" iMC x " FORMAT_STR L" Channel (", WayNumber, mpImcSize[ImcStringIndex], mpChannelSize[ChannelStringIndex]);
-          Print(FORMAT_STR L"_" FORMAT_STR L")", mpImcSize[ImcStringIndex], mpChannelSize[ChannelStringIndex]);
+          pTempBuffer = CatSPrintClean(pTempBuffer, L"x%d - " FORMAT_STR L" iMC x " FORMAT_STR L" Channel (", WayNumber, mpImcSize[ImcStringIndex], mpChannelSize[ChannelStringIndex]);
+          pTempBuffer = CatSPrintClean(pTempBuffer, FORMAT_STR L"_" FORMAT_STR L")", mpImcSize[ImcStringIndex], mpChannelSize[ChannelStringIndex]);
         }
       }
       else if (Mode == PRINT_SETTINGS_FORMAT_FOR_SHOW_REGION_CMD) {
         if (InterleaveWay == INTERLEAVE_SET_1_WAY) {
-          Print(L"x1 (ByOne)");
+          pTempBuffer = CatSPrintClean(pTempBuffer, L"x1 (ByOne)");
         }
         else {
-          Print(L"x%d - " FORMAT_STR L" iMC x " FORMAT_STR L" Channel (" FORMAT_STR L"_" FORMAT_STR L")", WayNumber, mpImcSize[ImcStringIndex],
+          pTempBuffer = CatSPrintClean(pTempBuffer, L"x%d - " FORMAT_STR L" iMC x " FORMAT_STR L" Channel (" FORMAT_STR L"_" FORMAT_STR L")", WayNumber, mpImcSize[ImcStringIndex],
             mpChannelSize[ChannelStringIndex], mpImcSize[ImcStringIndex], mpChannelSize[ChannelStringIndex]);
         }
       }
     }
   }
-  Print(L"\n");
+  return pTempBuffer;
 }
 
 /**
   Read source file and return current passphrase to unlock device.
 
+  @param[in] pCmd A pointer to a COMMAND struct.  Used to obtain the Printer context.
   @param[in] pFileHandle File handler to read Passphrase from
   @param[in] pDevicePath - handle to obtain generic path/location information concerning the
                           physical device or logical device. The device path describes the location of the device
@@ -1641,6 +1732,7 @@ PrintAppDirectSettings(
 **/
 EFI_STATUS
 ParseSourcePassFile(
+  IN     struct Command *pCmd,
   IN     CHAR16 *pFilePath,
   IN     EFI_DEVICE_PATH_PROTOCOL *pDevicePath,
   OUT CHAR16 **ppCurrentPassphrase OPTIONAL,
@@ -1663,24 +1755,22 @@ ParseSourcePassFile(
 
   NVDIMM_ENTRY();
 #ifndef OS_BUILD
-  if (pDevicePath == NULL) {
+  if (pDevicePath == NULL || pCmd == NULL) {
+    NVDIMM_CRIT("NULL input parameter.\n");
     ReturnCode = EFI_INVALID_PARAMETER;
-    NVDIMM_DBG("Invalid Pointer");
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
     goto Finish;
   }
 #endif
-  if (pFilePath == NULL) {
+  if (pFilePath == NULL || pCmd == NULL) {
+    NVDIMM_CRIT("NULL input parameter.\n");
     ReturnCode = EFI_INVALID_PARAMETER;
-    NVDIMM_DBG("Invalid Pointer");
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
     goto Finish;
   }
 
-  ReturnCode = ReadFile(pFilePath, pDevicePath, MAX_CONFIG_DUMP_FILE_SIZE, &FileBufferSize, (VOID **)&pFileBuffer);
+  ReturnCode = FileRead(pFilePath, pDevicePath, MAX_CONFIG_DUMP_FILE_SIZE, &FileBufferSize, (VOID **)&pFileBuffer);
   if (EFI_ERROR(ReturnCode) || pFileBuffer == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_WRONG_FILE_PATH);
     ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_WRONG_FILE_PATH);
     goto Finish;
   }
 
@@ -1688,9 +1778,9 @@ ParseSourcePassFile(
   //If it is not a Unicode File Convert the File String
   if (*((CHAR16 *)pFileBuffer) != UTF_16_BOM) {
     pFileString = AllocateZeroPool((FileBufferSize * sizeof(CHAR16)) + sizeof(L'\0'));
-    if (pFileString == NULL) {
-      Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+    if (pFileString == NULL) {      
       ReturnCode = EFI_OUT_OF_RESOURCES;
+      PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
       goto Finish;
     }
     ReturnCode = SafeAsciiStrToUnicodeStr((const CHAR8 *)pFileBuffer, (UINT32)FileBufferSize, pFileString);
@@ -1702,8 +1792,8 @@ ParseSourcePassFile(
     // ReallocatePool frees pFileBuffer after completion. Do not need to call FREE_POOL_SAFE for pFileBuffer
     pFileString = ReallocatePool(FileBufferSize, FileBufferSize + sizeof(L'\0'), pFileBuffer);
     if (pFileString == NULL) {
-      Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
       ReturnCode = EFI_OUT_OF_RESOURCES;
+      PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
       goto Finish;
     }
     Index = 1;
@@ -1714,8 +1804,8 @@ ParseSourcePassFile(
   // Split input file to lines
   ppLinesBuffer = StrSplit(&pFileString[Index], L'\n', &NumberOfLines);
   if (ppLinesBuffer == NULL || NumberOfLines == 0) {
-    Print(L"Error: The file is empty.\n");
     ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, L"Error: The file is empty.\n");
     goto Finish;
   }
 
@@ -1726,8 +1816,8 @@ ParseSourcePassFile(
     }
     pPassFromFile = (CHAR16*)StrStr(ppLinesBuffer[Index], L"=");
     if (pPassFromFile == NULL) {
-      Print(FORMAT_STR_NL, CLI_ERR_INVALID_PASSPHRASE_FROM_FILE);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INVALID_PASSPHRASE_FROM_FILE);
       goto Finish;
     }
 
@@ -1735,8 +1825,8 @@ ParseSourcePassFile(
     pPassFromFile++;
     StringLength = StrLen(pPassFromFile);
     if (StringLength == 0) {
-      Print(FORMAT_STR_NL, CLI_ERR_INVALID_PASSPHRASE_FROM_FILE);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INVALID_PASSPHRASE_FROM_FILE);
       goto Finish;
     }
 
@@ -1744,8 +1834,8 @@ ParseSourcePassFile(
     if (pPassFromFile[StringLength - 1] == L'\r') {
       StringLength--;
       if (StringLength == 0) {
-        Print(FORMAT_STR_NL, CLI_ERR_INVALID_PASSPHRASE_FROM_FILE);
         ReturnCode = EFI_INVALID_PARAMETER;
+        PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INVALID_PASSPHRASE_FROM_FILE);
         goto Finish;
       }
       pPassFromFile[StringLength] = L'\0';
@@ -1763,8 +1853,8 @@ ParseSourcePassFile(
       *ppCurrentPassphrase = CatSPrint(NULL, FORMAT_STR, pPassFromFile);
     }
     else {
-      Print(FORMAT_STR_NL, CLI_ERR_WRONG_FILE_DATA);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_WRONG_FILE_DATA);
       goto Finish;
     }
   }
@@ -1981,7 +2071,7 @@ IsSkuMixed(
   UINT32 DimmCount = 0;
   UINT32 Index = 0;
   DIMM_INFO *pDimmsInformation = NULL;
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   DIMM_INFO *pFirstManageableDimmInfo = NULL;
 
   NVDIMM_ENTRY();
@@ -2069,12 +2159,6 @@ PrintProgress(
   }
 
   pCommandStatus = (COMMAND_STATUS*)pContext;
-  BOOLEAN
-    EFIAPI
-    IsListEmpty(
-      IN      CONST LIST_ENTRY          *ListHead
-    );
-
   if (!IsListInitialized(pCommandStatus->ObjectStatusList) && !IsListEmpty(&pCommandStatus->ObjectStatusList)) {
     goto Finish;
   }
@@ -2159,6 +2243,7 @@ AllDimmsInListAreManageable(
   BOOLEAN Manageable = TRUE;
   UINT32 AllDimmListIndex = 0;
   UINT32 DimmsToCheckIndex = 0;
+  NVDIMM_ENTRY();
 
   for (DimmsToCheckIndex = 0; DimmsToCheckIndex < DimmsToCheckCount; DimmsToCheckIndex++) {
     for (AllDimmListIndex = 0; AllDimmListIndex < AllDimmCount; AllDimmListIndex++) {
@@ -2176,75 +2261,6 @@ AllDimmsInListAreManageable(
 }
 
 /**
-  Retrieve the User Cli Display Preferences from RunTime Services.
-
-  @param[out] pDisplayPreferences pointer to the current driver preferences.
-
-  @retval EFI_INVALID_PARAMETER One or more parameters are invalid
-  @retval EFI_SUCCESS All ok
-**/
-EFI_STATUS
-ReadRunTimeCliDisplayPreferences(
-  IN  OUT DISPLAY_PREFERENCES *pDisplayPreferences
-)
-{
-  EFI_STATUS ReturnCode = EFI_SUCCESS;
-  UINTN VariableSize = 0;
-  NVDIMM_ENTRY();
-
-  if (pDisplayPreferences == NULL) {
-    NVDIMM_DBG("One or more parameters are NULL");
-    ReturnCode = EFI_INVALID_PARAMETER;
-    goto Finish;
-  }
-
-  ZeroMem(pDisplayPreferences, sizeof(*pDisplayPreferences));
-
-  VariableSize = sizeof(pDisplayPreferences->DimmIdentifier);
-  ReturnCode = GET_VARIABLE(
-    DISPLAY_DIMM_ID_VARIABLE_NAME,
-    gNvmDimmCliVariableGuid,
-    &VariableSize,
-    &pDisplayPreferences->DimmIdentifier);
-
-  if (ReturnCode == EFI_NOT_FOUND) {
-    pDisplayPreferences->DimmIdentifier = DISPLAY_DIMM_ID_DEFAULT;
-    ReturnCode = EFI_SUCCESS;
-  }
-  else if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("Failed to retrieve DimmID Display Variable");
-    goto Finish;
-  }
-
-  VariableSize = sizeof(pDisplayPreferences->SizeUnit);
-  ReturnCode = GET_VARIABLE(
-    DISPLAY_SIZE_VARIABLE_NAME,
-    gNvmDimmCliVariableGuid,
-    &VariableSize,
-    &pDisplayPreferences->SizeUnit);
-
-  if (ReturnCode == EFI_NOT_FOUND) {
-    pDisplayPreferences->SizeUnit = FixedPcdGet32(PcdDcpmmCliDefaultCapacityUnit);
-    ReturnCode = EFI_SUCCESS;
-  }
-  else if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("Failed to retrieve Size Display Variable");
-    goto Finish;
-  }
-
-  if (pDisplayPreferences->SizeUnit >= DISPLAY_SIZE_MAX_SIZE ||
-    pDisplayPreferences->DimmIdentifier >= DISPLAY_DIMM_ID_MAX_SIZE) {
-    NVDIMM_DBG("Parameters retrieved from RT services are invalid, setting defaults");
-    pDisplayPreferences->SizeUnit = FixedPcdGet32(PcdDcpmmCliDefaultCapacityUnit);
-    pDisplayPreferences->DimmIdentifier = DISPLAY_DIMM_ID_DEFAULT;
-    goto Finish;
-  }
-Finish:
-  NVDIMM_EXIT_I64(ReturnCode);
-  return ReturnCode;
-}
-
-/**
 Retrieve the User Cli Display Preferences CMD line arguements.
 
 @param[out] pDisplayPreferences pointer to the current driver preferences.
@@ -2253,8 +2269,8 @@ Retrieve the User Cli Display Preferences CMD line arguements.
 @retval EFI_SUCCESS All ok
 **/
 EFI_STATUS
-ReadCmdLineShowOptions(
-  IN OUT SHOW_FORMAT_TYPE *pFormatType,
+ReadCmdLinePrintOptions(
+  IN OUT PRINT_FORMAT_TYPE *pFormatType,
   IN struct Command *pCmd
 )
 {
@@ -2271,7 +2287,7 @@ ReadCmdLineShowOptions(
   if (NULL == (OutputOptions = getOptionValue(pCmd, OUTPUT_OPTION_SHORT))) {
     if (NULL == (OutputOptions = getOptionValue(pCmd, OUTPUT_OPTION))) {
       *pFormatType = TEXT;
-      SET_FORMAT_LIST_FLAG(pCmd->pShowCtx);
+      PRINTER_ENABLE_LIST_TABLE_FORMAT(pCmd->pPrintCtx);
       return ReturnCode;
     }
   }
@@ -2280,22 +2296,20 @@ ReadCmdLineShowOptions(
 
   if (NULL != (Toks = StrSplit(OutputOptions, L',', &NumToks))) {
     for (Index = 0; Index < NumToks; ++Index) {
-      if (0 == StrICmp(Toks[Index], OUTPUT_OPTION_VERBOSE)) {
-        SET_FORMAT_VERBOSE_FLAG(pCmd->pShowCtx);
-      }
-      else if (0 == StrICmp(Toks[Index], OUTPUT_OPTION_TEXT)) {
+      if (0 == StrICmp(Toks[Index], OUTPUT_OPTION_TEXT)) {
         *pFormatType = TEXT;
+        PRINTER_ENABLE_LIST_TABLE_FORMAT(pCmd->pPrintCtx); // default for TEXT
       }
       else if (0 == StrICmp(Toks[Index], OUTPUT_OPTION_NVMXML)) {
         *pFormatType = XML;
       }
       else if (0 == StrICmp(Toks[Index], OUTPUT_OPTION_ESX_XML)) {
         *pFormatType = XML;
-        SET_FORMAT_ESX_KV_FLAG(pCmd->pShowCtx);
+        PRINTER_ENABLE_ESX_XML_FORMAT(pCmd->pPrintCtx);
       }
       else if (0 == StrICmp(Toks[Index], OUTPUT_OPTION_ESX_TABLE_XML)) {
         *pFormatType = XML;
-        SET_FORMAT_ESX_CUSTOM_FLAG(pCmd->pShowCtx);
+        PRINTER_ENABLE_ESX_TABLE_XML_FORMAT(pCmd->pPrintCtx);
       }
       else {
         // Print out syntax specific help message for invalid -output option
@@ -2322,6 +2336,42 @@ ReadCmdLineShowOptions(
   return ReturnCode;
 }
 
+/**
+  Helper to recreate -o args in string format
+
+  @param[in] pCmd command from CLI
+  @param[out] ppOutputStr resulting -o string
+  @retval EFI_SUCCESS success
+  @retval EFI_INVALID_PARAMETER pCmd or ppOutputStr is NULL
+**/
+EFI_STATUS
+CreateCmdLineOutputStr(
+  IN     struct Command *pCmd,
+  OUT     CHAR16 **ppOutputStr
+)
+{
+  if (NULL == pCmd || NULL == ppOutputStr) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  if (XML != pCmd->pPrintCtx->FormatType) {
+    *ppOutputStr = CatSPrint(NULL, L"");
+    return EFI_SUCCESS;
+  }
+
+  *ppOutputStr = CatSPrint(*ppOutputStr, OUTPUT_OPTION_SHORT L" ");
+
+  if (pCmd->pPrintCtx->FormatTypeFlags.Flags.EsxCustom) {
+    *ppOutputStr = CatSPrintClean(*ppOutputStr, OUTPUT_OPTION_ESX_TABLE_XML L" ");
+  }
+  else if (pCmd->pPrintCtx->FormatTypeFlags.Flags.EsxKeyVal) {
+    *ppOutputStr = CatSPrintClean(*ppOutputStr, OUTPUT_OPTION_ESX_XML L" ");
+  }
+  else {
+    *ppOutputStr = CatSPrintClean(*ppOutputStr, OUTPUT_OPTION_NVMXML L" ");
+  }
+  return EFI_SUCCESS;
+}
 
 /**
    Get Dimm identifier preference
@@ -2347,7 +2397,7 @@ GetDimmIdentifierPreference(
     goto Finish;
   }
 
-  ReturnCode = ReadRunTimeCliDisplayPreferences(&DisplayPreferences);
+  ReturnCode = ReadRunTimePreferences(&DisplayPreferences, DISPLAY_CLI_INFO);
   if (EFI_ERROR(ReturnCode)) {
     Print(FORMAT_STR_NL, CLI_ERR_DISPLAY_PREFERENCES_RETRIEVE);
     goto Finish;
@@ -2562,6 +2612,101 @@ GetDimmHandleByPid(
   ReturnCode = EFI_SUCCESS;
 
 Finish:
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+
+/**
+  Convert UEFI return codes to legacy OS return codes
+
+  @param[in] UefiReturnCode - return code to Convert
+
+  @retval - Converted OS ReturnCode
+**/
+EFI_STATUS UefiToOsReturnCode(EFI_STATUS UefiReturnCode)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  switch (UefiReturnCode)
+  {
+  case (0):
+    break;
+  case (2):
+    ReturnCode = 201;
+    break;
+  case (EFI_INVALID_PARAMETER):
+    ReturnCode = 201;
+    break;
+  case (EFI_ALREADY_STARTED):
+    //this number is arbitrary, but should be distinct. 
+    //In the case of FW udpate, it indicates that all DIMMs 
+    //have a staged FW binary
+    ReturnCode = 20;
+    break;
+  default:
+    ReturnCode = 1;
+  }
+  return ReturnCode;
+}
+
+/**
+  Checks if user has incorrectly used master and default options. Also checks for
+  invalid combinations of these options with the Passphrase property.
+
+  @param[in] pCmd command from CLI
+  @param[in] isPassphraseProvided TRUE if user provided passphrase
+  @param[in] isMasterOptionSpecified TRUE if master option is specified
+  @param[in] isDefaultOptionSpecified TRUE if default option is specified
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_INVALID_PARAMETER One or more parameters are invalid
+**/
+EFI_STATUS
+CheckMasterAndDefaultOptions(
+  IN struct Command *pCmd,
+  IN BOOLEAN isPassphraseProvided,
+  IN BOOLEAN isMasterOptionSpecified,
+  IN BOOLEAN isDefaultOptionSpecified
+)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  PRINT_CONTEXT *pPrinterCtx = NULL;
+
+  if (pCmd == NULL) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    NVDIMM_DBG("pCmd parameter is NULL.\n");
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
+    goto Finish;
+  }
+
+  pPrinterCtx = pCmd->pPrintCtx;
+
+  if (isPassphraseProvided) {
+    if (isMasterOptionSpecified && isDefaultOptionSpecified) {
+      ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_DEFAULT_OPTION_PASSPHRASE_PROPERTY_USED_TOGETHER);
+      goto Finish;
+    }
+    else if (!isMasterOptionSpecified && isDefaultOptionSpecified) {
+      ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_DEFAULT_OPTION_NOT_COMBINED);
+      goto Finish;
+    }
+  }
+  else { // Passphrase not provided
+    if (isMasterOptionSpecified && !isDefaultOptionSpecified) {
+      ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_MISSING_PASSPHRASE_PROPERTY);
+      goto Finish;
+    }
+    else if (!isMasterOptionSpecified && isDefaultOptionSpecified) {
+      ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_DEFAULT_OPTION_NOT_COMBINED);
+      goto Finish;
+    }
+  }
+
+Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }

@@ -7,8 +7,10 @@
 #include <Library/UefiLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/PrintLib.h>
+#include <Library/UefiShellLib/UefiShellLib.h>
 #include <Utility.h>
 #include "Common.h"
+#include <NvmHealth.h>
 
 DispInfo gDisplayInfo;
 extern int g_basic_commands;
@@ -22,6 +24,7 @@ EFI_STATUS MatchCommand(struct Command *pInput, struct Command *pMatch);
 EFI_STATUS MatchOptions(struct Command *pInput, struct Command *pMatch);
 EFI_STATUS MatchTargets(struct Command *pInputCmd, struct Command *pCmdToMatch);
 EFI_STATUS MatchProperties(struct Command *pInput, struct Command *pMatch);
+static EFI_STATUS ValidateProtocolAndPayloadSizeOptions(struct Command *pCmd);
 
 /*
  * Global variables
@@ -81,6 +84,9 @@ FreeCommandStructure(
   if (pCommand != NULL) {
     for (Index = 0; Index < MAX_TARGETS; Index++) {
       FREE_POOL_SAFE(pCommand->targets[Index].pTargetValueStr);
+    }
+    for (Index = 0; Index < MAX_OPTIONS; Index++) {
+      FREE_POOL_SAFE(pCommand->options[Index].pOptionValueStr);
     }
   }
 }
@@ -255,6 +261,14 @@ Parse(
     }
   }
 
+  for (Index = 0; Index < MAX_OPTIONS; Index++) {
+    pCommand->options[Index].pOptionValueStr = AllocateZeroPool(PARSER_OPTION_VALUE_LEN * sizeof(CHAR16));
+    if (!pCommand->options[Index].pOptionValueStr) {
+      ReturnCode = EFI_OUT_OF_RESOURCES;
+      break;
+    }
+  }
+
   ReturnCode = findVerb(&Start, pInput, pCommand);
   if (EFI_ERROR(ReturnCode)) {
     goto Finish;
@@ -281,6 +295,12 @@ Parse(
     goto Finish;
   }
 
+  /* If protocol or payload size options present, ensure no mutually exclusive protocol/payload options */
+  ReturnCode = ValidateProtocolAndPayloadSizeOptions(pCommand);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
   ReturnCode = findTargets(&Start, pInput, pCommand);
   if (EFI_ERROR(ReturnCode)) {
     switch (ReturnCode) {
@@ -302,8 +322,8 @@ Parse(
     ReturnCode = MatchCommand(pCommand, &gCommandList[Index]);
     if (!EFI_ERROR(ReturnCode)) {
       pCommand->run = gCommandList[Index].run;
-      pCommand->RunCleanup = gCommandList[Index].RunCleanup;
-      pCommand->UpdateCmdCtx = gCommandList[Index].UpdateCmdCtx;
+      pCommand->PrinterCtrlSupported = gCommandList[Index].PrinterCtrlSupported;
+      pCommand->ExcludeDriverBinding = gCommandList[Index].ExcludeDriverBinding;
       break;
     }
   }
@@ -363,10 +383,17 @@ EFI_STATUS findVerb(UINTN *pStart, struct CommandInput *pInput, struct Command *
 #ifdef OS_BUILD
     if (g_basic_commands) {
       // This should be updated when there are other comamnds a non-root user can run
-      Print(L"A non-root user is restricted to run only version command\n");
+#ifdef _MSC_VER
+      Print(L"Sorry, the ipmctl command you have attempted to execute requires admin privileges.\n");
+#else //_MSC_VER
+      Print(L"Sorry, the ipmctl command you have attempted to execute requires root privileges.\n");
+#endif //_MSC_VER
+    } else {
+#endif //OS_BUILD
+      SetSyntaxError(CatSPrint(NULL, CLI_PARSER_ERR_VERB_EXPECTED, pInput->ppTokens[*pStart]));
+#ifdef OS_BUILD
     }
 #endif
-    SetSyntaxError(CatSPrint(NULL, CLI_PARSER_ERR_VERB_EXPECTED, pInput->ppTokens[*pStart]));
   }
 
   NVDIMM_EXIT_I64(rc);
@@ -439,11 +466,12 @@ EFI_STATUS findOptions(UINTN *pStart, struct CommandInput *pInput, struct Comman
             (*pStart)++;
             /** check for an option value **/
             if ( ((pInput->TokenCount - *pStart) >= 1) && (pInput->ppTokens[*pStart][0] != '-') ) {
-              if (StrLen(pInput->ppTokens[*pStart]) > OPTION_VALUE_LEN) {
+              if (StrLen(pInput->ppTokens[*pStart]) > PARSER_OPTION_VALUE_LEN) {
                 Rc = EFI_BUFFER_TOO_SMALL;
                 break;
               } else {
-                StrnCpyS(pCommand->options[matchedOptions].OptionValue, OPTION_VALUE_LEN, pInput->ppTokens[*pStart], OPTION_VALUE_LEN - 1);
+                StrnCpyS(pCommand->options[matchedOptions].pOptionValueStr, PARSER_OPTION_VALUE_LEN,
+                  pInput->ppTokens[*pStart], PARSER_OPTION_VALUE_LEN - 1);
                 (*pStart)++;
               }
             }
@@ -709,7 +737,7 @@ MatchOptions(
     }
   }
 
-  if (MatchInputOptions >= MAX_OPTIONS || MatchCommandOptions >= MAX_OPTIONS) {
+  if (MatchInputOptions > MAX_OPTIONS || MatchCommandOptions > MAX_OPTIONS) {
     ReturnCode = EFI_INVALID_PARAMETER;
     NVDIMM_WARN("Too many options have been provided.");
     goto Finish;
@@ -729,7 +757,7 @@ MatchOptions(
         }
         // check if value is optional or required
         if (pMatch->options[Index2].ValueRequirement != ValueOptional) {
-          if (pInput->options[Index].OptionValue && StrLen(pInput->options[Index].OptionValue) > 0) {
+          if (pInput->options[Index].pOptionValueStr && StrLen(pInput->options[Index].pOptionValueStr) > 0) {
             if (pMatch->options[Index2].ValueRequirement == ValueRequired) {
               MatchCount++;
             } else {
@@ -990,102 +1018,268 @@ CHAR16
   CHAR16 *pHelp = NULL;
 
   NVDIMM_ENTRY();
-  for(Index=0; Index < gCommandCount; Index++) {
+  for (Index = 0; Index < gCommandCount; Index++) {
     /**
-      if the user wants help for all commands or for a specific command
+      if the user wants help for a specific command
       and it matches the verb, then continue to add the pHelp
     **/
     CommandMatchingStatus = MatchCommand(pCommand, &gCommandList[Index]);
-    if ( !gCommandList[Index].Hidden &&
-      ((SingleCommand && !EFI_ERROR(CommandMatchingStatus))
-      || (!SingleCommand && (pCommand == NULL || (pCommand != NULL && StrICmp(pCommand->verb, gCommandList[Index].verb) == 0))))) {
+    if (!gCommandList[Index].Hidden &&
+      ((!SingleCommand && (pCommand == NULL || (pCommand != NULL && StrICmp(pCommand->verb, gCommandList[Index].verb) == 0)))))
+{
       /** full verb syntax with help string **/
-      if (pCommand == NULL || SingleCommand || (pCommand != NULL && pCommand->ShowHelp == TRUE)) {
-        pHelp = CatSPrintClean(pHelp, FORMAT_STR_NL, gCommandList[Index].pHelp);
+      if (pCommand == NULL || (pCommand != NULL && pCommand->ShowHelp == TRUE)) {
+        pHelp = CatSPrintClean(pHelp, L"    " FORMAT_STR_NL, gCommandList[Index].pHelp);
         pHelp = CatSPrintClean(pHelp, L"    " FORMAT_STR_SPACE, gCommandList[Index].verb);
       } else { /** syntax error help so just print syntax **/
-        pHelp = CatSPrintClean(pHelp, FORMAT_STR_SPACE, gCommandList[Index].verb);
+        pHelp = CatSPrintClean(pHelp, L"     " FORMAT_STR_SPACE, gCommandList[Index].verb);
       }
 
-      pHelp = CatSPrintClean(pHelp, L"[-help|-h] ");
-      /* add the options pHelp */
+      /* Only show the required fields*/
       for (Index2 = 0; Index2 < MAX_OPTIONS; Index2++) {
         if (gCommandList[Index].options[Index2].OptionName &&
           StrLen(gCommandList[Index].options[Index2].OptionName) > 0) {
-          if (!gCommandList[Index].options[Index2].Required) {
-            pHelp = CatSPrintClean(pHelp, L"[");
+          if (gCommandList[Index].options[Index2].Required) {
+            pHelp = CatSPrintClean(pHelp, FORMAT_STR_SPACE,
+              gCommandList[Index].options[Index2].OptionName);
+            if (StrLen(gCommandList[Index].options[Index2].pHelp) != 0) {
+              pHelp = CatSPrintClean(pHelp, L"(" FORMAT_STR_SPACE L")", gCommandList[Index].options[Index2].pHelp);
+            }
           }
-          if (gCommandList[Index].options[Index2].OptionNameShort &&
-            StrLen(gCommandList[Index].options[Index2].OptionNameShort) > 0) {
-            pHelp = CatSPrintClean(pHelp, FORMAT_STR L"|" FORMAT_STR,
-                gCommandList[Index].options[Index2].OptionName,
-                gCommandList[Index].options[Index2].OptionNameShort);
-          } else {
-            pHelp = CatSPrintClean(pHelp, FORMAT_STR,
-                gCommandList[Index].options[Index2].OptionName);
-          }
-          if (StrLen(gCommandList[Index].options[Index2].pHelp) != 0) {
-            pHelp = CatSPrintClean(pHelp, L" (" FORMAT_STR L")", gCommandList[Index].options[Index2].pHelp);
-          }
-          if (!gCommandList[Index].options[Index2].Required) {
-            pHelp = CatSPrintClean(pHelp, L"]");
-          }
-          pHelp = CatSPrintClean(pHelp, L" ");
         }
       }
-
+      if (StrICmp(gCommandList[Index].verb, LOAD_VERB) == 0) {
+        pHelp = CatSPrintClean(pHelp, L"-source (File Source) ");
+      }
+      else if (StrICmp(gCommandList[Index].verb, DUMP_VERB) == 0) {
+        pHelp = CatSPrintClean(pHelp, L"-destination (file destination) ");
+      }
       /* add the targets pHelp */
       for (Index2 = 0; Index2 < MAX_TARGETS; Index2++)
       {
         if (gCommandList[Index].targets[Index2].TargetName &&
-          StrLen(gCommandList[Index].targets[Index2].TargetName) > 0)
-        {
-          if (!gCommandList[Index].targets[Index2].Required)
-          {
+          StrLen(gCommandList[Index].targets[Index2].TargetName) > 0) {
+          if (!gCommandList[Index].targets[Index2].Required) {
             pHelp = CatSPrintClean(pHelp, L"[");
           }
-          pHelp = CatSPrintClean(pHelp, FORMAT_STR,
+          pHelp = CatSPrintClean(pHelp, FORMAT_STR_SPACE,
               gCommandList[Index].targets[Index2].TargetName);
-          if (gCommandList[Index].targets[Index2].pHelp && StrLen(gCommandList[Index].targets[Index2].pHelp) > 0)
-          {
+          if (gCommandList[Index].targets[Index2].pHelp && StrLen(gCommandList[Index].targets[Index2].pHelp) > 0) {
             if (gCommandList[Index].targets[Index2].ValueRequirement == ValueOptional) {
-              pHelp = CatSPrintClean(pHelp, L" [(" FORMAT_STR L")]",
+              pHelp = CatSPrintClean(pHelp, L"[(" FORMAT_STR L")]",
                   gCommandList[Index].targets[Index2].pHelp);
             } else {
-              pHelp = CatSPrintClean(pHelp, L" (" FORMAT_STR L")",
+              pHelp = CatSPrintClean(pHelp, L"(" FORMAT_STR L")",
                   gCommandList[Index].targets[Index2].pHelp);
             }
           }
-          if (!gCommandList[Index].targets[Index2].Required)
-          {
+          if (!gCommandList[Index].targets[Index2].Required) {
             pHelp = CatSPrintClean(pHelp, L"]");
           }
           pHelp = CatSPrintClean(pHelp, L" ");
         }
       }
+    
+      /* only show the properties that are required */
+      for (Index2 = 0; Index2 < MAX_PROPERTIES; Index2++) {
+        if(gCommandList[Index].properties[Index2].Required){
+        if (gCommandList[Index].properties[Index2].PropertyName &&
+          StrLen(gCommandList[Index].properties[Index2].PropertyName) > 0) {
+          pHelp = CatSPrintClean(pHelp, L" ");
+          pHelp = CatSPrintClean(pHelp, FORMAT_STR L"=(" FORMAT_STR L")",
+            gCommandList[Index].properties[Index2].PropertyName,
+            gCommandList[Index].properties[Index2].pHelp);
+        }
+        }
+      }
+      pHelp = CatSPrintClean(pHelp, L"\n\n");
+   }
+    else if (SingleCommand && !EFI_ERROR(CommandMatchingStatus)) {
+      /** full verb syntax with help string **/
+      if (pCommand == NULL || SingleCommand || (pCommand != NULL && pCommand->ShowHelp == TRUE)) {
+        pHelp = CatSPrintClean(pHelp, L"    " FORMAT_STR_NL, gCommandList[Index].pHelp);
+        pHelp = CatSPrintClean(pHelp, L"    " FORMAT_STR_SPACE, gCommandList[Index].verb);
+      }
+      else { /** syntax error help so just print syntax **/
+        pHelp = CatSPrintClean(pHelp, L"     " FORMAT_STR_SPACE, gCommandList[Index].verb);
+      }
 
+      /* add the targets pHelp */
+      pHelp = CatSPrintClean(pHelp, L" [OPTIONS]");
+
+      /* Source and Destination are required for load and dump commands*/
+      if (StrICmp(gCommandList[Index].verb, LOAD_VERB) == 0) {
+        pHelp = CatSPrintClean(pHelp, L"-source (File Source) ");
+      }
+      else if (StrICmp(gCommandList[Index].verb, DUMP_VERB) == 0) {
+        pHelp = CatSPrintClean(pHelp, L"-destination (file destination) ");
+      }
+      for (Index2 = 0; Index2 < MAX_TARGETS; Index2++)
+      {
+        if (gCommandList[Index].targets[Index2].TargetName &&
+          StrLen(gCommandList[Index].targets[Index2].TargetName) > 0) {
+          if (!gCommandList[Index].targets[Index2].Required) {
+            pHelp = CatSPrintClean(pHelp, L"[");
+          }
+          pHelp = CatSPrintClean(pHelp, L" "FORMAT_STR,
+            gCommandList[Index].targets[Index2].TargetName);
+          if (gCommandList[Index].targets[Index2].pHelp && StrLen(gCommandList[Index].targets[Index2].pHelp) > 0) {
+            if (gCommandList[Index].targets[Index2].ValueRequirement == ValueOptional) {
+              pHelp = CatSPrintClean(pHelp, L"[(" FORMAT_STR L")]",
+                gCommandList[Index].targets[Index2].pHelp);
+            }
+            else {
+              pHelp = CatSPrintClean(pHelp, L" (" FORMAT_STR L")",
+                gCommandList[Index].targets[Index2].pHelp);
+            }
+          }
+          if (!gCommandList[Index].targets[Index2].Required) {
+            pHelp = CatSPrintClean(pHelp, L"]");
+          }
+          pHelp = CatSPrintClean(pHelp, L" ");
+        }
+      }
+      if (StrLen(gCommandList[Index].properties[0].PropertyName) > 0) {
+        pHelp = CatSPrintClean(pHelp, L"[PROPERTIES ...]");
+      }
+
+      /* add the options pHelp */
+      pHelp = CatSPrintClean(pHelp, L"\n\n[OPTIONS]");
+      pHelp = CatSPrintClean(pHelp, L"\n   [-help|-h] : Display Help for the command");
+      for (Index2 = 0; Index2 < MAX_OPTIONS; Index2++) {
+        if (gCommandList[Index].options[Index2].OptionName &&
+          StrLen(gCommandList[Index].options[Index2].OptionName) > 0) {
+          if (!gCommandList[Index].options[Index2].Required) {
+            pHelp = CatSPrintClean(pHelp, L"\n   [");
+          }
+          if (gCommandList[Index].options[Index2].OptionNameShort &&
+            StrLen(gCommandList[Index].options[Index2].OptionNameShort) > 0) {
+            pHelp = CatSPrintClean(pHelp, FORMAT_STR L"|" FORMAT_STR,
+              gCommandList[Index].options[Index2].OptionName,
+              gCommandList[Index].options[Index2].OptionNameShort);
+          }
+          else {
+            pHelp = CatSPrintClean(pHelp, FORMAT_STR,
+              gCommandList[Index].options[Index2].OptionName);
+          }
+          if (StrLen(gCommandList[Index].options[Index2].pHelp) != 0) {
+            pHelp = CatSPrintClean(pHelp, L"(" FORMAT_STR L")", gCommandList[Index].options[Index2].pHelp);
+          }
+          if (!gCommandList[Index].options[Index2].Required) {
+            pHelp = CatSPrintClean(pHelp, L"] : ");
+            pHelp = CatSPrintClean(pHelp, FORMAT_STR, gCommandList[Index].options[Index2].pHelpDetails);
+          }
+        }
+      }
+     pHelp = CatSPrintClean(pHelp, L"\n");
       /** add the properties pHelp **/
+     if (StrLen(gCommandList[Index].properties[0].PropertyName) > 0 ) {
+        pHelp = CatSPrintClean(pHelp, L"\n[PROPERTIES]");
+      }
       for (Index2 = 0; Index2 < MAX_PROPERTIES; Index2++) {
         if (gCommandList[Index].properties[Index2].PropertyName &&
           StrLen(gCommandList[Index].properties[Index2].PropertyName) > 0) {
-          if (!gCommandList[Index].properties[Index2].Required) {
-            pHelp = CatSPrintClean(pHelp, L"[");
-          }
+            pHelp = CatSPrintClean(pHelp, L"\n   ");
           pHelp = CatSPrintClean(pHelp, FORMAT_STR L"=(" FORMAT_STR L")",
-              gCommandList[Index].properties[Index2].PropertyName,
-              gCommandList[Index].properties[Index2].pHelp);
-          if (!gCommandList[Index].properties[Index2].Required) {
-            pHelp = CatSPrintClean(pHelp, L"]");
+            gCommandList[Index].properties[Index2].PropertyName,
+            gCommandList[Index].properties[Index2].pHelp);
+        }
+        pHelp = CatSPrintClean(pHelp, L" ");
+      }
+      pHelp = CatSPrintClean(pHelp, L"\n\n");
+    }
+  }
+
+  NVDIMM_EXIT();
+  return pHelp;
+}
+/**
+  Get the overall Help for User.
+  @retval NULL if the command verb could not be matched to any
+    of the registered commands. Or the pointer to the help message.
+
+  NOTE: If the return pointer is not NULL, the caller is responsible
+  to free the memory using FreePool.
+**/
+CHAR16
+*getOverallCommandHelp()
+{
+  UINTN Index = 0;
+  UINTN Index2 = 0;
+  CHAR16 *pHelp = NULL;
+
+  NVDIMM_ENTRY();
+
+  //check if the page break option exists
+  for (Index = 0; Index < gCommandCount; Index++) {
+    /**
+      Showing user Help for all the commands
+      This will be simplified not showing any command description
+    **/
+    /** full verb syntax **/
+    pHelp = CatSPrintClean(pHelp, L"    " FORMAT_STR_NL, gCommandList[Index].pHelp);
+    pHelp = CatSPrintClean(pHelp, L"    " FORMAT_STR_SPACE, gCommandList[Index].verb);
+
+    /* Only show the required fields for OPTIONS*/
+    for (Index2 = 0; Index2 < MAX_OPTIONS; Index2++) {
+      if (gCommandList[Index].options[Index2].OptionName &&
+        StrLen(gCommandList[Index].options[Index2].OptionName) > 0) {
+        if (gCommandList[Index].options[Index2].Required) {
+          pHelp = CatSPrintClean(pHelp, FORMAT_STR_SPACE,
+            gCommandList[Index].options[Index2].OptionName);
+          if (StrLen(gCommandList[Index].options[Index2].pHelp) != 0) {
+            pHelp = CatSPrintClean(pHelp, L"(" FORMAT_STR_SPACE L")", gCommandList[Index].options[Index2].pHelp);
+          }
+        }
+      }
+    }
+    /* add the Targets to pHelp */
+    if (gCommandList[Index].targets > 0) {
+      if (StrICmp(gCommandList[Index].verb, LOAD_VERB) == 0) {
+        pHelp = CatSPrintClean(pHelp, L"-source (File Source) ");
+      }
+      else if (StrICmp(gCommandList[Index].verb, DUMP_VERB) == 0) {
+        pHelp = CatSPrintClean(pHelp, L"-destination (file destination) ");
+      }
+      for (Index2 = 0; Index2 < MAX_TARGETS; Index2++) {
+        if (gCommandList[Index].targets[Index2].TargetName
+          && StrLen(gCommandList[Index].targets[Index2].TargetName)> 0) {
+          pHelp = CatSPrintClean(pHelp, FORMAT_STR,
+            gCommandList[Index].targets[Index2].TargetName);
+          if (gCommandList[Index].targets[Index2].pHelp
+            && StrLen(gCommandList[Index].targets[Index2].pHelp) > 0) {
+            if (gCommandList[Index].targets[Index2].ValueRequirement == ValueOptional) {
+              pHelp = CatSPrintClean(pHelp, L"[(" FORMAT_STR L")]",
+                gCommandList[Index].targets[Index2].pHelp);
+            } else {
+              pHelp = CatSPrintClean(pHelp, L"(" FORMAT_STR L")",
+                gCommandList[Index].targets[Index2].pHelp);
+            }
           }
           pHelp = CatSPrintClean(pHelp, L" ");
         }
       }
-      pHelp = CatSPrintClean(pHelp, L"\n");
     }
+
+    /* only show PROPERTIES that are required */
+    for (Index2 = 0; Index2 < MAX_PROPERTIES; Index2++) {
+      if (gCommandList[Index].properties[Index2].Required) {
+        if (gCommandList[Index].properties[Index2].PropertyName &&
+          StrLen(gCommandList[Index].properties[Index2].PropertyName) > 0) {
+          pHelp = CatSPrintClean(pHelp, L" ");
+          pHelp = CatSPrintClean(pHelp, FORMAT_STR L"=(" FORMAT_STR L")",
+            gCommandList[Index].properties[Index2].PropertyName,
+            gCommandList[Index].properties[Index2].pHelp);
+        }
+      }
+    }
+    pHelp = CatSPrintClean(pHelp, L"\n\n");
   }
+  pHelp = CatSPrintClean(pHelp, L" Please see ipmctl <verb> -help <command> i.e 'ipmctl show -help -dimm' for more information on specific command \n");
   NVDIMM_EXIT();
   return pHelp;
 }
+
 
 /**
   Check if a specific property is found
@@ -1153,6 +1347,39 @@ GetPropertyValue(
       ReturnCode = EFI_SUCCESS;
       *ppReturnValue = (CHAR16*)pCmd->properties[Index].PropertyValue;
       break;
+    }
+  }
+
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+
+/**
+  Get the number of properties
+    @param[in] pCmd is a pointer to the struct Command that contains the user input.
+    @param[out] pPropertyCount represents the number of properties defined on the command line
+
+    @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL.
+    @retval EFI_SUCCESS
+**/
+EFI_STATUS
+GetPropertyCount(
+  IN     CONST struct Command *pCmd,
+  IN     UINT16 *pPropertyCount
+)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  INT32 Index;
+  NVDIMM_ENTRY();
+
+  if (pCmd == NULL || pPropertyCount == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  *pPropertyCount = 0;
+  for (Index = 0; Index < MAX_PROPERTIES; Index++) {
+    if (pCmd->properties[Index].PropertyName[0] != 0) {
+      *pPropertyCount += 1;
     }
   }
 
@@ -1232,7 +1459,7 @@ CHAR16* getOptionValue(CONST struct Command *pCmd,
     if (StrICmp(pCmd->options[i].OptionName, option) == 0 ||
       StrICmp(pCmd->options[i].OptionNameShort, option) == 0)
     {
-      value = CatSPrint(NULL, FORMAT_STR, pCmd->options[i].OptionValue);
+      value = CatSPrint(NULL, FORMAT_STR, pCmd->options[i].pOptionValueStr);
       break;
     }
   }
@@ -1388,7 +1615,7 @@ GetUnitsOption(
         *pUnitsToDisplay = DISPLAY_SIZE_UNIT_TIB;
       } else {
         ReturnCode = EFI_INVALID_PARAMETER;
-        Print(FORMAT_STR, CLI_ERR_INCORRECT_VALUE_OPTION_UNITS);
+        PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_OPTION_UNITS);
         goto Finish;
       }
     } else {
@@ -1470,23 +1697,30 @@ EFI_STATUS
 ExecuteCmd(COMMAND *pCommand) {
 
   EFI_STATUS Rc = EFI_SUCCESS;
+  BOOLEAN CreatedPrintCtx = FALSE;
 
   if (NULL == pCommand)
     return EFI_INVALID_PARAMETER;
 
-  if (NULL == (pCommand->pShowCtx = (SHOW_CMD_CONTEXT*)AllocateZeroPool(sizeof(SHOW_CMD_CONTEXT)))) {
-    return EFI_OUT_OF_RESOURCES;
+  //Here to support migration path from legacy print handling and new printer module
+  if (pCommand->PrinterCtrlSupported) {
+    // create Printer Context if not given one to use
+    if (pCommand->pPrintCtx == NULL)
+    {
+      CreatedPrintCtx = TRUE;
+      if (EFI_SUCCESS != (Rc = PrinterCreateCtx(&pCommand->pPrintCtx))) {
+        return Rc;
+      }
+
+      if (EFI_SUCCESS != (Rc = ReadCmdLinePrintOptions(&pCommand->pPrintCtx->FormatType, pCommand))) {
+        goto Finish;
+      }
+    }
   }
-
-  if (EFI_SUCCESS != (Rc = ReadCmdLineShowOptions(&pCommand->pShowCtx->FormatType, pCommand))) {
-    goto Finish;
+  else {
+    //ensure printer ctx ptr is NULL
+    pCommand->pPrintCtx = NULL;
   }
-
-  if (pCommand->UpdateCmdCtx)
-    Rc = pCommand->UpdateCmdCtx(pCommand);
-
-  if (EFI_ERROR(Rc))
-    goto Finish;
 
   if (NULL == pCommand->run) {
     Rc = EFI_INVALID_PARAMETER;
@@ -1498,10 +1732,77 @@ ExecuteCmd(COMMAND *pCommand) {
   if (EFI_ERROR(Rc))
     goto Finish;
 
-  if (pCommand->RunCleanup)
-    Rc = pCommand->RunCleanup(pCommand);
+Finish:
+  // clean up Printer context only if created in this routine call
+  if (CreatedPrintCtx == TRUE) {
+    PrinterDestroyCtx(pCommand->pPrintCtx);
+  }
+  return Rc;
+}
+
+EFI_STATUS ValidateProtocolAndPayloadSizeOptions(struct Command *pCmd)
+{
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
+
+  if (NULL == pCmd) {
+    NVDIMM_CRIT("NULL input parameter.\n");
+    goto Finish;
+  }
+
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  if (containsOption(pCmd, PROTOCOL_OPTION_DDRT) && containsOption(pCmd, PROTOCOL_OPTION_SMBUS))
+  {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    SetSyntaxError(CatSPrint(NULL, CLI_PARSER_ERR_MUTUALLY_EXCLUSIVE_OPTIONS, PROTOCOL_OPTION_DDRT, PROTOCOL_OPTION_SMBUS));
+    goto Finish;
+  }
+  else if (containsOption(pCmd, LARGE_PAYLOAD_OPTION) && containsOption(pCmd, SMALL_PAYLOAD_OPTION))
+  {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    SetSyntaxError(CatSPrint(NULL, CLI_PARSER_ERR_MUTUALLY_EXCLUSIVE_OPTIONS, LARGE_PAYLOAD_OPTION, SMALL_PAYLOAD_OPTION));
+    goto Finish;
+  }
+  else if (containsOption(pCmd, PROTOCOL_OPTION_SMBUS) && containsOption(pCmd, LARGE_PAYLOAD_OPTION))
+  {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    SetSyntaxError(CatSPrint(NULL, CLI_PARSER_ERR_MUTUALLY_EXCLUSIVE_OPTIONS, PROTOCOL_OPTION_SMBUS, LARGE_PAYLOAD_OPTION));
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetFisTransportAttributes(pNvmDimmConfigProtocol, &pAttribs);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  if (containsOption(pCmd, PROTOCOL_OPTION_DDRT)) {
+    pAttribs.Protocol = FisTransportDdrt;
+  }
+  else if (containsOption(pCmd, PROTOCOL_OPTION_SMBUS)) {
+    pAttribs.Protocol = FisTransportSmbus;
+    pAttribs.PayloadSize = FisTransportSmallMb;
+  }
+
+  if (containsOption(pCmd, LARGE_PAYLOAD_OPTION)) {
+    pAttribs.PayloadSize = FisTransportLargeMb;
+  }
+  else if (containsOption(pCmd, SMALL_PAYLOAD_OPTION)) {
+    pAttribs.PayloadSize = FisTransportSmallMb;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->SetFisTransportAttributes(pNvmDimmConfigProtocol, pAttribs);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
 
 Finish:
-  FREE_POOL_SAFE(pCommand->pShowCtx);
-  return Rc;
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("ValidateProtocolAndPayloadSizeOptions has returned error. Code " FORMAT_EFI_STATUS "\n", ReturnCode);
+  }
+  return ReturnCode;
 }

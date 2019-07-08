@@ -61,6 +61,8 @@ int get_dimm_id(const char *uid, UINT16 *dimm_id, unsigned int *dimm_handle);
 void dimm_info_to_device_discovery(DIMM_INFO *p_dimm, struct device_discovery *p_device);
 int g_nvm_initialized = 0;
 int get_fw_err_log_stats(const unsigned int dimm_id, const unsigned char log_level, const unsigned char log_type, LOG_INFO_DATA_RETURN *log_info);
+static int nvm_internal_init(BOOLEAN binding_start);
+static void nvm_internal_uninit(BOOLEAN binding_stop);
 
 extern EFI_SHELL_PARAMETERS_PROTOCOL gOsShellParametersProtocol;
 extern NVMDIMMDRIVER_DATA *gNvmDimmData;
@@ -72,7 +74,8 @@ extern EFI_STATUS ForceStartTheDriver();
 extern EFI_STATUS EFIAPI NvmDimmDriverDriverBindingStart(IN EFI_DRIVER_BINDING_PROTOCOL *pThis, IN EFI_HANDLE ControllerHandle, IN EFI_DEVICE_PATH_PROTOCOL *pRemainingDevicePath OPTIONAL);
 extern EFI_DRIVER_BINDING_PROTOCOL gNvmDimmDriverDriverBinding;
 extern EFI_STATUS EFIAPI NvmDimmDriverDriverEntryPoint(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *pSystemTable);
-extern EFI_DCPMM_CONFIG_PROTOCOL gNvmDimmDriverNvmDimmConfig;
+extern EFI_DCPMM_CONFIG2_PROTOCOL gNvmDimmDriverNvmDimmConfig;
+extern EFI_STATUS EFIAPI NvmDimmDriverUnload(IN EFI_HANDLE ImageHandle);
 extern EFI_STATUS
 EFIAPI
 GetCapacities(IN UINT16 DimmPid, OUT UINT64 *pVolatileCapacity, OUT UINT64 *pAppDirectCapacity, OUT UINT64 *pUnconfiguredCapacity, OUT UINT64 *pReservedCapacity, OUT UINT64 *pInaccessibleCapacity);
@@ -90,6 +93,12 @@ extern int acpi_event_free_ctx(void * context);
 
 //todo: add error checking
 NVM_API int nvm_init()
+{
+  return nvm_internal_init(TRUE);
+}
+
+//todo: add error checking
+static int nvm_internal_init(BOOLEAN binding_start)
 {
   int rc = NVM_SUCCESS;
 
@@ -149,10 +158,11 @@ NVM_API int nvm_init()
 #endif
   }
 
-  if(!g_fast_path && !g_basic_commands)
+  if (binding_start && (!g_fast_path && !g_basic_commands))
   {
     NvmDimmDriverDriverBindingStart(&gNvmDimmDriverDriverBinding, FakeBindHandle, NULL);
   }
+
   g_nvm_initialized = 1;
   return rc;
 cleanup_mutex:
@@ -163,8 +173,17 @@ cleanup_mutex:
 
 NVM_API void nvm_uninit()
 {
+  nvm_internal_uninit(TRUE);
+}
+
+static void nvm_internal_uninit(BOOLEAN binding_stop)
+{
   EFI_HANDLE FakeBindHandle = (EFI_HANDLE)0x1;
-  NvmDimmDriverDriverBindingStop(&gNvmDimmDriverDriverBinding, FakeBindHandle, 0, NULL);
+
+  if (binding_stop) {
+    NvmDimmDriverDriverBindingStop(&gNvmDimmDriverDriverBinding, FakeBindHandle, 0, NULL);
+  }
+  NvmDimmDriverUnload(FakeBindHandle);
   uninit_protocol_shell_parameters_protocol();
   preferences_uninit();
 
@@ -218,26 +237,7 @@ void nvm_current_cmd(struct Command Command)
   g_cur_command = Command;
 }
 
-//temp, until uefi and os validation agree to
-//return code unification.
-EFI_STATUS uefi_to_os_ret_val(EFI_STATUS uefi_rc)
-{
-  EFI_STATUS rc = EFI_SUCCESS;
-  switch (uefi_rc)
-  {
-  case (0):
-    break;
-  case (2):
-    rc = 201;
-    break;
-  case (EFI_INVALID_PARAMETER):
-    rc = 201;
-    break;
-  default:
-    rc = 1;
-  }
-  return rc;
-}
+
 
 NVM_API int nvm_run_cli(int argc, char *argv[])
 {
@@ -247,25 +247,23 @@ NVM_API int nvm_run_cli(int argc, char *argv[])
   rc = init_protocol_shell_parameters_protocol(argc, argv);
   if (rc == EFI_INVALID_PARAMETER) {
     wprintf(L"Syntax Error: Exceeded input parameters limit.\n");
-    return (int)uefi_to_os_ret_val(rc);
-  }
-  else if (rc == EFI_LOAD_ERROR) {
-    return (int)uefi_to_os_ret_val(rc);
+    return (int)UefiToOsReturnCode(rc);
   }
 
   if (gOsShellParametersProtocol.StdOut == stdout)
   {
-    //WA to ensure wprintf work throughout invocation of DCPM mgmt stack.
+    //WA to ensure wprintf work throughout invocation of DCPMM mgmt stack.
     wprintf(L"\n");
   }
 
-  nvm_status = nvm_init();
+  nvm_status = nvm_internal_init(FALSE);
   if (NVM_ERR_INVALID_PERMISSIONS != nvm_status && NVM_SUCCESS != nvm_status) {
     CHAR16* ErrStr = GetSingleNvmStatusCodeMessage(NULL, nvm_status);
     wprintf(L"Failed to intialize nvm library (%d): %ls.\n", nvm_status, ErrStr);
+    FREE_POOL_SAFE(ErrStr);
     return nvm_status;
   }
-  rc = uefi_to_os_ret_val(UefiMain(0, NULL));
+  rc = UefiToOsReturnCode(UefiMain(0, NULL));
 
   //gOsShellParametersProtocol.StdOut will be overriden when
   //-o xml is used (temp hack)
@@ -278,7 +276,7 @@ NVM_API int nvm_run_cli(int argc, char *argv[])
     dt = (enum DisplayType)d;
     process_output(dt, disp_name, disp_delims, (int)rc, gOsShellParametersProtocol.StdOut, argc, argv);
   }
-  nvm_uninit();
+  nvm_internal_uninit(FALSE);
   return (int)rc;
 }
 
@@ -711,7 +709,8 @@ static void dimm_info_to_device_status(DIMM_INFO *p_dimm, struct device_status *
 
    //DIMM_INFO_CATEGORY_SMART_AND_HEALTH
    p_status->health = p_dimm->HealthState;                         // Overall device health.
-   p_status->last_shutdown_status_details = p_dimm->LastShutdownStatusDetails;    // State of last DIMM shutdown.
+   p_status->last_shutdown_status_details = p_dimm->LatchedLastShutdownStatusDetails;    // State of last DIMM shutdown.
+   p_status->unlatched_last_shutdown_status_details = p_dimm->UnlatchedLastShutdownStatusDetails;
    p_status->last_shutdown_time = p_dimm->LastShutdownTime;        // Time of the last shutdown - seconds since 1 January 1970
    p_status->ait_dram_enabled = p_dimm->AitDramEnabled;            // Whether or not the AIT DRAM is enabled.
 
@@ -725,7 +724,7 @@ static void dimm_info_to_device_status(DIMM_INFO *p_dimm, struct device_status *
    p_status->sku_violation = p_dimm->SKUViolation;         // The DIMM configuration is unsupported due to a license issue.
    p_status->config_status = p_dimm->ConfigStatus;         // Status of last configuration request.
    p_status->is_missing = FALSE;                           // If the device is missing.
-   //p_status->last_shutdown_status_extended[3];//Extendeded fields as per FIS 1.6
+   //p_status->latched_last_shutdown_status_extended[3];//Extended fields as per FIS 1.6
    //p_status->mixed_sku; // One or more DIMMs have different SKUs.
    //p_status->new_error_count; // Count of new fw errors from the DIMM
    //p_status->newest_error_log_timestamp; // Timestamp of the newest log entry in the fw error log
@@ -833,7 +832,6 @@ NVM_API int nvm_get_device_settings(const NVM_UID   device_uid,
   DIMM *pDimm = NULL;
   UINT16 dimm_id;
   int rc;
-  PT_OPTIONAL_DATA_POLICY_PAYLOAD OptionalDataPolicyPayload;
   PT_VIRAL_POLICY_PAYLOAD ViralPolicyPayload;
   int nvm_status;
 
@@ -857,17 +855,17 @@ NVM_API int nvm_get_device_settings(const NVM_UID   device_uid,
     return NVM_ERR_UNKNOWN;
   }
 
-  ReturnCode = FwCmdGetOptionalConfigurationDataPolicy(pDimm, &OptionalDataPolicyPayload);
-  if (EFI_ERROR(ReturnCode))
-    return NVM_ERR_UNKNOWN;
-
   ReturnCode = FwCmdGetViralPolicy(pDimm, &ViralPolicyPayload);
-  if (EFI_ERROR(ReturnCode))
-    return NVM_ERR_UNKNOWN;
-
-  p_settings->first_fast_refresh = OptionalDataPolicyPayload.FirstFastRefresh;
-  p_settings->viral_policy = ViralPolicyPayload.ViralPolicyEnable;
-  p_settings->viral_status = ViralPolicyPayload.ViralStatus;
+  if (ReturnCode == EFI_UNSUPPORTED) {
+    p_settings->viral_policy = 0;
+    p_settings->viral_status = 0;
+  } else {
+    if (EFI_ERROR(ReturnCode)) {
+      return NVM_ERR_UNKNOWN;
+    }
+    p_settings->viral_policy = ViralPolicyPayload.ViralPolicyEnable;
+    p_settings->viral_status = ViralPolicyPayload.ViralStatus;
+  }
 
   return NVM_SUCCESS;
 }
@@ -875,42 +873,7 @@ NVM_API int nvm_get_device_settings(const NVM_UID   device_uid,
 NVM_API int nvm_modify_device_settings(const NVM_UID      device_uid,
                const struct device_settings * p_settings)
 {
-  EFI_STATUS ReturnCode;
-  DIMM *pDimm = NULL;
-  UINT16 dimm_id;
-  int rc;
-  PT_OPTIONAL_DATA_POLICY_PAYLOAD OptionalDataPolicyPayload;
-  int nvm_status;
-
-  if (NULL == p_settings) {
-    NVDIMM_ERR("NULL input parameter\n");
-    return NVM_ERR_INVALID_PARAMETER;
-  }
-
-  if (NVM_SUCCESS != (nvm_status = nvm_init())) {
-    NVDIMM_ERR("Failed to intialize nvm library %d\n", nvm_status);
-    return nvm_status;
-  }
-
-  if (NVM_SUCCESS != (rc = get_dimm_id(device_uid, &dimm_id, NULL))) {
-    NVDIMM_ERR("Failed to get dimm ID %d\n", rc);
-    return rc;
-  }
-
-  if (NULL == (pDimm = GetDimmByPid(dimm_id, &gNvmDimmData->PMEMDev.Dimms))) {
-    NVDIMM_ERR("Failed to get dimm by Pid (%d)\n", dimm_id);
-    return NVM_ERR_UNKNOWN;
-  }
-
-  OptionalDataPolicyPayload.FirstFastRefresh = p_settings->first_fast_refresh;
-
-  ReturnCode = FwCmdSetOptionalConfigurationDataPolicy(pDimm, &OptionalDataPolicyPayload);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_ERR("FwCmdSetOptionalConfigurationDataPolicy failed (%d)\n", ReturnCode);
-    return NVM_ERR_UNKNOWN;
-  }
-
-  return NVM_SUCCESS;
+  return NVM_ERR_API_NOT_SUPPORTED;
 }
 
 NVM_API int nvm_get_device_details(const NVM_UID    device_uid,
@@ -945,7 +908,7 @@ NVM_API int nvm_get_device_details(const NVM_UID    device_uid,
   p_details->total_width = dimm_info.TotalWidth;                                          // The width in bits for data and ECC and/or redundancy.
   p_details->speed = dimm_info.Speed;                                                     // The speed in nanoseconds.
   memcpy_s(p_details->device_locator, NVM_DEVICE_LOCATOR_LEN, dimm_info.DeviceLocator, NVM_DEVICE_LOCATOR_LEN);     // The socket or board position label
-  memcpy_s(p_details->bank_label, NVM_BANK_LABEL_LEN, dimm_info.BankLabel, NVM_BANK_LABEL_LEN);                 // The bank label
+  memcpy_s(p_details->bank_label, NVM_BANK_LABEL_LEN, dimm_info.BankLabel, sizeof(dimm_info.BankLabel));                 // The bank label
   p_details->peak_power_budget = dimm_info.PeakPowerBudget;                               // instantaneous power budget in mW (100-20000 mW).
   p_details->avg_power_budget = dimm_info.AvgPowerBudget;                                 // average power budget in mW (100-18000 mW).
         p_details->package_sparing_enabled = dimm_info.PackageSparingEnabled;                   // Enable or disable package sparing.
@@ -1290,7 +1253,7 @@ NVM_API int nvm_examine_device_fw(const NVM_UID device_uid,
       if (image_version_len > NVM_VERSION_LEN) {
         sprintf_s(image_version, NVM_VERSION_LEN, "%d.%d.%d.%d", p_fw_image_info->ImageVersion.ProductNumber.Version,
           p_fw_image_info->ImageVersion.RevisionNumber.Version,
-          p_fw_image_info->ImageVersion.SecurityVersionNumber.Version,
+          p_fw_image_info->ImageVersion.SecurityRevisionNumber.Version,
           p_fw_image_info->ImageVersion.BuildNumber.Build);
       }
     }
@@ -1491,6 +1454,7 @@ NVM_API int nvm_set_passphrase(const NVM_UID device_uid,
     NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
     return rc;
   }
+  SystemCapabilitiesInfo.PtrInterleaveFormatsSupported = 0;
 
   ReturnCode = gNvmDimmDriverNvmDimmConfig.GetSystemCapabilitiesInfo(&gNvmDimmDriverNvmDimmConfig,
       &SystemCapabilitiesInfo);
@@ -1581,6 +1545,7 @@ NVM_API int nvm_unlock_device(const NVM_UID device_uid,
     NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
     return rc;
   }
+  SystemCapabilitiesInfo.PtrInterleaveFormatsSupported = 0;
 
   ReturnCode = gNvmDimmDriverNvmDimmConfig.GetSystemCapabilitiesInfo(&gNvmDimmDriverNvmDimmConfig,
       &SystemCapabilitiesInfo);
@@ -1609,6 +1574,7 @@ NVM_API int nvm_freezelock_device(const NVM_UID device_uid)
     NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
     return rc;
   }
+  SystemCapabilitiesInfo.PtrInterleaveFormatsSupported = 0;
 
   ReturnCode = gNvmDimmDriverNvmDimmConfig.GetSystemCapabilitiesInfo(&gNvmDimmDriverNvmDimmConfig,
       &SystemCapabilitiesInfo);
@@ -1638,6 +1604,7 @@ NVM_API int nvm_erase_device(const NVM_UID device_uid,
     NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
     return rc;
   }
+  SystemCapabilitiesInfo.PtrInterleaveFormatsSupported = 0;
 
   ReturnCode = gNvmDimmDriverNvmDimmConfig.GetSystemCapabilitiesInfo(&gNvmDimmDriverNvmDimmConfig,
       &SystemCapabilitiesInfo);
@@ -1653,6 +1620,74 @@ NVM_API int nvm_erase_device(const NVM_UID device_uid,
 
 Finish:
   FREE_HII_POINTER(SystemCapabilitiesInfo.PtrInterleaveFormatsSupported);
+  return rc;
+}
+
+NVM_API int nvm_set_master_passphrase(const NVM_UID device_uid,
+             const NVM_PASSPHRASE old_master_passphrase, const NVM_SIZE old_master_passphrase_len,
+             const NVM_PASSPHRASE new_master_passphrase, const NVM_SIZE new_master_passphrase_len)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  int rc = NVM_ERR_API_NOT_SUPPORTED;
+  SYSTEM_CAPABILITIES_INFO SystemCapabilitiesInfo;
+  COMMAND_STATUS *p_command_status = NULL;
+  UINT16 dimm_id;
+  unsigned int dimm_handle;
+  CHAR16 UnicodeOldMasterPassphrase[PASSPHRASE_BUFFER_SIZE];
+  CHAR16 UnicodeNewMasterPassphrase[PASSPHRASE_BUFFER_SIZE];
+
+  SetMem(UnicodeOldMasterPassphrase, sizeof(UnicodeOldMasterPassphrase), 0x0);
+  SetMem(UnicodeNewMasterPassphrase, sizeof(UnicodeNewMasterPassphrase), 0x0);
+
+  if (NVM_SUCCESS != (rc = nvm_init())) {
+    NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
+    return rc;
+  }
+  SystemCapabilitiesInfo.PtrInterleaveFormatsSupported = 0;
+
+  ReturnCode = InitializeCommandStatus(&p_command_status);
+  if (EFI_ERROR(ReturnCode)) {
+    rc = NVM_ERR_UNKNOWN;
+    goto Finish;
+  }
+
+  ReturnCode = gNvmDimmDriverNvmDimmConfig.GetSystemCapabilitiesInfo(&gNvmDimmDriverNvmDimmConfig,
+      &SystemCapabilitiesInfo);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_ERR_W(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    rc = NVM_ERR_UNKNOWN;
+    goto Finish;
+  }
+
+  if (!SystemCapabilitiesInfo.ChangeMasterPassphraseSupported) {
+    rc = NVM_ERR_OPERATION_NOT_SUPPORTED;
+  }
+
+  if (NVM_SUCCESS != (rc = get_dimm_id(device_uid, &dimm_id, &dimm_handle))) {
+    NVDIMM_ERR("Failed to get dimm ID %d\n", rc);
+    goto Finish;
+  }
+
+  if (new_master_passphrase == NULL || new_master_passphrase_len == 0 || new_master_passphrase[0] == '\0') {
+    rc = NVM_ERR_PASSPHRASE_NOT_PROVIDED;
+    goto Finish;
+  }
+
+  AsciiStrToUnicodeStrS(old_master_passphrase, UnicodeOldMasterPassphrase, PASSPHRASE_BUFFER_SIZE + 1);
+  AsciiStrToUnicodeStrS(new_master_passphrase, UnicodeNewMasterPassphrase, PASSPHRASE_BUFFER_SIZE + 1);
+
+  ReturnCode = gNvmDimmDriverNvmDimmConfig.SetSecurityState(&gNvmDimmDriverNvmDimmConfig, &dimm_id,
+    1, SECURITY_OPERATION_CHANGE_MASTER_PASSPHRASE, UnicodeOldMasterPassphrase,
+    UnicodeNewMasterPassphrase, p_command_status);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_ERR_W(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    rc = p_command_status->GeneralStatus;
+    goto Finish;
+  }
+
+Finish:
+  FREE_HII_POINTER(SystemCapabilitiesInfo.PtrInterleaveFormatsSupported);
+  FreeCommandStatus(&p_command_status);
   return rc;
 }
 
@@ -1673,9 +1708,10 @@ static void get_sensor_units(const enum sensor_type type, struct sensor *psensor
   case SENSOR_POWERONTIME:
     psensor->units = UNIT_SECONDS;
     break;
-  case SENSOR_DIRTYSHUTDOWNS:
+  case SENSOR_LATCHED_DIRTY_SHUTDOWN_COUNT:
   case SENSOR_FWERRORLOGCOUNT:
   case SENSOR_HEALTH:
+  case SENSOR_UNLATCHED_DIRTY_SHUTDOWN_COUNT:
     psensor->units = UNIT_COUNT;
     break;
   }
@@ -1691,24 +1727,24 @@ int fill_sensor_info(DIMM_SENSOR    DimmSensorsSet[SENSOR_TYPE_COUNT],
   } else {
     p_sensor->type = (enum sensor_type)DimmSensorsSet[type].Type;
     p_sensor->current_state = (enum sensor_status)DimmSensorsSet[type].State;
-    p_sensor->settings.lower_critical_threshold = DimmSensorsSet[type].CriticalLowerThreshold;
-    p_sensor->settings.upper_critical_threshold = DimmSensorsSet[type].CriticalUpperThreshold;
-    p_sensor->settings.upper_fatal_threshold = DimmSensorsSet[type].FatalThreshold;
-    p_sensor->settings.upper_noncritical_threshold = DimmSensorsSet[type].NonCriticalThreshold;
+    p_sensor->settings.lower_critical_threshold = DimmSensorsSet[type].ThrottlingStopThreshold;
+    p_sensor->settings.upper_critical_threshold = DimmSensorsSet[type].ThrottlingStartThreshold;
+    p_sensor->settings.upper_fatal_threshold = DimmSensorsSet[type].ShutdownThreshold;
+    p_sensor->settings.upper_noncritical_threshold = DimmSensorsSet[type].AlarmThreshold;
     p_sensor->settings.enabled = DimmSensorsSet[type].Enabled;
     p_sensor->reading = DimmSensorsSet[type].Value;
-    p_sensor->lower_critical_settable = (DimmSensorsSet[type].SettableThresholds & ThresholdLowerCritical) ? TRUE : FALSE;
-    p_sensor->upper_critical_settable = (DimmSensorsSet[type].SettableThresholds & ThresholdUpperCritical) ? TRUE : FALSE;
+    p_sensor->lower_critical_settable = (DimmSensorsSet[type].SettableThresholds & ThrottlingStopThreshold) ? TRUE : FALSE;
+    p_sensor->upper_critical_settable = (DimmSensorsSet[type].SettableThresholds & ThrottlingStartThreshold) ? TRUE : FALSE;
     p_sensor->lower_fatal_settable = FALSE;
-    p_sensor->upper_fatal_settable = (DimmSensorsSet[type].SettableThresholds & ThresholdUpperFatal) ? TRUE : FALSE;
-    p_sensor->lower_noncritical_settable = (DimmSensorsSet[type].SettableThresholds & ThresholdLowerNonCritical) ? TRUE : FALSE;
-    p_sensor->upper_noncritical_settable = (DimmSensorsSet[type].SettableThresholds & ThresholdUpperNonCritical) ? TRUE : FALSE;
-    p_sensor->lower_critical_support = (DimmSensorsSet[type].SupportedThresholds & ThresholdLowerCritical) ? TRUE : FALSE;
+    p_sensor->upper_fatal_settable = (DimmSensorsSet[type].SettableThresholds & ShutdownThreshold) ? TRUE : FALSE;
+    p_sensor->lower_noncritical_settable = (DimmSensorsSet[type].SettableThresholds & AlarmThreshold) ? TRUE : FALSE;
+    p_sensor->upper_noncritical_settable = (DimmSensorsSet[type].SettableThresholds & AlarmThreshold) ? TRUE : FALSE;
+    p_sensor->lower_critical_support = (DimmSensorsSet[type].SupportedThresholds & ThrottlingStopThreshold) ? TRUE : FALSE;
     p_sensor->lower_fatal_support = FALSE;
-    p_sensor->lower_noncritical_support = (DimmSensorsSet[type].SupportedThresholds & ThresholdLowerNonCritical) ? TRUE : FALSE;
-    p_sensor->upper_noncritical_support = (DimmSensorsSet[type].SupportedThresholds & ThresholdUpperNonCritical) ? TRUE : FALSE;
-    p_sensor->upper_fatal_support = (DimmSensorsSet[type].SupportedThresholds & ThresholdUpperFatal) ? TRUE : FALSE;
-    p_sensor->upper_critical_support = (DimmSensorsSet[type].SupportedThresholds & ThresholdUpperCritical) ? TRUE : FALSE;
+    p_sensor->lower_noncritical_support = (DimmSensorsSet[type].SupportedThresholds & AlarmThreshold) ? TRUE : FALSE;
+    p_sensor->upper_noncritical_support = (DimmSensorsSet[type].SupportedThresholds & AlarmThreshold) ? TRUE : FALSE;
+    p_sensor->upper_fatal_support = (DimmSensorsSet[type].SupportedThresholds & ShutdownThreshold) ? TRUE : FALSE;
+    p_sensor->upper_critical_support = (DimmSensorsSet[type].SupportedThresholds & ThrottlingStartThreshold) ? TRUE : FALSE;
     get_sensor_units((enum sensor_type) DimmSensorsSet[type].Type, p_sensor);
     return NVM_SUCCESS;
   }
@@ -2042,7 +2078,7 @@ NVM_API int nvm_get_events(const struct event_filter *p_filter,
 
   event_type_mask = convert_event_filter_data_and_return_event_type(p_filter, dimm_uid, &event_id);
   // Get events form system log
-  bytes_in_event_buffer = nvm_get_events_from_file(event_type_mask, dimm_uid, event_id, events_number, &p_log_entry, &event_buffer);
+  bytes_in_event_buffer = (int)nvm_get_events_from_file(event_type_mask, dimm_uid, event_id, events_number, &p_log_entry, &event_buffer);
   while ((bytes_in_event_buffer > 0) && (events_number > 0)) {
     p_event_message = event_buffer + p_log_entry->message_offset;
     convert_log_entry_to_event(p_log_entry, p_event_message, p_current_event);
@@ -2935,7 +2971,7 @@ NVM_API int nvm_get_debug_logs(struct nvm_log *p_logs, const NVM_UINT32 count)
 
   event_type_mask = SYSTEM_EVENT_TYPE_SEVERITY_SET(SYSTEM_EVENT_DEBUG_MASK);
   // Get events form system log
-  bytes_in_event_buffer = nvm_get_events_from_file(event_type_mask, NULL, SYSTEM_EVENT_NOT_APPLICABLE, events_number, &p_log_entry, &event_buffer);
+  bytes_in_event_buffer = (int)nvm_get_events_from_file(event_type_mask, NULL, SYSTEM_EVENT_NOT_APPLICABLE, events_number, &p_log_entry, &event_buffer);
   while ((bytes_in_event_buffer > 0) && (events_number > 0)) {
     p_event_message = event_buffer + p_log_entry->message_offset;
     convert_debug_log_entry_to_event(p_log_entry, p_event_message, p_current_event);
@@ -2956,44 +2992,6 @@ NVM_API int nvm_get_debug_logs(struct nvm_log *p_logs, const NVM_UINT32 count)
   return rc;
 }
 
-#pragma pack(push)
-#pragma pack(1)
-struct pt_payload_sanitize_dimm_status {
-  unsigned char state;
-  unsigned char progress;
-  unsigned char reserved[126];
-};
-
-/*
- * Passthrough Payload:
- *    Opcode:     0x02h (Get Security Info)
- *    Sub-Opcode: 0x01h (Get Sanitize State)
- * Small Output Payload
- */
-
-struct pt_payload_get_sanitize_state {
-   /*
-    * 0x00 = idle
-    * 0x01 = in progress
-    * 0x02 = completed
-    * 0x03-0xff - Reserved
-    */
-   unsigned char  sanitize_status;
-   /*
-    * Percent complete the DIMM has been sanitized so far, 0-100
-    */
-   unsigned char  sanitize_progress;
-};
-
-#pragma pack(pop)
-
-/* Sanitize Status */
-enum sanitize_status {
-  SAN_IDLE  = 0,
-  SAN_INPROGRESS  = 1,
-  SAN_COMPLETED = 2
-};
-
 NVM_API int nvm_get_jobs(struct job *p_jobs, const NVM_UINT32 count)
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
@@ -3001,10 +2999,11 @@ NVM_API int nvm_get_jobs(struct job *p_jobs, const NVM_UINT32 count)
   FW_CMD *cmd;
   DIMM_INFO *pDimms = NULL;
   UINT32 DimmCount = 0;
-  struct pt_payload_sanitize_dimm_status *p_sanitize_status;
+  PT_OUTPUT_PAYLOAD_FW_LONG_OP_STATUS *pLongOpStatus;
   int job_index = 0;
   unsigned int i;
   int nvm_status = 0;
+  struct Command CmdStub;
 
   if (NULL == p_jobs)
     return NVM_ERR_INVALID_PARAMETER;
@@ -3032,9 +3031,10 @@ NVM_API int nvm_get_jobs(struct job *p_jobs, const NVM_UINT32 count)
   }
 
   ZeroMem(cmd, sizeof(FW_CMD));
-  p_sanitize_status = (struct pt_payload_sanitize_dimm_status *)cmd->OutPayload;
+  pLongOpStatus = (PT_OUTPUT_PAYLOAD_FW_LONG_OP_STATUS *)cmd->OutPayload;
   // Populate the list of DIMM_INFO structures with relevant information
-  ReturnCode = GetDimmList(&gNvmDimmDriverNvmDimmConfig, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
+  CmdStub.pPrintCtx = NULL;
+  ReturnCode = GetDimmList(&gNvmDimmDriverNvmDimmConfig, &CmdStub, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_ERR("Failed to get dimm list %d\n", (int)ReturnCode);
     FreePool(cmd);
@@ -3046,27 +3046,42 @@ NVM_API int nvm_get_jobs(struct job *p_jobs, const NVM_UINT32 count)
       break;
 
     cmd->DimmID = pDimms[i].DimmID; //PassThruCommand needs the dimm_id (not handle)
-    cmd->Opcode = PtGetSecInfo;
-    cmd->SubOpcode = 0x1;
-    cmd->OutputPayloadSize = sizeof(struct pt_payload_sanitize_dimm_status);
+    cmd->Opcode = PtGetLog;
+    cmd->SubOpcode = SubopLongOperationStat;
+    cmd->OutputPayloadSize = sizeof(PT_OUTPUT_PAYLOAD_FW_LONG_OP_STATUS);
 
     if (EFI_SUCCESS == PassThruCommand(cmd, PT_TIMEOUT_INTERVAL)) {
-      if (p_sanitize_status->state != SAN_IDLE) {
-        if (p_sanitize_status->state == SAN_INPROGRESS)
-          p_jobs[i].status = NVM_JOB_STATUS_RUNNING;
-        else if (p_sanitize_status->state == SAN_COMPLETED)
-          p_jobs[i].status = NVM_JOB_STATUS_COMPLETE;
-        else
-          p_jobs[i].status = NVM_JOB_STATUS_UNKNOWN;
-
-        p_jobs[i].type = NVM_JOB_TYPE_SANITIZE;
-        p_jobs[i].percent_complete = p_sanitize_status->progress;
-        memmove(p_jobs[i].uid, pDimms[i].DimmUid, MAX_DIMM_UID_LENGTH);
-        memmove(p_jobs[i].affected_element, pDimms[i].DimmUid, MAX_DIMM_UID_LENGTH);
-        p_jobs[i].result = NULL;
-        job_index++;
+      if (pLongOpStatus->Status == MailboxDeviceBusy) {
+        p_jobs[i].status = NVM_JOB_STATUS_RUNNING;
       }
+      else if (pLongOpStatus->Status == MailboxDataNotSet) {
+        p_jobs[i].status = NVM_JOB_STATUS_NOT_STARTED;
+      }
+      else {
+        p_jobs[i].status = NVM_JOB_STATUS_COMPLETE;
+      }
+
+      if ((pLongOpStatus->CmdOpcode == PtSetSecInfo) && (pLongOpStatus->CmdSubcode == SubopOverwriteDimm)) {
+        p_jobs[i].type = NVM_JOB_TYPE_SANITIZE;
+      }
+      else if ((pLongOpStatus->CmdOpcode == PtSetFeatures) && (pLongOpStatus->CmdSubcode == SubopAddressRangeScrub)) {
+        p_jobs[i].type = NVM_JOB_TYPE_ARS;
+      }
+      else if ((pLongOpStatus->CmdOpcode == PtUpdateFw) && (pLongOpStatus->CmdSubcode == SubopUpdateFw)) {
+        p_jobs[i].type = NVM_JOB_TYPE_FW_UPDATE;
+      }
+      else {
+        p_jobs[i].type = NVM_JOB_TYPE_UNKNOWN;
+      }
+      p_jobs[i].percent_complete = BCD_TO_BYTE(pLongOpStatus->Percent);
     }
+    else {
+      p_jobs[i].status = NVM_JOB_STATUS_UNKNOWN;
+    }
+    memmove(p_jobs[i].uid, pDimms[i].DimmUid, MAX_DIMM_UID_LENGTH);
+    memmove(p_jobs[i].affected_element, pDimms[i].DimmUid, MAX_DIMM_UID_LENGTH);
+    p_jobs[i].result = NULL;
+    job_index++;
   }
   FreePool(cmd);
   return NVM_SUCCESS;
@@ -3144,10 +3159,10 @@ NVM_API int nvm_get_fw_error_log_entry_cmd(
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_ERR_W(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
     rc = NVM_ERR_UNKNOWN;
+    goto Finish;
   }
 
   if (0 == max_errors) {
-  
     rc = NVM_SUCCESS_NO_ERROR_LOG_ENTRY;
   }
 
@@ -3159,7 +3174,7 @@ Finish:
 NVM_API int nvm_get_config_int(const char *param_name, int default_val)
 {
   int val = default_val;
-  int size = sizeof(val);
+  unsigned long long size = sizeof(val);
   EFI_GUID g = { 0x0, 0x0, 0x0, { 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0 } };
   int rc = NVM_SUCCESS;
 
@@ -3167,7 +3182,7 @@ NVM_API int nvm_get_config_int(const char *param_name, int default_val)
     NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
     return rc;
   }
-  preferences_get_var_ascii(param_name, g, (void *)&val, (UINTN *)&size);
+  preferences_get_var_ascii(param_name, g, (void *)&val, &size);
   return val;
 }
 
@@ -3239,7 +3254,7 @@ int get_dimm_id(const char *uid, UINT16 *dimm_id, unsigned int *dimm_handle)
 {
   EFI_STATUS rc;
   CHAR16 uid_wide[MAX_DIMM_UID_LENGTH];
-  int i;
+  unsigned int i;
 
   if (NULL == g_dimms) {
     if (NVM_SUCCESS != nvm_get_number_of_devices(&g_dimm_cnt)) {
@@ -3308,6 +3323,7 @@ void dimm_info_to_device_discovery(DIMM_INFO *p_dimm, struct device_discovery *p
   UnicodeStrToAsciiStr(p_dimm->DimmUid, p_device->uid);
   p_device->lock_state = p_dimm->SecurityState;
   p_device->manageability = p_dimm->ManageabilityState;
+  p_device->master_passphrase_enabled = p_dimm->MasterPassphraseEnabled;
 }
 
 int get_fw_err_log_stats(

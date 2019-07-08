@@ -10,6 +10,11 @@ NAME
 ----
 ipmctl-show-events - Shows DCPMM related events
 
+SYNOPSIS
+--------
+[verse]
+ipmctl show [OPTIONS] -event [TARGETS] [PROPERTIES]
+
 DESCRIPTION
 -----------
 Shows DCPMM related events. The options, targets, and properties can be used to
@@ -17,16 +22,19 @@ filter the events. If no filters are provided, the default is to display up to
 50 events. Refer to the Event Log Specification for detailed information about
 events.
 
-SYNOPSIS
---------
-[verse]
-ipmctl show [OPTIONS] -event [TARGETS] [PROPERTIES]
-
 OPTIONS
 -------
 -h::
 -help::
   Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::
@@ -36,8 +44,8 @@ endif::os_build[]
 
 TARGETS
 -------
--dimm (DimmIDs)::
-  Filter output to events on a specific DCPMM by supplying the dimm target and
+-dimm [(DimmID)]::
+  Filter output to events on a specific DCPMM by optionally supplying the dimm target and
   one DCPMM identifier.
 
 PROPERTIES
@@ -67,7 +75,7 @@ ActionRequired::
 Count::
   Filters output of events limited to the specified count, starting with the
   most recent. Count may be a value from [underline]#1 to 2,147,483,647#.
-  Default = 50
+  Default = 50.
 
 EXAMPLES
 --------

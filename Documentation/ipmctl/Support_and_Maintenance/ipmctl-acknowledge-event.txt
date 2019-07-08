@@ -10,22 +10,29 @@ NAME
 ----
 ipmctl-acknowledge-event - Turns off the flag that signals a corrective action
 on an event
+SYNOPSIS
+--------
+[verse]
+ipmctl set [OPTIONS] -event (EventID) ActionRequired=(0)
 
 DESCRIPTION
 -----------
 Turns off the flag that signals a corrective action on an event. Refer to the
 Event Log Specification for detailed information about individual events.
 
-SYNOPSIS
---------
-[verse]
-ipmctl set [OPTIONS] -event (EventID) ActionRequired=(0)
-
 OPTIONS
 -------
 -h::
 -help::
   Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::

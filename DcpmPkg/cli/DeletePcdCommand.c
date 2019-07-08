@@ -16,37 +16,49 @@
 struct Command DeletePcdCommand =
 {
   DELETE_VERB,                                                                     //!< verb
-  {
-    {FORCE_OPTION_SHORT, FORCE_OPTION, L"", L"", FALSE, ValueEmpty}               //!< options
+  {                                                                                //!< options
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"",HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
+    { L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
+    { L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
+    { L"", LARGE_PAYLOAD_OPTION, L"", L"",HELP_LPAYLOAD_DETAILS_TEXT, FALSE, ValueEmpty},
+    { L"", SMALL_PAYLOAD_OPTION,  L"", L"",HELP_SPAYLOAD_DETAILS_TEXT, FALSE, ValueEmpty},
+    {FORCE_OPTION_SHORT, FORCE_OPTION, L"", L"",HELP_FORCE_DETAILS_TEXT, FALSE, ValueEmpty}
 #ifdef OS_BUILD
-    ,{ OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired }
+    ,{ OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP,HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired }
 #endif
   },
   {                                                                                //!< targets
     {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, TRUE, ValueOptional},
-    {PCD_TARGET, L"", PCD_LSA_TARGET_VALUE, TRUE, ValueRequired}
+    {PCD_TARGET, L"", PCD_CONFIG_TARGET_VALUE
+#ifndef OS_BUILD
+     L"|"
+     PCD_LSA_TARGET_VALUE
+#endif
+    , TRUE, ValueOptional}
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                                         //!< properties
   L"Clear the namespace LSA partition on one or more DIMMs",                       //!< help
-	DeletePcdCmd
+  DeletePcdCmd,
+  TRUE                                                                             //!< enable print control support
 };
 
 
 STATIC
 EFI_STATUS
 ValidatePcdTarget(
-  IN     CHAR16 *pTargetValue
+  IN     CHAR16 *pTargetValue,
+  IN     CHAR16 *pExpectedTargetValue
   )
 {
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
 
   NVDIMM_ENTRY();
 
-  if (pTargetValue == NULL) {
+  if (pTargetValue == NULL || pExpectedTargetValue == NULL) {
     goto Finish;
   }
 
-  if (StrICmp(pTargetValue, PCD_LSA_TARGET_VALUE) != 0) {
+  if (StrICmp(pTargetValue, pExpectedTargetValue) != 0) {
     ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
@@ -75,7 +87,7 @@ DeletePcdCmd(
 {
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   COMMAND_STATUS *pCommandStatus = NULL;
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   UINT16 *pDimmIds = NULL;
   UINT32 DimmIdsCount = 0;
   DIMM_INFO *pDimms = NULL;
@@ -88,6 +100,9 @@ DeletePcdCmd(
   BOOLEAN Force = FALSE;
   BOOLEAN Confirmation = FALSE;
   CHAR16 *pCommandStatusMessage = NULL;
+  UINT32 ConfigIdMask = 0;
+  CHAR16 *pDisplayTargets = NULL;
+  PRINT_CONTEXT *pPrinterCtx = NULL;
 
   NVDIMM_ENTRY();
 
@@ -96,21 +111,26 @@ DeletePcdCmd(
   ZeroMem(DimmStr, sizeof(DimmStr));
 
   if (pCmd == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
     goto Finish;
   }
+
+  pPrinterCtx = pCmd->pPrintCtx;
 
   /** Get config protocol **/
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 
   // Populate the list of DIMM_INFO structures with relevant information
-  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
+  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
   if (EFI_ERROR(ReturnCode)) {
+    if(ReturnCode == EFI_NOT_FOUND) {
+        PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_INFO_NO_FUNCTIONAL_DIMMS);
+    }
     goto Finish;
   }
 
@@ -125,22 +145,37 @@ DeletePcdCmd(
   }
 
   pTargetValue = GetTargetValue(pCmd, DIMM_TARGET);
-  ReturnCode = GetDimmIdsFromString(pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
+  ReturnCode = GetDimmIdsFromString(pCmd, pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
   if (EFI_ERROR(ReturnCode)) {
     goto Finish;
   }
 
   if (!AllDimmsInListAreManageable(pDimms, DimmCount, pDimmIds, DimmIdsCount)){
-    Print(FORMAT_STR_NL, CLI_ERR_UNMANAGEABLE_DIMM);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_UNMANAGEABLE_DIMM);
     ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
   pTargetValue = GetTargetValue(pCmd, PCD_TARGET);
-  ReturnCode = ValidatePcdTarget(pTargetValue);
-  if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_TARGET_PCD);
+  if (EFI_SUCCESS == ValidatePcdTarget(pTargetValue, PCD_LSA_TARGET_VALUE)) {
+#ifdef OS_BUILD
+    ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_TARGET_PCD);
     goto Finish;
+#endif
+    ConfigIdMask |= DELETE_PCD_CONFIG_LSA_MASK;
+  }
+
+  if (EFI_SUCCESS == ValidatePcdTarget(pTargetValue, PCD_CONFIG_TARGET_VALUE)) {
+    ConfigIdMask |= DELETE_PCD_CONFIG_CIN_MASK | DELETE_PCD_CONFIG_COUT_MASK | DELETE_PCD_CONFIG_CCUR_MASK;
+  }
+
+  if (0 == ConfigIdMask) {
+#ifdef OS_BUILD
+    ConfigIdMask |= DELETE_PCD_CONFIG_CIN_MASK | DELETE_PCD_CONFIG_COUT_MASK | DELETE_PCD_CONFIG_CCUR_MASK;
+#else
+    ConfigIdMask |= DELETE_PCD_CONFIG_ALL_MASK;
+#endif
   }
 
   /* If no dimms specified then use all dimms */
@@ -150,7 +185,7 @@ DeletePcdCmd(
 
     if (pDimmIds == NULL) {
       ReturnCode = EFI_OUT_OF_RESOURCES;
-      Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
       goto Finish;
     }
 
@@ -160,9 +195,43 @@ DeletePcdCmd(
     DimmIdsCount = DimmCount;
   }
 
-  pCommandStatusMessage = CatSPrint(NULL, L"Clear LSA namespace partition");
+  if (ConfigIdMask & (DELETE_PCD_CONFIG_CIN_MASK | DELETE_PCD_CONFIG_COUT_MASK | DELETE_PCD_CONFIG_CCUR_MASK)) {
+    pDisplayTargets = CatSPrint(pDisplayTargets, L"Config ");
+    if (NULL == pDisplayTargets) {
+      ReturnCode = EFI_OUT_OF_RESOURCES;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
+      goto Finish;
+    }
+  }
+
+  if (ConfigIdMask & (DELETE_PCD_CONFIG_LSA_MASK)) {
+    if (pDisplayTargets) {
+      pDisplayTargets = CatSPrint(pDisplayTargets, L"& ");
+      if (NULL == pDisplayTargets) {
+        ReturnCode = EFI_OUT_OF_RESOURCES;
+        PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
+        goto Finish;
+      }
+    }
+    pDisplayTargets = CatSPrint(pDisplayTargets, L"LSA ");
+    if (NULL == pDisplayTargets) {
+      ReturnCode = EFI_OUT_OF_RESOURCES;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
+      goto Finish;
+    }
+  }
+
+  pCommandStatusMessage = CatSPrint(NULL, L"Clear " FORMAT_STR L"partition(s)", pDisplayTargets);
 
   if (!Force) {
+    PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, L"WARNING: Modifying the Platform Configuration Data can result in loss of data!");
+    ReturnCode = PromptYesNo(&Confirmation);
+    if (EFI_ERROR(ReturnCode) || !Confirmation) {
+      ReturnCode = EFI_NOT_STARTED;
+      goto Finish;
+    }
+    PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, L"\n");
+
     for (Index = 0; Index < DimmIdsCount; Index++) {
       ResetCmdStatus(pCommandStatus, NVM_ERR_OPERATION_NOT_STARTED);
 
@@ -175,7 +244,7 @@ DeletePcdCmd(
       if (EFI_ERROR(ReturnCode)) {
         goto Finish;
       }
-      Print(L"Clear LSA namespace partition on DIMM (" FORMAT_STR L"). ", DimmStr);
+      PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, L"Clear " FORMAT_STR L"partition(s) on DIMM " FORMAT_STR L".", pDisplayTargets, DimmStr);
       ReturnCode = PromptYesNo(&Confirmation);
       if (EFI_ERROR(ReturnCode) || !Confirmation) {
         ReturnCode = EFI_NOT_STARTED;
@@ -184,23 +253,25 @@ DeletePcdCmd(
     }
   }
 
-  Print(L"\n");
+  PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, L"\n");
 
-  ReturnCode = pNvmDimmConfigProtocol->DeletePcd(pNvmDimmConfigProtocol, pDimmIds, DimmIdsCount,
-                                                  pCommandStatus);
+  ReturnCode = pNvmDimmConfigProtocol->ModifyPcdConfig(pNvmDimmConfigProtocol, pDimmIds, DimmIdsCount, ConfigIdMask, pCommandStatus);
+
   if (EFI_ERROR(ReturnCode)) {
     ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
-    DisplayCommandStatus(L"Clear LSA namespace partition", L" on DIMM ", pCommandStatus);
+    PRINTER_SET_COMMAND_STATUS(pPrinterCtx, ReturnCode, L"Clear partition(s)", L" on", pCommandStatus);
     goto Finish;
   }
 
-  DisplayCommandStatus(pCommandStatusMessage, L" on DIMM ", pCommandStatus);
+  PRINTER_SET_COMMAND_STATUS(pPrinterCtx, ReturnCode, pCommandStatusMessage, L" on", pCommandStatus);
 
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
   FreeCommandStatus(&pCommandStatus);
   FREE_POOL_SAFE(pCommandStatusMessage);
   FREE_POOL_SAFE(pDimmIds);
   FREE_POOL_SAFE(pDimms);
+  FREE_POOL_SAFE(pDisplayTargets);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }

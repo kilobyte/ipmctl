@@ -25,6 +25,7 @@ extern EFI_GUID gIntelDimmConfigVariableGuid;
 #define NVDIMM_CONFIGURATION_INPUT_SIG      SIGNATURE_32('C', 'I', 'N', '_')
 #define NVDIMM_CONFIGURATION_OUTPUT_SIG     SIGNATURE_32('C', 'O', 'U', 'T')
 #define NVDIMM_CONFIGURATION_HEADER_REVISION 1
+#define NVDIMM_CONFIGURATION_HEADER_LOWEST_COMPATIBLE_REVISION 1
 #define NVDIMM_CONFIGURATION_HEADER_OEM_ID "INTEL "
 #define NVDIMM_CONFIGURATION_HEADER_OEM_ID_LEN 6
 #define NVDIMM_CONFIGURATION_HEADER_OEM_TABLE_ID SIGNATURE_64('P', 'U', 'R', 'L', 'E', 'Y', ' ', ' ')
@@ -346,100 +347,6 @@ typedef struct _DIMM_PCD_INFO {
   NVDIMM_CONFIGURATION_HEADER *pConfHeader;
   LABEL_STORAGE_AREA *pLabelStorageArea;
 } DIMM_PCD_INFO;
-
-/**
-  Print Platform Config Data table header
-
-  @param[in] pHeader table header
-**/
-VOID
-PrintPcdTableHeader(
-  IN     TABLE_HEADER *pHeader
-  );
-
-/**
-  Print Platform Config Data PCAT table header
-
-  @param[in] pHeader PCAT table header
-**/
-VOID
-PrintPcdPcatTableHeader(
-  IN     PCAT_TABLE_HEADER *pHeader
-  );
-
-/**
-  Print Platform Config Data Partition Size Change table
-
-  @param[in] pPartitionSizeChange Partition Size Change table
-**/
-VOID
-PrintPcdPartitionSizeChange(
-  IN     NVDIMM_PARTITION_SIZE_CHANGE *pPartitionSizeChange
-  );
-
-/**
-  Print  Platform Config Data Identification Information table
-
-  @param[in] pIdentificationInfo Identification Information table
-  @param[in] PcdConfigTableRevision Revision of the PCD Config tables
-**/
-VOID
-PrintPcdIdentificationInformation(
-  IN     NVDIMM_IDENTIFICATION_INFORMATION *pIdentificationInfo,
-  IN     UINT8 PcdConfigTableRevision
-  );
-
-/**
-  Print Platform Config Data Interleave Information table and its extension tables
-
-  @param[in] pInterleaveInfo Interleave Information table
-  @param[in] PcdConfigTableRevision Revision of the PCD Config tables
-**/
-VOID
-PrintPcdInterleaveInformation(
-  IN     NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo,
-  IN     UINT8 PcdConfigTableRevision
-  );
-
-/**
-  Print Platform Config Data Current Config table and its PCAT tables
-
-  @param[in] pCurrentConfig Current Config table
-**/
-VOID
-PrintPcdCurrentConfig(
-  IN     NVDIMM_CURRENT_CONFIG *pCurrentConfig
-  );
-
-/**
-  Print Platform Config Data Config Input table and its PCAT tables
-
-  @param[in] pConfigInput Config Input table
-**/
-VOID
-PrintPcdConfInput(
-  IN     NVDIMM_PLATFORM_CONFIG_INPUT *pConfigInput
-  );
-
-/**
-  Print Platform Config Data Config Output table and its PCAT tables
-
-  @param[in] pConfigOutput Config Output table
-**/
-VOID
-PrintPcdConfOutput(
-  IN     NVDIMM_PLATFORM_CONFIG_OUTPUT *pConfigOutput
-  );
-
-/**
-   Print Platform Config Data Configuration Header table and all subtables
-
-   @param[in] pConfHeader Configuration Header table
-**/
-VOID
-PrintPcdConfigurationHeader(
-  IN     NVDIMM_CONFIGURATION_HEADER *pConfHeader
-  );
 
 /**
   Free dimm PCD info array

@@ -22,6 +22,8 @@
 #define LOCKED_STATE                    L"Locked"
 #define UNKNOWN_STATE                   L"Unknown"
 
+#define DIMM_ID_STR_DELIM               L", "
+
 /**
   Register the show regions command
 

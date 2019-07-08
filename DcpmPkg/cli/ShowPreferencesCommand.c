@@ -13,6 +13,9 @@
 #include "ShowPreferencesCommand.h"
 #include "Common.h"
 #include "Convert.h"
+#include <ReadRunTimePreferences.h>
+
+#define DS_ROOT_PATH                      L"/Preferences"
 
 /**
   Command syntax definition
@@ -20,11 +23,14 @@
 struct Command ShowPreferencesCommand =
 {
   SHOW_VERB,                                                          //!< verb
-  {
+  {                                                                   //!< options
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"", HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
 #ifdef OS_BUILD
-    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired }
+    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired }
 #else
-    {L"", L"", L"", L"", FALSE, ValueOptional}                         //!< options
+    {L"", L"", L"", L"",L"", FALSE, ValueOptional}
 #endif
   },
   {                                                                   //!< targets
@@ -32,7 +38,8 @@ struct Command ShowPreferencesCommand =
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                            //!< properties
   L"Show user preferences and their current values",                  //!< help
-  ShowPreferences
+  ShowPreferences,
+  TRUE
 };
 
 /**
@@ -51,7 +58,7 @@ ShowPreferences(
   IN     struct Command *pCmd
   )
 {
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   COMMAND_STATUS *pCommandStatus = NULL;
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   DRIVER_PREFERENCES DriverPreferences;
@@ -62,67 +69,69 @@ ShowPreferences(
 #ifdef OS_BUILD
   CHAR16 tempStr[PROPERTY_VALUE_LEN];
 #endif
-  NVDIMM_ENTRY();
+  PRINT_CONTEXT *pPrinterCtx = NULL;
+  CHAR16 *pPath = NULL;
 
-  SetDisplayInfo(L"Preferences", ListView, NULL);
+  NVDIMM_ENTRY();
 
   ZeroMem(&DriverPreferences, sizeof(DriverPreferences));
   ZeroMem(&DisplayPreferences, sizeof(DisplayPreferences));
 
   if (pCmd == NULL) {
-   ReturnCode = EFI_INVALID_PARAMETER;
-   Print(FORMAT_STR_NL,CLI_ERR_NO_COMMAND);
-   goto Finish;
+    ReturnCode = EFI_INVALID_PARAMETER;
+    NVDIMM_DBG("pCmd parameter is NULL.\n");
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
+    goto Finish;
   }
+
+  pPrinterCtx = pCmd->pPrintCtx;
 
   ReturnCode = InitializeCommandStatus(&pCommandStatus);
   if (EFI_ERROR(ReturnCode)) {
-   Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+   PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
+   goto Finish;
   }
 
   /** Need NvmDimmConfigProtocol **/
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-   Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
    ReturnCode = EFI_NOT_FOUND;
+   PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
    goto Finish;
   }
 
   ReturnCode = pNvmDimmConfigProtocol->GetDriverPreferences(pNvmDimmConfigProtocol, &DriverPreferences, pCommandStatus);
   if (EFI_ERROR(ReturnCode)) {
     ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
-    DisplayCommandStatus(L"Show preferences", L" on", pCommandStatus);
+    PRINTER_SET_COMMAND_STATUS(pCmd->pPrintCtx, ReturnCode, L"Show preferences", L" on", pCommandStatus);
     goto Finish;
   }
 
-  ReturnCode = ReadRunTimeCliDisplayPreferences(&DisplayPreferences);
+  ReturnCode = ReadRunTimePreferences(&DisplayPreferences, DISPLAY_CLI_INFO);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_DISPLAY_PREFERENCES_RETRIEVE);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_DISPLAY_PREFERENCES_RETRIEVE);
     goto Finish;
   }
 
-  Print(FORMAT_STR L"=" FORMAT_STR_NL, CLI_DEFAULT_DIMM_ID_PROPERTY, GetDimmIDStr(DisplayPreferences.DimmIdentifier));
-  Print(FORMAT_STR L"=" FORMAT_STR_NL, CLI_DEFAULT_SIZE_PROPERTY, GetDisplaySizeStr(DisplayPreferences.SizeUnit));
+  PRINTER_BUILD_KEY_PATH(pPath, DS_ROOT_PATH);
+
+  PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, CLI_DEFAULT_DIMM_ID_PROPERTY, GetDimmIDStr(DisplayPreferences.DimmIdentifier));
+  PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, CLI_DEFAULT_SIZE_PROPERTY, GetDisplaySizeStr(DisplayPreferences.SizeUnit));
 
   if (DriverPreferences.ImcInterleaving == DEFAULT_IMC_INTERLEAVE_SIZE &&
      DriverPreferences.ChannelInterleaving == DEFAULT_CHANNEL_INTERLEAVE_SIZE)
   {
-    Print(FORMAT_STR L"=" FORMAT_STR_NL,
-      APP_DIRECT_SETTINGS_PROPERTY,
-      PROPERTY_VALUE_RECOMMENDED);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  APP_DIRECT_SETTINGS_PROPERTY, PROPERTY_VALUE_RECOMMENDED);
   } else {
     pChannelInterleaving = ParseChannelInterleavingValue(DriverPreferences.ChannelInterleaving);
     pImcInterleaving = ParseImcInterleavingValue(DriverPreferences.ImcInterleaving);
 
     if (pChannelInterleaving == NULL || pImcInterleaving == NULL) {
-      Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
       ReturnCode = EFI_DEVICE_ERROR;
+      PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     } else {
-      Print(FORMAT_STR L"=" FORMAT_STR L"_" FORMAT_STR_NL,
-        APP_DIRECT_SETTINGS_PROPERTY,
-        pImcInterleaving,
-        pChannelInterleaving);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, APP_DIRECT_SETTINGS_PROPERTY, FORMAT_STR L"_" FORMAT_STR_NL, pImcInterleaving, pChannelInterleaving);
     }
   }
 
@@ -138,66 +147,51 @@ ShowPreferences(
   }
 
   if (pAppDirectGranularity == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_DEVICE_ERROR;
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
   } else {
-    Print(FORMAT_STR L"=" FORMAT_STR_NL,
-      APP_DIRECT_GRANULARITY_PROPERTY,
-      pAppDirectGranularity);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  APP_DIRECT_GRANULARITY_PROPERTY, pAppDirectGranularity);
   }
 
 #ifdef OS_BUILD
   ReturnCode = GET_VARIABLE_STR(PERFORMANCE_MONITOR_ENABLED, gNvmDimmConfigProtocolGuid, 0, tempStr);
   if (!EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR L"=" FORMAT_STR_NL,
-      PERFORMANCE_MONITOR_ENABLED,
-      tempStr);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  PERFORMANCE_MONITOR_ENABLED, tempStr);
   }
 
   ReturnCode = GET_VARIABLE_STR(PERFORMANCE_MONITOR_INTERVAL_MINUTES, gNvmDimmConfigProtocolGuid, 0, tempStr);
   if (!EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR L"=" FORMAT_STR_NL,
-      PERFORMANCE_MONITOR_INTERVAL_MINUTES,
-      tempStr);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  PERFORMANCE_MONITOR_INTERVAL_MINUTES, tempStr);
   }
 
   ReturnCode = GET_VARIABLE_STR(EVENT_MONITOR_ENABLED, gNvmDimmConfigProtocolGuid, 0, tempStr);
   if (!EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR L"=" FORMAT_STR_NL,
-      EVENT_MONITOR_ENABLED,
-      tempStr);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  EVENT_MONITOR_ENABLED, tempStr);
   }
 
   ReturnCode = GET_VARIABLE_STR(EVENT_MONITOR_INTERVAL_MINUTES, gNvmDimmConfigProtocolGuid, 0, tempStr);
   if (!EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR L"=" FORMAT_STR_NL,
-      EVENT_MONITOR_INTERVAL_MINUTES,
-      tempStr);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  EVENT_MONITOR_INTERVAL_MINUTES, tempStr);
   }
 
   ReturnCode = GET_VARIABLE_STR(EVENT_LOG_MAX, gNvmDimmConfigProtocolGuid, 0, tempStr);
   if (!EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR L"=" FORMAT_STR_NL,
-      EVENT_LOG_MAX,
-      tempStr);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  EVENT_LOG_MAX, tempStr);
   }
   ReturnCode = GET_VARIABLE_STR(DBG_LOG_MAX, gNvmDimmConfigProtocolGuid, 0, tempStr);
   if (!EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR L"=" FORMAT_STR_NL,
-      DBG_LOG_MAX,
-      tempStr);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  DBG_LOG_MAX, tempStr);
   }
 
   ReturnCode = GET_VARIABLE_STR(DBG_LOG_LEVEL, gNvmDimmConfigProtocolGuid, 0, tempStr);
   if (!EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR L"=" FORMAT_STR_NL,
-       DBG_LOG_LEVEL,
-       tempStr);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  DBG_LOG_LEVEL, tempStr);
   }
-
 #endif
 
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
+  FREE_POOL_SAFE(pPath);
   FreeCommandStatus(&pCommandStatus);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
@@ -222,4 +216,3 @@ RegisterShowPreferencesCommand(
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
-

@@ -31,7 +31,7 @@ EFIAPI
 GetDimmSecurityState(
   IN     DIMM *pDimm,
   IN     UINT64 Timeout,
-     OUT UINT8 *pSecurityState
+     OUT UINT32 *pSecurityState
   )
 {
   FW_CMD *pPassThruCommand = NULL;
@@ -60,13 +60,14 @@ GetDimmSecurityState(
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Failed on PassThru.");
     if FW_ERROR(pPassThruCommand->Status) {
-      ReturnCode = MatchFwReturnCode(pPassThruCommand->Status);
+      FW_CMD_ERROR_TO_EFI_STATUS(pPassThruCommand, ReturnCode);
     }
     goto FinishFreeMem;
   }
 
   pSecurityPayload = (PT_GET_SECURITY_PAYLOAD*) &pPassThruCommand->OutPayload;
-  *pSecurityState = pSecurityPayload->SecurityStatus;
+
+  *pSecurityState = pSecurityPayload->SecurityStatus.AsUint32;
   ReturnCode = EFI_SUCCESS;
 
 FinishFreeMem:
@@ -137,7 +138,7 @@ SetDimmSecurityState(
   if(EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Failed on PassThru");
     if (FW_ERROR(pPassThruCommand->Status)) {
-      ReturnCode = MatchFwReturnCode(pPassThruCommand->Status);
+      FW_CMD_ERROR_TO_EFI_STATUS(pPassThruCommand, ReturnCode);
     }
     goto FinishFreeMem;
   }
@@ -159,7 +160,7 @@ Finish:
 **/
 VOID
 ConvertSecurityBitmask(
-  IN     UINT8 SecurityFlag,
+  IN     UINT32 SecurityFlag,
      OUT UINT8 *pSecurityState
   )
 {
@@ -171,11 +172,15 @@ ConvertSecurityBitmask(
 
   if (SecurityFlag & SECURITY_MASK_NOT_SUPPORTED) {
     *pSecurityState = SECURITY_NOT_SUPPORTED;
-  } else if (SecurityFlag & SECURITY_MASK_FROZEN) {
+  }
+  else if  (SecurityFlag & SECURITY_MASK_FROZEN){
     *pSecurityState = SECURITY_FROZEN;
-  } else if (SecurityFlag & SECURITY_MASK_ENABLED) {
+  }
+  else if (SecurityFlag & SECURITY_MASK_ENABLED) {
     if (SecurityFlag & SECURITY_MASK_COUNTEXPIRED) {
       *pSecurityState = SECURITY_PW_MAX;
+    } else if (SecurityFlag & SECURITY_MASK_MASTER_COUNTEXPIRED) {
+      *pSecurityState = SECURITY_MASTER_PW_MAX;
     } else if (SecurityFlag & SECURITY_MASK_LOCKED) {
       *pSecurityState = SECURITY_LOCKED;
     } else {
@@ -198,7 +203,7 @@ ConvertSecurityBitmask(
 **/
 BOOLEAN
 IsConfiguringAllowed(
-  IN     UINT8 SecurityFlag
+  IN     UINT32 SecurityFlag
   )
 {
   BOOLEAN IsAllowed = FALSE;
@@ -223,15 +228,12 @@ IsConfiguringAllowed(
 **/
 BOOLEAN
 IsConfiguringForCreateGoalAllowed(
-  IN     UINT8 SecurityFlag
+  IN     UINT32 SecurityFlag
   )
 {
     BOOLEAN IsAllowed = FALSE;
-    UINT8 SecurityState;
 
-    ZeroMem(&SecurityState, sizeof(SecurityState));
-    ConvertSecurityBitmask(SecurityFlag, &SecurityState);
-    IsAllowed = (SECURITY_DISABLED == SecurityState) ?	TRUE : FALSE;
+    IsAllowed = !(SecurityFlag & SECURITY_MASK_ENABLED);
 
     return IsAllowed;
 

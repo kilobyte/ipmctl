@@ -27,7 +27,7 @@ EFI_STATUS preferences_init(IN CONST char *p_filename)
       g_p_filename = p_filename;
     }
   }
-  gIni = nvm_ini_load_dictionary(g_p_filename);
+  nvm_ini_load_dictionary(&gIni, g_p_filename);
 
   if (NULL == gIni)
   {
@@ -39,14 +39,14 @@ EFI_STATUS preferences_init(IN CONST char *p_filename)
 
 EFI_STATUS preferences_uninit(void)
 {
-  nvm_ini_dump_to_file(gIni, g_p_filename);
+  nvm_ini_dump_to_file(gIni, g_p_filename, FALSE);
   nvm_ini_free_dictionary(gIni);
   return EFI_SUCCESS;
 }
 
 EFI_STATUS preferences_flush_the_file(void)
 {
-  nvm_ini_dump_to_file(gIni, g_p_filename);
+  nvm_ini_dump_to_file(gIni, g_p_filename, TRUE);
   return EFI_SUCCESS;
 }
 
@@ -102,9 +102,9 @@ EFI_STATUS preferences_get_string_ascii(IN CONST char    *name,
 }
 
 EFI_STATUS preferences_get_var(IN CONST CHAR16    *name,
-	IN CONST EFI_GUID  guid,
-	OUT VOID           *value,
-	OUT UINTN          *size OPTIONAL)
+  IN CONST EFI_GUID  guid,
+  OUT VOID           *value,
+  OUT UINTN          *size OPTIONAL)
 {
 	char tmp[256];
 	UnicodeStrToAsciiStr(name, tmp);
@@ -112,9 +112,9 @@ EFI_STATUS preferences_get_var(IN CONST CHAR16    *name,
 }
 
 EFI_STATUS preferences_get_var_string_wide(IN CONST CHAR16    *name,
-	IN CONST EFI_GUID  guid,
-	OUT CHAR16         *value,
-	OUT UINTN          *size OPTIONAL)
+  IN CONST EFI_GUID  guid,
+  OUT CHAR16         *value,
+  OUT UINTN          *size OPTIONAL)
 {
 	char key[256];
 	const char * ascii_str;

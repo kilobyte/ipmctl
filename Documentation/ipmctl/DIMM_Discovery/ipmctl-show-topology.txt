@@ -10,15 +10,15 @@ NAME
 ----
 ipmctl-show-topology - Shows the topology of the memory installed
 
-DESCRIPTION
------------
-Shows the topology of the memory installed in the host server. Use the command
-ipmctl-show-device to view more detailed information about a DCPMM.
-
 SYNOPSIS
 --------
 [verse]
 ipmctl show [OPTIONS] -topology [TARGETS]
+
+DESCRIPTION
+-----------
+Shows the topology of the memory installed in the host server. Use the command
+ipmctl-show-device to view more detailed information about a DCPMM.
 
 OPTIONS
 -------
@@ -39,6 +39,14 @@ NOTE: The all and display options are exclusive and may not be used together.
 -help::
   Displays help for the command.
 
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
+
 ifdef::os_build[]
 -o (text|nvmxml)::
 -output (text|nvmxml)::
@@ -53,15 +61,15 @@ endif::os_build[]
 
 TARGETS
 -------
--dimm (DimmIDs)::
-  Restricts output to specific DIMMs by supplying the DIMM target and one or
+-dimm [(DimmIDs)]::
+  Restricts output to specific DIMMs by optionally supplying the DIMM target and one or
   more comma-separated DIMM identifiers. The default is to display all DIMMs.
 
 -socket (SocketIDs)::
   Restricts output to the DIMMs installed on specific sockets by supplying the
   socket target and one or more comma-separated socket identifiers. The default
   is to display all sockets.
-  
+
 NOTE: If ACPI PMTT table is not present, then DDR4 memory will not be
 displayed in the filtered socket list.
 
@@ -80,7 +88,7 @@ MemoryType::
   (Default) The DIMM type. One of:
   - Unknown
   - DDR4
-  - DCPMM
+  - Logical Non-volatile Device
 
 Capacity::
   (Default) The raw capacity of the DIMM as reported in the SMBIOS Type 17

@@ -5,6 +5,7 @@
 
 #include "NvmDimmCli.h"
 #include <Uefi.h>
+#include <Library/UefiShellLib/UefiShellLib.h>
 #include <Library/UefiApplicationEntryPoint.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/MemoryAllocationLib.h>
@@ -29,7 +30,6 @@
 #include "ShowAcpiCommand.h"
 #include "ShowSmbiosCommand.h"
 #include "LoadCommand.h"
-#include "LoadRecoverCommand.h"
 #include "SetSensorCommand.h"
 #include "ShowSensorCommand.h"
 #include "CreateGoalCommand.h"
@@ -57,6 +57,25 @@
 #include "ShowHostServerCommand.h"
 #include "ShowPerformanceCommand.h"
 #include "ShowCmdAccessPolicyCommand.h"
+#include "DeletePcdCommand.h"
+#include <PbrDcpmm.h>
+#include "StartSessionCommand.h"
+#include "StopSessionCommand.h"
+#include "DumpSessionCommand.h"
+#include "ShowSessionCommand.h"
+#include "LoadSessionCommand.h"
+#ifdef OS_BUILD
+#include <Protocol/Driver/DriverBinding.h>
+#else
+#include <Protocol/DriverBinding.h>
+#endif
+
+#if _BullseyeCoverage
+#ifndef OS_BUILD
+extern int cov_dumpData(void);
+#endif // !OS_BUILD
+#endif // _BullseyeCoverage
+
 #ifdef __MFG__
 #include <mfg/MfgCommands.h>
 #endif
@@ -66,10 +85,14 @@
 #include "DumpSupportCommand.h"
 #include <stdio.h>
 extern void nvm_current_cmd(struct Command Command);
+extern BOOLEAN ConfigIsDdrtProtocolDisabled();
+extern BOOLEAN ConfigIsLargePayloadDisabled();
 #else
 #include "DeletePcdCommand.h"
-EFI_GUID gNvmDimmConfigProtocolGuid = EFI_DCPMM_CONFIG_PROTOCOL_GUID;
+EFI_GUID gNvmDimmConfigProtocolGuid = EFI_DCPMM_CONFIG2_PROTOCOL_GUID;
 EFI_GUID gIntelDimmConfigVariableGuid = INTEL_DIMM_CONFIG_VARIABLE_GUID;
+EFI_GUID gIntelDimmPbrTagIdVariableguid = INTEL_DIMM_PBR_TAGID_VARIABLE_GUID;
+EFI_GUID gNvmDimmPbrProtocolGuid = EFI_DCPMM_PBR_PROTOCOL_GUID;
 #endif
 EFI_GUID gNvmDimmDriverHealthGuid = EFI_DRIVER_HEALTH_PROTOCOL_GUID;
 
@@ -78,8 +101,12 @@ extern EFI_SHELL_INTERFACE *mEfiShellInterface;
 #ifdef OS_BUILD
 EFI_HANDLE gNvmDimmCliHiiHandle = (EFI_HANDLE)0x1;
 extern EFI_SHELL_PARAMETERS_PROTOCOL gOsShellParametersProtocol;
+extern EFI_DRIVER_BINDING_PROTOCOL gNvmDimmDriverDriverBinding;
 #else
 EFI_HANDLE gNvmDimmCliHiiHandle = NULL;
+#ifndef MDEPKG_NDEBUG
+extern volatile   UINT32  _gPcd_BinaryPatch_PcdDebugPrintErrorLevel;
+#endif //MDEPKG_NDEBUG
 #endif
 
 #define NVMDIMM_CLI_HII_GUID \
@@ -89,6 +116,12 @@ EFI_GUID gNvmDimmCliHiiGuid = NVMDIMM_CLI_HII_GUID;
 
 /* Local fns */
 static EFI_STATUS showVersion(struct Command *pCmd);
+static EFI_STATUS GetPbrMode(UINT32 *Mode);
+static EFI_STATUS SetPbrTag(CHAR16 *pName, CHAR16 *pDescription);
+static EFI_STATUS ResetPbrSession(UINT32 TagId);
+#ifdef OS_BUILD
+static EFI_STATUS SetDefaultProtocolAndPayloadSizeOptions();
+#endif
 
 /**
   Supported commands
@@ -98,10 +131,11 @@ struct Command HelpCommand =
 {
   HELP_VERB,                                  //!< verb
   {
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"",HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
 #ifdef OS_BUILD
-    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired }, //!< options
+    {OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP,HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired }, //!< options
 #endif // OS_BUILD
-    {L"", L"", L"", L"", FALSE, ValueOptional}
+    {L"", L"", L"", L"",L"", FALSE, ValueOptional}
   }, //!< options
   {{L"", L"", L"", FALSE, ValueOptional}},      //!< targets
   {{L"", L"", L"", FALSE, ValueOptional}},      //!< properties
@@ -116,8 +150,9 @@ struct Command VersionCommand =
 {
   VERSION_VERB,                               //!< verb
   {
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"",HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
 #ifdef OS_BUILD
-    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired }
+    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP,HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired }
 #else
     {L"", L"", L"", L"", FALSE, ValueOptional}                         //!< options
 #endif
@@ -125,10 +160,11 @@ struct Command VersionCommand =
   {{L"", L"", L"", FALSE, ValueOptional}},      //!< targets
   {{L"", L"", L"", FALSE}},                     //!< properties
   L"Display the CLI version.",                //!< help
-  showVersion                                 //!< run function
+  showVersion,                                 //!< run function
+  TRUE
 };
 
-/*
+/*                                          ./
  * The entry point for the application.
  *
  * @param[in] ImageHandle    The firmware allocated handle for the EFI image.
@@ -152,20 +188,64 @@ UefiMain(
   BOOLEAN MoreInput = TRUE;
   UINTN Argc = 0;
   CHAR16 **ppArgv = NULL;
+  UINT32 NextId = 0;
+
 #ifndef OS_BUILD
   BOOLEAN Ascii = FALSE;
   SHELL_FILE_HANDLE StdIn = NULL;
   UINTN HandleCount = 0;
   EFI_HANDLE *pHandleBuffer = NULL;
+  CHAR16 *pCurrentDriverName;
+  EFI_COMPONENT_NAME_PROTOCOL *pComponentName = NULL;
+#else
+  EFI_HANDLE FakeBindHandle = (EFI_HANDLE)0x1;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
+#endif
+  UINT32 Mode;
+  CHAR16 *pTagDescription = NULL;
+
+  //get the current pbr mode (playback/record/normal)
+  Rc = GetPbrMode(&Mode);
+  if (EFI_ERROR(Rc) && (EFI_NOT_FOUND != Rc)) {
+    goto Finish;
+  }
+
+  if (Mode == PBR_RECORD_MODE) {
+    Print(L"Warning - Executing in recording mode!\n\n");
+  }
+  else if (Mode == PBR_PLAYBACK_MODE) {
+    Print(L"Warning - Executing in playback mode!\n\n");
+  }
+
+#ifndef OS_BUILD
+#ifndef MDEPKG_NDEBUG
+  /** For UEFI pre-parse CLI arguments for verbose logging **/
+  if (gEfiShellParametersProtocol != NULL) {
+    for (Index = 1; Index < gEfiShellParametersProtocol->Argc; Index++) {
+      if (0 == StrICmp(gEfiShellParametersProtocol->Argv[Index], VERBOSE_OPTION)
+        || 0 == StrICmp(gEfiShellParametersProtocol->Argv[Index], VERBOSE_OPTION_SHORT)) {
+        PatchPcdSet32(PcdDebugPrintErrorLevel, DEBUG_VERBOSE);
+      }
+    }
+  }
+#endif
+#endif
+
+#ifdef OS_BUILD
+  Rc = SetDefaultProtocolAndPayloadSizeOptions();
+  if (EFI_ERROR(Rc)) {
+    goto Finish;
+  }
 #endif
 
   NVDIMM_ENTRY();
-
+  Index = 0;
   ZeroMem(&Input, sizeof(Input));
   ZeroMem(&Command, sizeof(Command));
 
   /** Print runtime function address to ease calculation of GDB symbol loading offset. **/
-  NVDIMM_DBG_CLEAN("NvmDimmCliEntryPoint=0x%x\n", (UINT64)&UefiMain);
+  NVDIMM_DBG_CLEAN("NvmDimmCliEntryPoint=0x%016lx\n", &UefiMain);
 
 #if !defined(MDEPKG_NDEBUG) && !defined(_MSC_VER)
   /**
@@ -206,7 +286,7 @@ UefiMain(
     goto Finish;
   }
 
-	gNvmDimmCliHiiHandle = HiiAddPackages(&gNvmDimmCliHiiGuid, ImageHandle, ipmctlStrings, NULL);
+  gNvmDimmCliHiiHandle = HiiAddPackages(&gNvmDimmCliHiiGuid, ImageHandle, ipmctlStrings, NULL);
   if (gNvmDimmCliHiiHandle == NULL) {
     NVDIMM_WARN("Unable to add string package to Hii");
     goto Finish;
@@ -223,6 +303,28 @@ UefiMain(
     Rc = EFI_NOT_FOUND;
     goto Finish;
   }
+
+  Rc = OpenNvmDimmProtocol(
+    gEfiComponentNameProtocolGuid,
+    (VOID**)&pComponentName, NULL);
+  if (EFI_ERROR(Rc)) {
+    NVDIMM_DBG("Failed to open the Component Name protocol, error = " FORMAT_EFI_STATUS "", Rc);
+    goto Finish;
+  }
+
+  //Get current driver name
+  Rc = pComponentName->GetDriverName(
+    pComponentName, "eng", &pCurrentDriverName);
+  if (EFI_ERROR(Rc)) {
+    NVDIMM_DBG("Could not get the driver name, error = " FORMAT_EFI_STATUS "", Rc);
+    goto Finish;
+  }
+
+  //Compare to the CLI version and print warning if there is a version mismatch
+  if (StrCmp(PMEM_MODULE_NAME NVMDIMM_VERSION_STRING L" Driver", pCurrentDriverName) != 0) {
+    Print(FORMAT_STR_NL, CLI_WARNING_CLI_DRIVER_VERSION_MISMATCH);
+  }
+
 #else
   Argc = gEfiShellParametersProtocol->Argc;
   ppArgv = gEfiShellParametersProtocol->Argv;
@@ -261,7 +363,7 @@ UefiMain(
           }
         }
         FillCommandInput(pLine, &Input);
-        FREE_POOL_SAFE(pLine);
+
 
         if (Input.ppTokens == NULL) {
           Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
@@ -292,7 +394,6 @@ UefiMain(
 
       /* parse the line into individual tokens */
       FillCommandInput(pLine, &Input);
-      FreePool(pLine);
 
       if (Input.ppTokens == NULL) {
         Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
@@ -309,17 +410,63 @@ UefiMain(
     /* run the command */
     Rc = Parse(&Input, &Command);
 
+    if (PBR_NORMAL_MODE != Mode && !Command.ExcludeDriverBinding) {
+      if (PBR_RECORD_MODE == Mode) {
+        pTagDescription = CatSPrint(NULL, L"%d", Rc);
+        SetPbrTag(pLine, pTagDescription);
+        FREE_POOL_SAFE(pTagDescription);
+      }
+      else {
+        //CLI is responsible for tracking the tagid.
+        //The id is saved to a non-persistent volatile store, and is incremented
+        //after each CLI cmd invocation.  Given we have the tagid that should
+        //be executed next, explicitely reset the pbr session to that id before
+        //running the cmd.
+        PbrDcpmmDeserializeTagId(&NextId, 0);
+        ResetPbrSession(NextId);
+        PbrDcpmmSerializeTagId(NextId + 1);
+      }
+    }
+
     if (!EFI_ERROR(Rc)) {
       /* parse success, now run the command */
       if (Command.ShowHelp) {
         showHelp(&Command);
       } else {
-#ifdef OS_BUILD //WA, remove after all CMDs impl "Show Interface"
-        if (Command.UpdateCmdCtx) {
+#ifdef OS_BUILD //WA, remove after all CMDs convert to "unified printing" mechanism
+        if (Command.PrinterCtrlSupported) {
           gOsShellParametersProtocol.StdOut = stdout;
         }
 #endif
+
+#ifdef OS_BUILD
+        if (!Command.ExcludeDriverBinding) {
+          Rc = NvmDimmDriverDriverBindingStart(&gNvmDimmDriverDriverBinding, FakeBindHandle, NULL);
+          if (EFI_UNSUPPORTED == Rc) {
+            Rc = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
+            if (EFI_ERROR(Rc)) {
+              goto Finish;
+            }
+
+            Rc = pNvmDimmConfigProtocol->GetFisTransportAttributes(pNvmDimmConfigProtocol, &pAttribs);
+            if (EFI_ERROR(Rc)) {
+              goto Finish;
+            }
+
+            if (IS_SMBUS_ENABLED(pAttribs)) {
+              Print(CLI_ERR_TRANSPORT_PROTOCOL_UNSUPPORTED_ON_OS, PROTOCOL_OPTION_SMBUS, PROTOCOL_OPTION_DDRT);
+            }
+          }
+        }
+#endif
+
         Rc = ExecuteCmd(&Command);
+
+#ifdef OS_BUILD
+        if (!Command.ExcludeDriverBinding) {
+          NvmDimmDriverDriverBindingStop(&gNvmDimmDriverDriverBinding, FakeBindHandle, 0, NULL);
+        }
+#endif
       }
       if (EFI_ERROR(Rc)) {
         MoreInput = FALSE; /* stop on failures */
@@ -342,14 +489,18 @@ FinishAfterRegCmds:
   FreeCommands();
 
 Finish:
-
+  FREE_POOL_SAFE(pLine);
   if (gNvmDimmCliHiiHandle != NULL) {
     HiiRemovePackages(gNvmDimmCliHiiHandle);
   }
-  /** Bullseye dump here **/
+#if _BullseyeCoverage
+#ifndef OS_BUILD
+  cov_dumpData();
+#endif // !OS_BUILD
+#endif // _BullseyeCoverage
 #if !defined(MDEPKG_NDEBUG) && !defined(_MSC_VER)
   /**
-  Disable recording AllocatePool and FreePool occurences, print list and clear it
+  Disable recording AllocatePool and FreePool occurrences, print list and clear it
   **/
   FlushPointerTrace((CHAR16 *)__WFUNCTION__);
 #endif
@@ -474,13 +625,40 @@ RegisterCommands(
   if (EFI_ERROR(Rc)) {
     goto done;
   }
+#endif
+  Rc = RegisterStartSessionCommand();
+  if (EFI_ERROR(Rc)) {
+    goto done;
+  }
+
+  Rc = RegisterStopSessionCommand();
+  if (EFI_ERROR(Rc)) {
+    goto done;
+  }
+
+
+  Rc = RegisterDumpSessionCommand();
+  if (EFI_ERROR(Rc)) {
+    goto done;
+  }
+
+  Rc = RegisterShowSessionCommand();
+  if (EFI_ERROR(Rc)) {
+    goto done;
+  }
+
+  Rc = RegisterLoadSessionCommand();
+  if (EFI_ERROR(Rc)) {
+    goto done;
+  }
+
 
   Rc = RegisterDeletePcdCommand();
   if (EFI_ERROR(Rc)) {
     goto done;
   }
 
-#endif
+
   Rc = RegisterShowErrorCommand();
   if (EFI_ERROR(Rc)) {
     goto done;
@@ -551,13 +729,10 @@ RegisterCommands(
     goto done;
   }
 
-  /* Debug Utility commands */
-#ifndef MDEPKG_NDEBUG
   Rc = RegisterShowCmdAccessPolicyCommand();
   if (EFI_ERROR(Rc)) {
     goto done;
   }
-#endif
 
 #ifdef OS_BUILD
   Rc = RegisterShowHostServerCommand();
@@ -595,11 +770,6 @@ RegisterCommands(
 #endif // OS_BUILD
 
 #ifndef OS_BUILD
-  Rc = RegisterLoadRecoverCommand();
-  if (EFI_ERROR(Rc)) {
-    goto done;
-  }
-
   /* Debug Utility commands */
 #ifndef MDEPKG_NDEBUG
   Rc = registerShowSmbiosCommand();
@@ -636,8 +806,12 @@ EFI_STATUS showHelp(struct Command *pCmd)
   NVDIMM_ENTRY();
 
   if ((pCmd == NULL) || (StrCmp(pCmd->verb, HELP_VERB) == 0 && pCmd->ShowHelp == FALSE)) {
+#ifndef OS_BUILD
+      //Page break option only for UEFI
+          ShellSetPageBreakMode(TRUE);
+#endif
     Print(FORMAT_STR_SPACE FORMAT_STR_NL_NL L"    Usage: " FORMAT_STR L" <verb>[<options>][<targets>][<properties>]\n\nCommands:\n", PRODUCT_NAME, APP_DESCRIPTION, EXE_NAME);
-    pHelp = getCommandHelp(NULL, FALSE);
+    pHelp = getOverallCommandHelp();
   } else {
     pHelp = getCommandHelp(pCmd, TRUE);
   }
@@ -651,38 +825,245 @@ EFI_STATUS showHelp(struct Command *pCmd)
   return ReturnCode;
 }
 
+#define DS_ROOT_PATH                          L"/SoftwareList"
+#define DS_SOFTWARE_PATH                      L"/SoftwareList/Software"
+#define DS_SOFTWARE_INDEX_PATH                L"/SoftwareList/Software[%d]"
+
+
+PRINTER_LIST_ATTRIB ShowVersionListAttributes =
+{
+ {
+    {
+      L"Software",                            //GROUP LEVEL TYPE
+      L"$(Component) Version $(Version)",     //NULL or GROUP LEVEL HEADER
+      NULL,                                   //NULL or KEY VAL FORMAT STR
+      L"Component;Version"                    //NULL or IGNORE KEY LIST (K1;K2)
+    }
+  }
+};
+
+PRINTER_DATA_SET_ATTRIBS ShowVersionDataSetAttribs =
+{
+  &ShowVersionListAttributes,
+  NULL
+};
+
+/*
+ * Set a PBR session tag
+ */
+EFI_STATUS SetPbrTag(CHAR16 *pName, CHAR16 *pDescription) {
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  EFI_DCPMM_PBR_PROTOCOL *pNvmDimmPbrProtocol = NULL;
+
+
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmPbrProtocolGuid, (VOID **)&pNvmDimmPbrProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    ReturnCode = EFI_NOT_FOUND;
+    Print(CLI_ERR_OPENING_PBR_PROTOCOL);
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmPbrProtocol->PbrSetTag(PBR_DCPMM_CLI_SIG, pName, pDescription, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    Print(CLI_ERR_FAILED_TO_SET_SESSION_TAG);
+    goto Finish;
+  }
+Finish:
+  return ReturnCode;
+}
+
+/*
+ * Get the current PBR session mode (playback/record)
+ */
+EFI_STATUS GetPbrMode(UINT32 *Mode) {
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  EFI_DCPMM_PBR_PROTOCOL *pNvmDimmPbrProtocol = NULL;
+
+  *Mode = PBR_NORMAL_MODE;
+
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmPbrProtocolGuid, (VOID **)&pNvmDimmPbrProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    ReturnCode = EFI_NOT_FOUND;
+    NVDIMM_DBG("Failed to open the PBR protocol, error = " FORMAT_EFI_STATUS, ReturnCode);
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmPbrProtocol->PbrGetMode(Mode);
+  if (EFI_ERROR(ReturnCode)) {
+    Print(CLI_ERR_FAILED_TO_GET_PBR_MODE);
+    goto Finish;
+  }
+Finish:
+  return ReturnCode;
+}
+
+/*
+ * Reset the session to a specified tag
+ */
+EFI_STATUS ResetPbrSession(UINT32 TagId) {
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  EFI_DCPMM_PBR_PROTOCOL *pNvmDimmPbrProtocol = NULL;
+
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmPbrProtocolGuid, (VOID **)&pNvmDimmPbrProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    ReturnCode = EFI_NOT_FOUND;
+    Print(CLI_ERR_OPENING_PBR_PROTOCOL);
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmPbrProtocol->PbrResetSession(TagId);
+  if (EFI_ERROR(ReturnCode)) {
+    Print(CLI_ERR_FAILED_TO_SET_SESSION_TAG);
+    goto Finish;
+  }
+Finish:
+  return ReturnCode;
+}
+
 /*
  * Print the CLI app version
  */
 EFI_STATUS showVersion(struct Command *pCmd)
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
-  CHAR16 ApiVersion[FW_API_VERSION_LEN] = {0};
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  CHAR16 *pPath = NULL;
+  UINT32 DimmIndex = 0;
+  UINT32 DimmCount = 0;
+  PRINT_CONTEXT *pPrinterCtx = NULL;
+  DIMM_INFO *pDimms = NULL;
+  UINT32 DimmFromTheFutureCount = 0;
+  CHAR16 DimmStr[MAX_DIMM_UID_LENGTH];
+
+#if !defined(__LINUX__)
+  CHAR16 ApiVersion[FW_API_VERSION_LEN] = { 0 };
+#endif
+
   NVDIMM_ENTRY();
 
-  SetDisplayInfo(L"Software", TableTabView, NULL);
+  if (pCmd == NULL) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    NVDIMM_DBG("pCmd parameter is NULL.\n");
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
+    goto Finish;
+  }
+
+  pPrinterCtx = pCmd->pPrintCtx;
 
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 
 #if !defined(__LINUX__)
   ReturnCode = pNvmDimmConfigProtocol->GetDriverApiVersion(pNvmDimmConfigProtocol, ApiVersion);
   if (EFI_ERROR(ReturnCode)) {
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 #endif
 
-  Print(FORMAT_STR_SPACE FORMAT_STR_SPACE L"Version " NVMDIMM_VERSION_STRING L"\n", PRODUCT_NAME, APP_DESCRIPTION);
+  PRINTER_BUILD_KEY_PATH(pPath, DS_SOFTWARE_INDEX_PATH, 0);
+  PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, L"Component", PRODUCT_NAME L" " APP_DESCRIPTION);
+  PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, L"Version", NVMDIMM_VERSION_STRING);
+
 #if !defined(__LINUX__)
-  Print(FORMAT_STR_SPACE FORMAT_STR_SPACE L"Version " FORMAT_STR_NL, PRODUCT_NAME, DRIVER_API_DESCRIPTION, ApiVersion);
+  PRINTER_BUILD_KEY_PATH(pPath, DS_SOFTWARE_INDEX_PATH, 1);
+  PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, L"Component", PRODUCT_NAME L" " DRIVER_API_DESCRIPTION);
+  PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, L"Version", ApiVersion);
 #endif
 
+  /*Check FIS against compiled version in this SW... warn if the FIS version from FW is > version from this SW*/
+  ReturnCode = pNvmDimmConfigProtocol->GetDimmCount(pNvmDimmConfigProtocol, &DimmCount);
+  if (EFI_ERROR(ReturnCode)) {
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
+    goto Finish;
+  }
+
+  pDimms = AllocateZeroPool(sizeof(*pDimms) * DimmCount);
+  if (NULL == pDimms) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetDimms(pNvmDimmConfigProtocol, DimmCount,
+    DIMM_INFO_CATEGORY_ALL, pDimms);
+  if (EFI_ERROR(ReturnCode)) {
+    ReturnCode = EFI_ABORTED;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
+    NVDIMM_WARN("Failed to retrieve the DCPMM inventory found in NFIT");
+    goto Finish;
+  }
+
+  for (DimmIndex = 0; DimmIndex < DimmCount; DimmIndex++) {
+    ReturnCode = GetPreferredDimmIdAsString(pDimms[DimmIndex].DimmHandle, pDimms[DimmIndex].DimmUid, DimmStr, MAX_DIMM_UID_LENGTH);
+    if (EFI_ERROR(ReturnCode)) {
+      ReturnCode = EFI_ABORTED;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"Failed to determine DCPMM id for DCPMM ID %d", pDimms[DimmIndex].DimmHandle);
+      goto Finish;
+    }
+
+    if (pDimms[DimmIndex].FwVer.FwApiMajor > MAX_FIS_SUPPORTED_BY_THIS_SW_MAJOR ||
+      (pDimms[DimmIndex].FwVer.FwApiMajor == MAX_FIS_SUPPORTED_BY_THIS_SW_MAJOR &&
+        pDimms[DimmIndex].FwVer.FwApiMinor > MAX_FIS_SUPPORTED_BY_THIS_SW_MINOR)) {
+      DimmFromTheFutureCount++;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"DCPMM " FORMAT_STR L" supports FIS %d.%d\r\n",
+        DimmStr,
+        pDimms[DimmIndex].FwVer.FwApiMajor,
+        pDimms[DimmIndex].FwVer.FwApiMinor,
+        MAX_FIS_SUPPORTED_BY_THIS_SW_MAJOR,
+        MAX_FIS_SUPPORTED_BY_THIS_SW_MINOR);
+    }
+
+  }
+
+  if (DimmFromTheFutureCount > 0) {
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"This ipmctl software version predates the firmware interface specification version (FIS | FWAPIVersion: %d.%d.) for %d DCPMM(s). It is recommended to update ipmctl.\r\n",
+      MAX_FIS_SUPPORTED_BY_THIS_SW_MAJOR,
+      MAX_FIS_SUPPORTED_BY_THIS_SW_MINOR,
+      DimmFromTheFutureCount);
+  }
+
+  //Specify table attributes
+  PRINTER_CONFIGURE_DATA_ATTRIBUTES(pPrinterCtx, DS_ROOT_PATH, &ShowVersionDataSetAttribs);
+  //Force as list
+  PRINTER_ENABLE_LIST_TABLE_FORMAT(pPrinterCtx);
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
+  FREE_POOL_SAFE(pPath);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
+
+#ifdef OS_BUILD
+EFI_STATUS SetDefaultProtocolAndPayloadSizeOptions()
+{
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
+
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
+
+  if (ConfigIsDdrtProtocolDisabled()) {
+    pAttribs.Protocol = FisTransportSmbus;
+    pAttribs.PayloadSize = FisTransportSmallMb;
+  }
+  else {
+    pAttribs.Protocol = FisTransportDdrt;
+  }
+
+  if (ConfigIsLargePayloadDisabled()) {
+    pAttribs.PayloadSize = FisTransportSmallMb;
+  }
+  else {
+    pAttribs.PayloadSize = FisTransportLargeMb;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->SetFisTransportAttributes(pNvmDimmConfigProtocol, pAttribs);
+
+  return ReturnCode;
+}
+#endif

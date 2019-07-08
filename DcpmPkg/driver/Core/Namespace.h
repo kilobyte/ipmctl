@@ -26,6 +26,10 @@
 #define NAMESPACE_SIGNATURE                SIGNATURE_64('N', 'A', 'M', 'E', 'S', 'P', 'C', 'E')
 #define NAMESPACE_FROM_NODE(a, FieldName)  CR(a, NAMESPACE, FieldName, NAMESPACE_SIGNATURE)
 
+#define BYTE_MASK 0xFF
+#define BYTE_SHIFT 8
+#define CREATE_NAMESPACE_ID(RegionId, NamespaceIndex) (((UINT8) (RegionId & BYTE_MASK)) << BYTE_SHIFT) + (UINT8)(NamespaceIndex & BYTE_MASK)
+
 typedef struct {
   DIMM *pDimm;
   UINT64 Dpa;
@@ -397,7 +401,7 @@ RandomizeBuffer(
 UINT16
 EFIAPI
 GenerateNamespaceId(
-  VOID
+  IN UINT16 RegionId
   );
 
 /**
@@ -451,7 +455,6 @@ GetNamespaceById(
 
   @retval Return values from IoNamespaceBlock function
 **/
-INLINE
 EFI_STATUS
 ReadNamespaceBlock(
   IN     NAMESPACE *pNamespace,
@@ -472,7 +475,6 @@ ReadNamespaceBlock(
   @retval EFI_SUCCESS on a successful write
   @retval Error return values from IoNamespaceBlock function
 **/
-INLINE
 EFI_STATUS
 WriteNamespaceBlock(
   IN     NAMESPACE *pNamespace,
@@ -679,7 +681,23 @@ FindADMemmapRangeInIS(
   IN      UINT64 Size,
       OUT MEMMAP_RANGE *pFoundRange
   );
+/**
+ Namespace Capacity Alignment
 
+ Aligning the Namespace Capacity Helper Function
+ @param [in] NamespaceCapacity Namespace Capacity provided
+ @param [in] DimmCount
+ @param [out] *pAlignedNamespaceCapacity  Total Namespace Capacity after alignment
+
+ @retval EFI_INVALID_PARAMETER Invalid set of parameters provided
+ @retval EFI_SUCCESS Namespace capacity aligned
+**/
+EFI_STATUS
+AlignNamespaceCapacity(
+  IN  UINT64 NamespaceCapacity,
+  IN  UINT64 DimmCount,
+  OUT UINT64* pAlignedNamespaceCapacity
+);
 /**
   Provision Namespace capacity on a DIMM or Interleave Set.
 
@@ -904,7 +922,6 @@ GetRealRawSizeAndRealBlockSize(
   @retval EFI_SUCCESS on a successful read
   @retval Error return values from IoNamespaceBlock function
 **/
-INLINE
 EFI_STATUS
 ReadNamespaceBytes(
   IN     NAMESPACE *pNamespace,
@@ -1122,5 +1139,22 @@ UINT64
 GetRawCapacity(
   IN     NAMESPACE *pNamespace
   );
+
+#ifndef OS_BUILD
+/**
+  Checks to see if a given address block collides with one or more of the addresses BIOS has marked as bad
+
+  @param[in] Address The base address
+  @param[in] Length The address range size
+
+  @retval EFI_SUCCESS If the range does not collide with an ARS address
+  @retval EFI_DEVICE_ERROR If the range is found to collide with one or more addresses from BIOS
+**/
+EFI_STATUS
+IsAddressRangeInArsList(
+  IN     UINT64  Address,
+  IN     UINT64  Length
+);
+#endif
 
 #endif /** _NAMESPACE_H_ **/

@@ -10,17 +10,23 @@ NAME
 ----
 ipmctl-show-socket - Shows basic information about the physical processors
 
-DESCRIPTION
------------
-Shows basic information about the physical processors in the host server.
-
 SYNOPSIS
 --------
 [verse]
 ipmctl show [OPTIONS] -socket [TARGETS]
 
+DESCRIPTION
+-----------
+Shows basic information about the physical processors in the host server.
+
 OPTIONS
 -------
+-a::
+-all::
+  Shows all attributes.
+
+NOTE: The all and display options are exclusive and may not be used together.
+
 -d (attributes)::
 -display (attributes)::
   Filters the returned attributes by explicitly specifying a comma-separated
@@ -29,6 +35,14 @@ OPTIONS
 -h::
 -help::
   Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::

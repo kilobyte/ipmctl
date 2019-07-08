@@ -2,9 +2,14 @@
  * Copyright (c) 2018, Intel Corporation.
  * SPDX-License-Identifier: BSD-3-Clause
  */
+#include <Uefi.h>
+#include <Library/RngLib.h>
 #include <Debug.h>
 #include <Types.h>
 #include "Namespace.h"
+#ifndef OS_BUILD
+#include <Dcpmm.h>
+#endif
 #include <AcpiParsing.h>
 #include "Region.h"
 #include "NvmSecurity.h"
@@ -15,11 +20,17 @@
 #include "AsmCommands.h"
 #include <Version.h>
 
+
 extern EFI_SYSTEM_TABLE *gSystemTable;
 extern EFI_DIMMS_DATA gDimmsUefiData[MAX_DIMMS];
 extern NVMDIMMDRIVER_DATA *gNvmDimmData;
 extern EFI_BLOCK_IO_MEDIA gNvmDimmDriverBlockIoMedia;
 extern CONST UINT64 gSupportedBlockSizes[SUPPORTED_BLOCK_SIZES_COUNT];
+
+#ifndef OS_BUILD
+extern DCPMM_ARS_ERROR_RECORD * gArsBadRecords;
+extern INT32 gArsBadRecordsCount;
+#endif
 
 extern VOID
 (*gClFlush)(
@@ -66,7 +77,7 @@ IsNamespaceLocked(
   )
 {
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
-  UINT8 SecurityState = 0;
+  UINT32 SecurityState = 0;
   BOOLEAN IsStorageNamespace = FALSE;
   DIMM **ppDimms = NULL;
   UINT32 DimmsNum = 0;
@@ -529,7 +540,15 @@ UninstallNamespaceProtocols(
   DimmDataIndex = GetDimmEfiDataIndex(0, pNamespace->pParentDimm, NULL);
   if (DimmDataIndex != DIMM_PID_INVALID) {
     DimmHandle = gDimmsUefiData[DimmDataIndex].DeviceHandle;
+    NVDIMM_DBG("DimmDataIndex -- gDimmsUefiData[%d].DeviceHandle = %d", DimmDataIndex, DimmHandle);
+  } else {
+    NVDIMM_DBG("DimmDataIndex (%d) = DIMM_PID_INVALID... DimmHandle was not set", DimmDataIndex);
   }
+
+  NVDIMM_DBG("DimmHandle = %d", DimmHandle);
+  NVDIMM_DBG("gNvmDimmData->ControllerHandle = %d", gNvmDimmData->ControllerHandle);
+  NVDIMM_DBG("gNvmDimmData->DriverHandle = %d", gNvmDimmData->DriverHandle);
+  NVDIMM_DBG("pNamespace->BlockIoHandle = %d", pNamespace->BlockIoHandle);
 
   ReturnCode = gBS->CloseProtocol(
     (pNamespace->Flags.Values.Local) ? DimmHandle : gNvmDimmData->ControllerHandle,
@@ -539,7 +558,40 @@ UninstallNamespaceProtocols(
   );
 
   if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_WARN("Failed to detach the block device from parent device. Error = " FORMAT_EFI_STATUS "\n.", ReturnCode);
+    NVDIMM_WARN("Failed to detach the block device from parent device.");
+    NVDIMM_WARN("Error = " FORMAT_EFI_STATUS "\n.", ReturnCode);
+
+    if (pNamespace->Flags.Values.Local) {
+      NVDIMM_DBG("CloseProtocol failed using DimmHandle.");
+      NVDIMM_DBG("Attempting CloseProtocol with ControllerHandle");
+      ReturnCode = gBS->CloseProtocol(
+        gNvmDimmData->ControllerHandle,
+        &gEfiDevicePathProtocolGuid,
+        gNvmDimmData->DriverHandle,
+        pNamespace->BlockIoHandle
+      );
+
+      if (EFI_ERROR(ReturnCode)) {
+        NVDIMM_WARN("Failed to detach the block device from parent device.");
+        NVDIMM_WARN("Error = " FORMAT_EFI_STATUS "\n.", ReturnCode);
+        goto Finish;
+      }
+    } else {
+      NVDIMM_DBG("CloseProtocol failed using ControllerHandle.");
+      NVDIMM_DBG("Attempting CloseProtocol with DimmHandle");
+      ReturnCode = gBS->CloseProtocol(
+        DimmHandle,
+        &gEfiDevicePathProtocolGuid,
+        gNvmDimmData->DriverHandle,
+        pNamespace->BlockIoHandle
+      );
+
+      if (EFI_ERROR(ReturnCode)) {
+        NVDIMM_WARN("Failed to detach the block device from parent device.");
+        NVDIMM_WARN("Error = " FORMAT_EFI_STATUS "\n.", ReturnCode);
+        goto Finish;
+      }
+    }
   }
 
   ReturnCode = gBS->UninstallMultipleProtocolInterfaces(
@@ -708,27 +760,37 @@ RandomizeBuffer(
 
 /**
   Generate a NamespaceId value
+  Namespace Id is a 16bit value and consists of the InterleaveSetIndex/RegionId
+  (upper 8bits) and slot index (lower 8 bits).
+  Neigher InterleaveSetIndex nor slot index can equal zero. The lowest namespace
+  Id value is 0x0101.
 
   @retval The generated ID
 **/
 UINT16
 EFIAPI
-GenerateNamespaceId(
-  )
+GenerateNamespaceId(UINT16 RequestedRegionId)
 {
   NAMESPACE *pNamespace = NULL;
   LIST_ENTRY *pNode = NULL;
-  UINT16 NamespaceId = 0;
+  UINT16 NamespaceId = CREATE_NAMESPACE_ID(RequestedRegionId, 0);
 
   LIST_FOR_EACH(pNode, &gNvmDimmData->PMEMDev.Namespaces) {
     pNamespace = NAMESPACE_FROM_NODE(pNode, NamespaceNode);
-    if (pNamespace->NamespaceId > NamespaceId) {
+    if (pNamespace->pParentIS->RegionId != RequestedRegionId) {
+      continue; // Find the namespace with requested Region ID
+    }
+    if (pNamespace->NamespaceId == NamespaceId + 1) {
       NamespaceId = pNamespace->NamespaceId;
+    }
+    else if (pNamespace->NamespaceId > NamespaceId) {
+      break;
     }
   }
   NamespaceId++;
   return NamespaceId;
 }
+
 
 /**
   Generate a random (version 4) GUID
@@ -742,12 +804,11 @@ GenerateRandomGuid(
      OUT GUID *pResultGuid
   )
 {
+#ifndef OS_BUILD
   GUID GeneratedGuid;
 
   SetMem(&GeneratedGuid, sizeof(GeneratedGuid), 0x0);
-
-  RandomizeBuffer((UINT8 *) &GeneratedGuid, sizeof(GeneratedGuid));
-
+  GetRandomNumber128((UINT64*)&GeneratedGuid);
   // Set the version of the GUID to the 4th version (Random GUID)
   GeneratedGuid.Data3 |= 0x4000; // 0b0100000000000000 Make sure that the 4 bits are set
   GeneratedGuid.Data3 &= 0x4FFF; // 0b0100111111111111 Zero other bits from the highest hex
@@ -757,7 +818,9 @@ GenerateRandomGuid(
   GeneratedGuid.Data4[0] &= 0xBF; // 0b10111111 Clear the 7th bit
 
   CopyMem_S(pResultGuid, sizeof(*pResultGuid), &GeneratedGuid, sizeof(*pResultGuid));
+#endif
 }
+
 
 /**
   Function changes Namespace slot status to a required state.
@@ -1226,6 +1289,13 @@ ReadLabelStorageArea(
   UINT8 *pTo = NULL;
   UINT8 *pFrom = NULL;
   UINT32 Index = 0;
+  UINT32 IndexSize = 0;
+  UINT32 Offset = 0;
+  UINT32 AlignPageIndex = 0;
+  UINT32 PageSize = 0;
+  UINT8 PageIndexMask = 0;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
 
   NVDIMM_ENTRY();
 
@@ -1242,7 +1312,31 @@ ReadLabelStorageArea(
   }
 
   NVDIMM_DBG("Reading LSA for DIMM %x ...", pDimm->DeviceHandle.AsUint32);
-  ReturnCode = FwCmdGetPlatformConfigData(pDimm, PCD_LSA_PARTITION_ID, &pRawData);
+
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetFisTransportAttributes(pNvmDimmConfigProtocol, &pAttribs);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  if (IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
+    // At first read the Index size only form the beginning of the LSA
+    IndexSize = sizeof((*ppLsa)->Index);
+    ReturnCode = FwGetPCDFromOffsetSmallPayload(pDimm, PCD_LSA_PARTITION_ID, Offset, IndexSize, &pRawData);
+    if (EFI_SUCCESS == ReturnCode) {
+      // Read the IndexSize again plus 2 times siez of the Free Mask starting at the end of the previoues read
+      Offset = IndexSize;
+      IndexSize += 2 * LABELS_TO_FREE_BYTES(ROUNDUP(((LABEL_STORAGE_AREA *)pRawData)->Index[0].NumberOfLabels, NSINDEX_FREE_ALIGN));
+      ReturnCode = FwGetPCDFromOffsetSmallPayload(pDimm, PCD_LSA_PARTITION_ID, Offset, IndexSize, &pRawData);
+    }
+  }
+  else {
+    ReturnCode = FwCmdGetPlatformConfigData(pDimm, PCD_LSA_PARTITION_ID, &pRawData);
+  }
   if (ReturnCode == EFI_NO_MEDIA) {
     goto Finish;
   }
@@ -1294,19 +1388,51 @@ ReadLabelStorageArea(
   }
 
   // Copy the Label area
-  if (UseNamespace1_1) {
-    pTo = (UINT8 *) (*ppLsa)->pLabels;
-    pFrom = pRawData + LabelIndexSize;
-
-    for (Index = 0; Index < (*ppLsa)->Index[CurrentIndex].NumberOfLabels; Index++) {
-      CopyMem_S(pTo, sizeof(NAMESPACE_LABEL_1_1), pFrom, sizeof(NAMESPACE_LABEL_1_1));
-      pTo += sizeof(*((*ppLsa)->pLabels));
-      pFrom += sizeof(NAMESPACE_LABEL_1_1);
+  if (IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
+    // Copy the Label area
+    if (UseNamespace1_1) {
+      PageSize = sizeof(NAMESPACE_LABEL_1_1);
     }
-  } else {
-    CopyMem_S((*ppLsa)->pLabels, LabelSize, pRawData + LabelIndexSize, LabelSize);
-  }
+    else {
+      PageSize = sizeof(NAMESPACE_LABEL);
+    }
 
+    for (AlignPageIndex = 0; AlignPageIndex < (*ppLsa)->Index[CurrentIndex].NumberOfLabels; AlignPageIndex += NSINDEX_FREE_ALIGN) {
+      // Check if we have any namespaces defined for these slots
+      if ((*ppLsa)->Index[CurrentIndex].pFree[LABELS_TO_FREE_BYTES(AlignPageIndex)] != FREE_BLOCKS_MASK_ALL_SET) {
+        // Find the label to read
+        for(PageIndexMask = (*ppLsa)->Index[CurrentIndex].pFree[LABELS_TO_FREE_BYTES(AlignPageIndex)], Index = 0;
+          (Index < NSINDEX_FREE_ALIGN) && ((AlignPageIndex + Index) < (*ppLsa)->Index[CurrentIndex].NumberOfLabels);
+          PageIndexMask >>= 1, Index++) {
+          if (BIT0 != (PageIndexMask & BIT0)) {
+            // Calculate the offest to read, one label per read only
+            Offset = (UINT32)(LabelIndexSize + (PageSize * (AlignPageIndex + Index)));
+            // Read data
+            ReturnCode = FwGetPCDFromOffsetSmallPayload(pDimm, PCD_LSA_PARTITION_ID, Offset, PageSize, &pRawData);
+            // Copy data to the LSA struct
+            pFrom = pRawData + Offset;
+            pTo = ((UINT8 *)(*ppLsa)->pLabels) + (sizeof(NAMESPACE_LABEL) * (AlignPageIndex + Index));
+            CopyMem_S(pTo, PageSize, pFrom, PageSize);
+          }
+        }
+      }
+    }
+  }
+  else {
+    if (UseNamespace1_1) {
+      pTo = (UINT8 *)(*ppLsa)->pLabels;
+      pFrom = pRawData + LabelIndexSize;
+
+      for (Index = 0; Index < (*ppLsa)->Index[CurrentIndex].NumberOfLabels; Index++) {
+        CopyMem_S(pTo, sizeof(NAMESPACE_LABEL_1_1), pFrom, sizeof(NAMESPACE_LABEL_1_1));
+        pTo += sizeof(*((*ppLsa)->pLabels));
+        pFrom += sizeof(NAMESPACE_LABEL_1_1);
+      }
+        }
+    else {
+      CopyMem_S((*ppLsa)->pLabels, LabelSize, pRawData + LabelIndexSize, LabelSize);
+    }
+  }
   ReturnCode = EFI_SUCCESS;
 
   goto Finish;
@@ -1343,15 +1469,20 @@ WriteLabelStorageArea(
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   DIMM *pDimm = NULL;
   UINT8 *pRawData = NULL;
-  UINT16 CurrentIndex = 0;
   UINT64 TotalPcdSize = 0;
-  UINT64 LabelIndexSize = 0;
+  UINT8 *pTo = NULL;
+  UINT32 Index = 0;
   UINT64 LabelSize = 0;
+  UINT16 CurrentIndex = 0;
+  UINT64 LabelIndexSize = 0;
   UINT8 *pIndexArea = NULL;
   BOOLEAN UseNamespace_1_1 = FALSE;
-  UINT8 *pTo = NULL;
   UINT8 *pFrom = NULL;
-  UINT32 Index = 0;
+  UINT32 AlignPageIndex = 0;
+  UINT32 PageSize = 0;
+  UINT8 PageIndexMask = 0;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG_TRANSPORT_ATTRIBS pAttribs;
 
   NVDIMM_ENTRY();
 
@@ -1380,10 +1511,22 @@ WriteLabelStorageArea(
      UseNamespace_1_1 = TRUE;
   }
 
-  pRawData = AllocateZeroPool(TotalPcdSize);
-  if (pRawData == NULL) {
-    ReturnCode = EFI_OUT_OF_RESOURCES;
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
     goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetFisTransportAttributes(pNvmDimmConfigProtocol, &pAttribs);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  if (FALSE == IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
+    pRawData = AllocateZeroPool(TotalPcdSize);
+    if (pRawData == NULL) {
+      ReturnCode = EFI_OUT_OF_RESOURCES;
+      goto Finish;
+    }
   }
 
   ReturnCode = LabelIndexAreaToRawData(pLsa, ALL_INDEX_BLOCKS, &pIndexArea);
@@ -1393,29 +1536,66 @@ WriteLabelStorageArea(
     goto Finish;
   }
 
-  // Copy the Label index area
-  CopyMem_S(pRawData, TotalPcdSize, pIndexArea, LabelIndexSize);
-
-  // Copy the label area
-  if (UseNamespace_1_1) {
-    pFrom = (UINT8 *) pLsa->pLabels;
-    pTo = pRawData + LabelIndexSize;
-
-    for (Index = 0; Index < pLsa->Index[CurrentIndex].NumberOfLabels; Index++) {
-      CopyMem_S(pTo, sizeof(NAMESPACE_LABEL_1_1), pFrom, sizeof(NAMESPACE_LABEL_1_1));
-      pFrom += sizeof(*(pLsa->pLabels));
-      pTo += sizeof(NAMESPACE_LABEL_1_1);
+  if (IS_SMALL_PAYLOAD_ENABLED(pAttribs)) {
+    // Copy the Label index area
+    ReturnCode = FwSetPCDFromOffsetSmallPayload(pDimm, PCD_LSA_PARTITION_ID, pIndexArea, 0, (UINT32)LabelIndexSize);
+    if (EFI_ERROR(ReturnCode)) {
+      goto Finish;
     }
-  } else {
-    CopyMem_S(pRawData + LabelIndexSize, TotalPcdSize - LabelIndexSize, pLsa->pLabels, LabelSize);
-  }
 
-  NVDIMM_DBG("Writing LSA to DIMM %x ...", pDimm->DeviceHandle.AsUint32);
-  ReturnCode = FwCmdSetPlatformConfigData(pDimm, PCD_LSA_PARTITION_ID,
-    pRawData, pDimm->PcdLsaPartitionSize);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("FwCmdSetPlatformConfigData returned: " FORMAT_EFI_STATUS "", ReturnCode);
-    goto Finish;
+    // Copy the Label area
+    if (UseNamespace_1_1) {
+      PageSize = sizeof(NAMESPACE_LABEL_1_1);
+    }
+    else {
+      PageSize = sizeof(NAMESPACE_LABEL);
+    }
+
+    for (AlignPageIndex = 0; AlignPageIndex < pLsa->Index[CurrentIndex].NumberOfLabels; AlignPageIndex += NSINDEX_FREE_ALIGN) {
+      // Check if we have at least one namespace to copy
+      if (pLsa->Index[CurrentIndex].pFree[LABELS_TO_FREE_BYTES(AlignPageIndex)] != FREE_BLOCKS_MASK_ALL_SET) {
+        // Find the label to write
+        for (PageIndexMask = pLsa->Index[CurrentIndex].pFree[LABELS_TO_FREE_BYTES(AlignPageIndex)], Index = 0;
+          (Index < NSINDEX_FREE_ALIGN) && ((AlignPageIndex + Index) < pLsa->Index[CurrentIndex].NumberOfLabels);
+          PageIndexMask >>= 1, Index++) {
+          if (BIT0 != (PageIndexMask & BIT0)) {
+            // Calculate the offset to write, one label per write only
+            pFrom = ((UINT8 *)(pLsa->pLabels) + (sizeof(NAMESPACE_LABEL) * (AlignPageIndex + Index)));
+            ReturnCode = FwSetPCDFromOffsetSmallPayload(pDimm, PCD_LSA_PARTITION_ID, pFrom, (UINT32)(LabelIndexSize + (PageSize * (AlignPageIndex + Index))), PageSize);
+            if (EFI_ERROR(ReturnCode)) {
+              goto Finish;
+            }
+          }
+        }
+      }
+    }
+  }
+  else {
+    // Copy the Label index area
+    CopyMem_S(pRawData, TotalPcdSize, pIndexArea, LabelIndexSize);
+
+    // Copy the label area
+    if (UseNamespace_1_1) {
+      pFrom = (UINT8 *)pLsa->pLabels;
+      pTo = pRawData + LabelIndexSize;
+
+      for (Index = 0; Index < pLsa->Index[CurrentIndex].NumberOfLabels; Index++) {
+        CopyMem_S(pTo, sizeof(NAMESPACE_LABEL_1_1), pFrom, sizeof(NAMESPACE_LABEL_1_1));
+        pFrom += sizeof(*(pLsa->pLabels));
+        pTo += sizeof(NAMESPACE_LABEL_1_1);
+      }
+    }
+    else {
+      CopyMem_S(pRawData + LabelIndexSize, TotalPcdSize - LabelIndexSize, pLsa->pLabels, LabelSize);
+    }
+
+    NVDIMM_DBG("Writing LSA to DIMM %x ...", pDimm->DeviceHandle.AsUint32);
+    ReturnCode = FwCmdSetPlatformConfigData(pDimm, PCD_LSA_PARTITION_ID,
+      pRawData, pDimm->PcdLsaPartitionSize);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("FwCmdSetPlatformConfigData returned: " FORMAT_EFI_STATUS "", ReturnCode);
+      goto Finish;
+    }
   }
 
 Finish:
@@ -1751,6 +1931,8 @@ CompareDpaInRange(
   }
 }
 
+#if 0
+// This flow may not work properly under certain scenarios.
 /**
   Recover a partially updated namespace label set
   Clear the updating bit and use the name from label in pos 0
@@ -1879,6 +2061,7 @@ Finish:
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
+#endif
 
 /**
   Retrieve Namespaces information from provided LSA structure.
@@ -1970,7 +2153,6 @@ RetrieveNamespacesFromLsa(
 
     pNamespace->Flags.AsUint32 = pNamespaceLabel->Flags.AsUint32;
     pNamespace->Signature = NAMESPACE_SIGNATURE;
-    pNamespace->NamespaceId = GenerateNamespaceId();
     pNamespace->Enabled = FALSE;
     pNamespace->HealthState = NAMESPACE_HEALTH_OK;
     CopyMem_S(&pNamespace->Name, sizeof(pNamespace->Name), &pNamespaceLabel->Name, NSLABEL_NAME_LEN);
@@ -2089,6 +2271,12 @@ RetrieveNamespacesFromLsa(
         continue;
       }
 
+#if 0
+      // This flow is incomplete and may result in corrupt LSA
+      // OSV's advise preference for UEFI to skip any automated recovery
+      // Leave recovery to the OS
+      // Logic after still validates the labels are consistent
+
       // Iterate over DIMMs to check for partial update
       LIST_FOR_EACH(pNode, &gNvmDimmData->PMEMDev.Dimms) {
         pDimm = DIMM_FROM_NODE(pNode);
@@ -2119,6 +2307,7 @@ RetrieveNamespacesFromLsa(
         }
         FREE_POOL_SAFE(pNamespaceLabel2);
       }
+#endif
 
       // Iterate over DIMMs to collect labels to assemble AppDirect NS
       LIST_FOR_EACH(pNode, &gNvmDimmData->PMEMDev.Dimms) {
@@ -2197,7 +2386,7 @@ RetrieveNamespacesFromLsa(
 
 // Save an extra FIS call in OS. OS just needs to size for region capacity used
 #ifndef OS_BUILD
-        UINT8 SecurityState = 0;
+        UINT32 SecurityState = 0;
         ReturnCode = GetDimmSecurityState(pDimm, PT_TIMEOUT_INTERVAL, &SecurityState);
         if (EFI_ERROR(ReturnCode)) {
           NVDIMM_DBG("Failed to get DIMM security state.");
@@ -2211,8 +2400,8 @@ RetrieveNamespacesFromLsa(
 #endif
 
         LabelsFound++;
-        NVDIMM_DBG("Label (%d/%d) of App Direct Namespace %g found",
-            LabelsFound, pNamespaceLabel->NumberOfLabels, pNamespace->NamespaceGuid);
+        NVDIMM_DBG("Label (%d/%d) of App Direct Namespace %g foundDPA = 0x%lx",
+          LabelsFound, pNamespaceLabel->NumberOfLabels, pNamespace->NamespaceGuid, pNamespaceLabel2->Dpa);
         pNamespace->Range[pNamespace->RangesCount].Dpa = pNamespaceLabel2->Dpa;
         pNamespace->Range[pNamespace->RangesCount].Size = pNamespaceLabel2->RawSize;
         pNamespace->Range[pNamespace->RangesCount].pDimm = pDimm;
@@ -2236,22 +2425,24 @@ RetrieveNamespacesFromLsa(
       if (pNamespace->pParentIS != NULL && pNamespace->HealthState != NAMESPACE_HEALTH_OK) {
         if (pNamespace->pParentIS->State != IS_STATE_HEALTHY) {
           switch (pNamespace->pParentIS->State) {
-            case IS_STATE_INIT_FAILURE:
-            case IS_STATE_DIMM_MISSING:
-              if (pNamespace->pParentIS->MirrorEnable) {
-                pNamespace->HealthState = NAMESPACE_HEALTH_WARNING;
-              } else {
-                pNamespace->HealthState = NAMESPACE_HEALTH_CRITICAL;
-              }
-              break;
-            case IS_STATE_CONFIG_INACTIVE:
-            case IS_STATE_SPA_MISSING:
-            default:
+          case IS_STATE_INIT_FAILURE:
+          case IS_STATE_DIMM_MISSING:
+            if (pNamespace->pParentIS->MirrorEnable) {
+              pNamespace->HealthState = NAMESPACE_HEALTH_WARNING;
+            }
+            else {
               pNamespace->HealthState = NAMESPACE_HEALTH_CRITICAL;
-              break;
+            }
+            break;
+          case IS_STATE_CONFIG_INACTIVE:
+          case IS_STATE_SPA_MISSING:
+          default:
+            pNamespace->HealthState = NAMESPACE_HEALTH_CRITICAL;
+            break;
           }
         }
-      } else if (pNamespace->pParentIS == NULL) {
+      }
+      else if (pNamespace->pParentIS == NULL) {
         // We will hit this case if there are no IS in the system or if we couldn't find any IS
         // with a valid cookie to match the labels.
         FREE_POOL_SAFE(pNamespace);
@@ -2266,7 +2457,8 @@ RetrieveNamespacesFromLsa(
         pNamespace->Enabled = FALSE;
       }
     }
-
+    // Get the Index of the last namespace Id for the previous interleave set
+    pNamespace->NamespaceId = CREATE_NAMESPACE_ID(pNamespace->pParentIS->RegionId, Index);
     InsertTailList(pNamespacesList, &pNamespace->NamespaceNode);
 
     if (pNamespace->HealthState != NAMESPACE_HEALTH_CRITICAL &&
@@ -2445,7 +2637,6 @@ InitializeNamespaces(
   @retval EFI_SUCCESS on a successful read
   @retval Error return values from IoNamespaceBlock function
 **/
-INLINE
 EFI_STATUS
 ReadNamespaceBlock(
   IN     NAMESPACE *pNamespace,
@@ -2469,7 +2660,6 @@ ReadNamespaceBlock(
   @retval EFI_SUCCESS on a successful write
   @retval Error return values from IoNamespaceBlock function
 **/
-INLINE
 EFI_STATUS
 WriteNamespaceBlock(
   IN     NAMESPACE *pNamespace,
@@ -2494,7 +2684,6 @@ WriteNamespaceBlock(
   @retval EFI_SUCCESS on a successful read
   @retval Error return values from IoNamespaceBlock function
 **/
-INLINE
 EFI_STATUS
 ReadNamespaceBytes(
   IN     NAMESPACE *pNamespace,
@@ -2810,6 +2999,13 @@ AppDirectIo(
 
   pSpaStart = (UINT8 *) pNamespace->SpaNamespaceBase;
   pAddress = pSpaStart + Offset;
+
+  if (gArsBadRecordsCount != 0) {
+    ReturnCode = IsAddressRangeInArsList((UINT64)pAddress, Nbytes);
+    if (EFI_ERROR(ReturnCode)) {
+      goto Finish;
+    }
+  }
 
   if (ReadOperation) {
     CopyMem(pBuffer, pAddress, Nbytes);
@@ -3447,7 +3643,55 @@ Finish:
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
+/**
+ Namespace Capacity Alignment
 
+ Aligning the Namespace Capacity  Helper Function
+ @param [in] NamespaceCapacity Namespace Capacity provided
+ @param [in] DimmCount
+ @param [out] *pAlignedNamespaceCapacity Total Namespace Capacity after alignment
+
+ @retval EFI_INVALID_PARAMETER Invalid set of parameters provided
+ @retval EFI_SUCCESS Namespace capacity aligned
+**/
+EFI_STATUS
+AlignNamespaceCapacity(
+  IN  UINT64 NamespaceCapacity,
+  IN  UINT64 DimmCount,
+  OUT UINT64* pAlignedNamespaceCapacity
+)
+{
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
+  UINT64 NamespaceCapacityPerDimm = 0;
+
+  if (pAlignedNamespaceCapacity == NULL) {
+    goto Finish;
+  }
+  if (NamespaceCapacity < GIB_TO_BYTES(32)) {
+    NVDIMM_DBG("Capacity  length is < 32 bit then it is at 4K Alignment ");
+    NamespaceCapacityPerDimm = ROUNDUP((NamespaceCapacity/DimmCount), NAMESPACE_4KB_ALIGNMENT_SIZE);
+  }
+  else if (NamespaceCapacity < TIB_TO_BYTES(1)) {
+    NVDIMM_DBG("Capacity  length is < 40 bit then it is at 4K Alignment ");
+    NamespaceCapacityPerDimm = ROUNDUP((NamespaceCapacity / DimmCount), NAMESPACE_4KB_ALIGNMENT_SIZE);
+  }
+  else if (NamespaceCapacity < TIB_TO_BYTES(256)) {
+    NVDIMM_DBG("Capacity  length is < 48 bit then it is at 64K Alignment ");
+    NamespaceCapacityPerDimm = ROUNDUP((NamespaceCapacity / DimmCount), NAMESPACE_64KB_ALIGNMENT_SIZE);
+  }
+  else {
+    NVDIMM_DBG("Capacity length is < 60 bit then it is at 32G Alignment ");
+    NamespaceCapacityPerDimm = ROUNDUP((NamespaceCapacity / DimmCount), NAMESPACE_32GB_ALIGNMENT_SIZE);
+  }
+
+  *pAlignedNamespaceCapacity = NamespaceCapacityPerDimm * DimmCount;
+
+  NVDIMM_DBG("AlignmentCapacity: %u \n", *pAlignedNamespaceCapacity);
+  ReturnCode = EFI_SUCCESS;
+
+  Finish:
+  return ReturnCode;
+}
 /**
   Provision Namespace capacity on a DIMM or Interleave Set.
 
@@ -3481,8 +3725,8 @@ AllocateNamespaceCapacity(
   DIMM_REGION *pRegion = NULL;
   MEMMAP_RANGE *pRange = NULL;
   MEMMAP_RANGE AppDirectRange;
-  UINT32 RegionCount = 0;
-  UINT64 AlignedNamespaceCapacity = 0;
+  UINT32 DimmCount = 0;
+  UINT64 AlignedNamespaceCapacitySize = 0;
   UINT64 RegionSize = 0;
   UINT16 Index = 0;
   UINT64 FreeSpace = 0;
@@ -3574,20 +3818,21 @@ AllocateNamespaceCapacity(
     }
 
     // Provision capacity equally on all DIMMs of the Interleave Set
-    ReturnCode = GetListSize(&pIS->DimmRegionList, &RegionCount);
-    if (EFI_ERROR(ReturnCode) || RegionCount == 0) {
+    ReturnCode = GetListSize(&pIS->DimmRegionList, &DimmCount);
+    if (EFI_ERROR(ReturnCode) || DimmCount == 0) {
       goto Finish;
     }
-
-    // The namespace capacity must be a aligned to 4K * no of regions
-    AlignedNamespaceCapacity = ROUNDUP(*pNamespaceCapacity, NAMESPACE_4KB_ALIGNMENT_SIZE * RegionCount);
-
-    if (*pNamespaceCapacity % RegionCount != 0) {
+    ReturnCode = AlignNamespaceCapacity(*pNamespaceCapacity, DimmCount, &AlignedNamespaceCapacitySize);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("Namespace Capacity is an invalid parameter");
+      ReturnCode = EFI_INVALID_PARAMETER;
+    }
+    if (*pNamespaceCapacity % DimmCount != 0) {
       NVDIMM_WARN("Unable to equally distribute required capacity among %d regions. "
-          "Allocated Capacity will be increased to %lld", RegionCount, AlignedNamespaceCapacity);
+          "Allocated Capacity will be increased to %lld", DimmCount, AlignedNamespaceCapacitySize);
     }
 
-    RegionSize = AlignedNamespaceCapacity / RegionCount;
+    RegionSize = AlignedNamespaceCapacitySize / DimmCount;
 
     ReturnCode = FindADMemmapRangeInIS(pIS, RegionSize, &AppDirectRange);
     if (EFI_ERROR(ReturnCode)) {
@@ -3596,7 +3841,7 @@ AllocateNamespaceCapacity(
       goto Finish;
     }
 
-    *pNamespaceCapacity = AlignedNamespaceCapacity;
+    *pNamespaceCapacity = AlignedNamespaceCapacitySize;
 
     Index = 0;
     LIST_FOR_EACH(pNode, &pIS->DimmRegionList) {
@@ -3865,11 +4110,13 @@ InitializeLabelStorageArea(
     goto Finish;
   }
 
+#ifndef OS_BUILD
   ReturnCode = ReadLabelStorageArea(pDimm->DimmID, &pLsa);
   if (ReturnCode != EFI_NOT_FOUND) {
     // Here we have a validated LSA or a corrupted LSA, just pass the result up
     goto Finish;
   }
+#endif // OS_BUILD
 
   /**
     If ReadLabelStorageArea fails to validate the DIMM LSA, it frees the buffer
@@ -4026,6 +4273,7 @@ InitializeAllLabelStorageAreas(
       continue;
     }
 
+#ifndef OS_BUILD
     if (ppDimms[Index]->LsaStatus != LSA_NOT_INIT) {
       ReturnCode = ZeroLabelStorageArea(ppDimms[Index]->DimmID);
       if (EFI_ERROR(ReturnCode)) {
@@ -4035,6 +4283,7 @@ InitializeAllLabelStorageAreas(
         goto Finish;
       }
     }
+#endif // OS_BUILD
 
     ReturnCode = InitializeLabelStorageArea(ppDimms[Index], LabelVersionMajor, LabelVersionMinor);
     if (EFI_ERROR(ReturnCode)) {
@@ -5617,3 +5866,77 @@ GetRawCapacity(
 {
   return GetPhysicalBlockSize(pNamespace->BlockSize) * pNamespace->BlockCount;
 }
+
+#ifndef OS_BUILD
+/**
+  Checks to see if a given address block collides with one or more of the addresses BIOS has marked as bad
+
+  @param[in] Address an array of bad addresses as returned from BIOS
+  @param[in] Length the number of bad addresses
+
+  @retval EFI_SUCCESS If the range does not collide
+  @retval EFI_DEVICE_ERROR If the range is found to collide with one or more addresses from BIOS
+**/
+EFI_STATUS
+IsAddressRangeInArsList(
+  IN     UINT64  Address,
+  IN     UINT64  Length
+)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  INT32 Index = 0;
+  UINT64 BadBlockStart = 0;
+  UINT64 BadBlockEnd = 0;
+  UINT64 CheckBlockStart = Address;
+  UINT64 CheckBlockEnd = Address + Length - 1;
+
+  if (gArsBadRecordsCount == 0) {
+      return ReturnCode;
+  }
+
+  NVDIMM_ENTRY();
+
+  if (gArsBadRecordsCount < 0) {
+    ReturnCode = LoadArsList();
+    if (EFI_PROTOCOL_ERROR == ReturnCode)
+    {
+      ReturnCode = EFI_SUCCESS;
+      NVDIMM_DBG("Failed to load the ARS list (protocol missing?) Cannot check for collisions.\n");
+      goto Finish;
+    }
+  }
+
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Failed to load the ARS list. Cannot check for collisions.\n");
+    goto Finish;
+  }
+
+  if (gArsBadRecordsCount == 0) {
+    NVDIMM_DBG("There are no bad addresses in the ARS list.\n");
+    goto Finish;
+  }
+
+  if (NULL != gArsBadRecords && gArsBadRecordsCount > 0) {
+    //Check that address range does not contain one of the bad addresses identified by BIOS
+    for (Index = 0; Index < gArsBadRecordsCount; Index++) {
+      BadBlockStart = gArsBadRecords[Index].SpaOfErrLoc;
+      BadBlockEnd = gArsBadRecords[Index].SpaOfErrLoc + gArsBadRecords[Index].Length - 1;
+
+      NVDIMM_DBG("Checking address 0x%llx, len 0x%llx against bad ARS address 0x%llx, len 0x%llx", Address, Length, gArsBadRecords[Index].SpaOfErrLoc, gArsBadRecords[Index].Length);
+
+      if ((CheckBlockStart >= BadBlockStart   && CheckBlockStart <= BadBlockEnd)   || //the request starts at an address in the bad range
+          (CheckBlockStart >= BadBlockStart   && CheckBlockEnd   <= BadBlockEnd)   || //the request fits entirly in a bad range
+          (BadBlockStart   >= CheckBlockStart && BadBlockEnd     <= CheckBlockEnd) || //the bad range fits entirely in the check range
+          (CheckBlockEnd   >= BadBlockStart   && CheckBlockEnd   <= BadBlockEnd))     //the request ends at an address in the bad range
+      {
+        ReturnCode = EFI_DEVICE_ERROR;
+        NVDIMM_DBG("Collision detected with the ARS list");
+        goto Finish;
+      }
+    }
+  }
+Finish:
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+#endif

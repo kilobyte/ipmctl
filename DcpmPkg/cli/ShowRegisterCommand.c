@@ -14,17 +14,61 @@
 #include <Library/BaseMemoryLib.h>
 #include "Common.h"
 
+#define DIMM_ID_STR               L"DimmID"
+#define REGISTER_TARGET_STR       L"RegType"
+#define DS_ROOT_PATH              L"/RegList"
+#define DS_DIMM_PATH              L"/RegList/Dimm"
+#define DS_DIMM_INDEX_PATH        L"/RegList/Dimm[%d]"
+#define DS_REGISTER_PATH          L"/RegList/Dimm/Register"
+#define DS_REGISTER_INDEX_PATH    L"/RegList/Dimm[%d]/Register[%d]"
+
+ /*
+      *  PRINT LIST ATTRIBUTES
+      *  ---DimmID=0x0011 Registers---
+      *     ---RegType=BSR
+      *        Boot Status: 00000000181D00F0
+      *          [07:00] MajorCheckpoint ------: 0xF0
+      *          [15:08] MinorCheckpoint ------: 0x0
+      *        ...
+      */
+PRINTER_LIST_ATTRIB ShowRegisterListAttributes =
+{
+ {
+    {
+      DIMM_NODE_STR,                                                                  //GROUP LEVEL TYPE
+      L"---" DIMM_ID_STR L"=$(" DIMM_ID_STR L") Registers---",                        //NULL or GROUP LEVEL HEADER
+      SHOW_LIST_IDENT FORMAT_STR L"=" FORMAT_STR,                                     //NULL or KEY VAL FORMAT STR
+      DIMM_ID_STR                                                                     //NULL or IGNORE KEY LIST (K1;K2)
+    },
+    {
+      REGISTER_MODE_STR,                                                              //GROUP LEVEL TYPE
+      SHOW_LIST_IDENT L"---" REGISTER_TARGET_STR L"=$(" REGISTER_TARGET_STR L")",     //NULL or GROUP LEVEL HEADER
+      SHOW_LIST_IDENT SHOW_LIST_IDENT FORMAT_STR L": " FORMAT_STR,                    //NULL or KEY VAL FORMAT STR
+      REGISTER_TARGET_STR                                                             //NULL or IGNORE KEY LIST (K1;K2)
+    }
+  }
+};
+
+PRINTER_DATA_SET_ATTRIBS ShowRegisterDataSetAttribs =
+{
+  &ShowRegisterListAttributes,
+  NULL
+};
+
 /**
   Command syntax definition
 **/
 struct Command ShowRegisterCommand =
 {
   SHOW_VERB,                                                  //!< verb
-  {
+  {                                                           //!< options
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"",HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
 #ifdef OS_BUILD
-    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired }
+    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired }
 #else
-    {L"", L"", L"", L"", FALSE, ValueOptional}                         //!< options
+    {L"", L"", L"", L"",L"", FALSE, ValueOptional}
 #endif
   },
   {                                                           //!< targets
@@ -33,7 +77,8 @@ struct Command ShowRegisterCommand =
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                    //!< properties
   L"Show Key DIMM Registers.",                                //!< help
-  ShowRegister
+  ShowRegister,
+  TRUE                                                        //!< enable print control support
 };
 
 CHAR16 *mppAllowedShowDimmRegistersValues[] = {
@@ -77,7 +122,7 @@ ShowRegister(
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   UINT16 *pDimmIds = NULL;
   UINT32 DimmIdsNum = 0;
   CHAR16 *pRegisterValues = NULL;
@@ -92,7 +137,11 @@ ShowRegister(
   UINT32 DimmCount = 0;
   DIMM_INFO *pDimms = NULL;
   CHAR16 DimmStr[MAX_DIMM_UID_LENGTH];
-  BOOLEAN FIS_1_4 = FALSE;
+  PRINT_CONTEXT *pPrinterCtx = NULL;
+  CHAR16 *pPath = NULL;
+  CHAR16 *FwMailboxSmallOutput = NULL;
+  UINT32 DimmIndex = 0;
+  UINT32 RegIndex = 0;
 
   NVDIMM_ENTRY();
 
@@ -102,21 +151,26 @@ ShowRegister(
 
   if (pCmd == NULL) {
     ReturnCode = EFI_INVALID_PARAMETER;
-    Print(FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
     goto Finish;
   }
+
+  pPrinterCtx = pCmd->pPrintCtx;
 
   /** Make sure we can access the config protocol **/
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_NOT_FOUND;
     goto Finish;
   }
 
   // Populate the list of DIMM_INFO structures with relevant information
-  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
+  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
   if (EFI_ERROR(ReturnCode)) {
+    if(ReturnCode == EFI_NOT_FOUND) {
+        PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_INFO_NO_FUNCTIONAL_DIMMS);
+    }
     goto Finish;
   }
 
@@ -124,7 +178,7 @@ ShowRegister(
   pDimmValues = GetTargetValue(pCmd, DIMM_TARGET);
   if (pDimmValues != NULL) {
     if (StrLen(pDimmValues) > 0) {
-      ReturnCode = GetDimmIdsFromString(pDimmValues, pDimms, DimmCount, &pDimmIds, &DimmIdsNum);
+      ReturnCode = GetDimmIdsFromString(pCmd, pDimmValues, pDimms, DimmCount, &pDimmIds, &DimmIdsNum);
       if (EFI_ERROR(ReturnCode)) {
         NVDIMM_WARN("Target value is not a valid DIMM ID");
         goto Finish;
@@ -135,7 +189,7 @@ ShowRegister(
   } else {
     ReturnCode = EFI_INVALID_PARAMETER;
     NVDIMM_WARN("Missing Dimm target");
-    Print(FORMAT_STR_NL, CLI_ERR_INCOMPLETE_SYNTAX);
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INCOMPLETE_SYNTAX);
     goto Finish;
   }
 
@@ -148,7 +202,7 @@ ShowRegister(
     }
   } else {
     ReturnCode = EFI_INVALID_PARAMETER;
-    Print(FORMAT_STR_NL, CLI_ERR_INCOMPLETE_SYNTAX);
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INCOMPLETE_SYNTAX);
     goto Finish;
   }
 
@@ -159,7 +213,7 @@ ShowRegister(
     ReturnCode = CheckDisplayList(pRegisterValues, mppAllowedShowDimmRegistersValues,
       ALLOWED_DISP_VALUES_COUNT(mppAllowedShowDimmRegistersValues));
     if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_TARGET_REGISTER);
+      PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_TARGET_REGISTER);
       goto Finish;
     }
   }
@@ -171,15 +225,11 @@ ShowRegister(
       continue;
     }
 
-    // @todo Remove FIS 1.4 backwards compatibility workaround
-    if (pDimms[Index].FwVer.FwApiMajor == 1 && pDimms[Index].FwVer.FwApiMinor <= 4) {
-      FIS_1_4 = TRUE;
-    }
-
     ReturnCode = pNvmDimmConfigProtocol->RetrieveDimmRegisters(pNvmDimmConfigProtocol,
         pDimms[Index].DimmID, &Bsr.AsUint64, &FwMailboxStatus,
         FW_MB_SMALL_OUTPUT_REG_USED, &FwMailboxOutput, pCommandStatus);
     if (EFI_ERROR(ReturnCode)) {
+        NVDIMM_WARN("Failed to retrieve Dimm Registers");
         goto Finish;
     }
 
@@ -189,47 +239,54 @@ ShowRegister(
         goto Finish;
     }
 
-    Print(L"---" FORMAT_STR L"=" FORMAT_STR L" Registers---\n", DIMM_ID_STR, DimmStr);
+    PRINTER_BUILD_KEY_PATH(pPath, DS_DIMM_INDEX_PATH, DimmIndex);
+    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, DIMM_ID_STR, DimmStr);
     if (ContainsValue(pRegisterValues, REGISTER_BSR_STR) || ShowAllRegisters) {
-      Print(L"Boot Status:                0x%016lx\n", Bsr.AsUint64);
-      // @todo Remove FIS 1.4 backwards compatibility workaround
-      Print(L"  [07:00] MajorCheckpoint ------ = 0x%x\n", Bsr.Separated_Current_FIS.Major);
-      Print(L"  [15:08] MinorCheckpoint ------ = 0x%x\n", Bsr.Separated_Current_FIS.Minor);
-      Print(L"  [17:16] MR (Media Ready) ----- = 0x%x (00:notReady; 1:Ready; 2:Error; 3:Rsv)\n", Bsr.Separated_Current_FIS.MR);
-      Print(L"  [18:18] DT (DDRT IO Init Started)  = 0x%x (0:notStarted; 1:Training Started)\n", Bsr.Separated_Current_FIS.DT);
-      Print(L"  [19:19] PCR (PCR access locked) = 0x%x (0:Unlocked; 1:Locked)\n", Bsr.Separated_Current_FIS.PCR);
-      Print(L"  [20:20] MBR (Mailbox Ready) --- = 0x%x (0:notReady; 1:Ready)\n", Bsr.Separated_Current_FIS.MBR);
-      Print(L"  [21:21] WTS (Watchdog Status)-- = 0x%x (0:noChange; 1:WT NMI generated)\n", Bsr.Separated_Current_FIS.WTS);
-      Print(L"  [22:22] FRCF (First Fast Refresh Completed) = 0x%x (0:noChange; 1:1stRefreshCycleCompleted)\n", Bsr.Separated_Current_FIS.FRCF);
-      Print(L"  [23:23] CR (Credit Ready) ---- = 0x%x (0:WDB notFlushed; 1:WDB Flushed)\n", Bsr.Separated_Current_FIS.CR);
-      Print(L"  [24:24] MD (Media Disabled) -- = 0x%x (0:User Data is accessible; 1:User Data is not accessible)\n", Bsr.Separated_Current_FIS.MD);
-      Print(L"  [25:25] OIE (SVN Downgrade Opt-In Enable) ----- = 0x%x (0:Not Enabled; 1:Enabled)\n", Bsr.Separated_Current_FIS.OIE);
-      Print(L"  [26:26] OIWE (SVN Downgrade Opt-In Was Enabled) = 0x%x (0:Never Enabled; 1:Has Been Enabled)\n",
-             Bsr.Separated_Current_FIS.OIWE);
-      if (FIS_1_4) {
-        Print(L"  [31:27] Rsvd ----------------- = 0x%x\n", Bsr.Separated_FIS_1_4.Rsvd);
-        Print(L"  [32:32] Assertion ------------ = 0x%x (1:FW has hit an assert - debug only)\n", Bsr.Separated_FIS_1_4.Assertion);
-        Print(L"  [33:33] MI_Stalled ----------- = 0x%x (1:FW has stalled media interface engine - debug only)\n",
-               Bsr.Separated_FIS_1_4.MI_Stalled);
-        Print(L"  [34:34] DR (DRAM Ready(AIT)) --= 0x%x (0:notReady; 1:Ready)\n", Bsr.Separated_FIS_1_4.DR);
-        Print(L"  [63:35] Rsvd ----------------- = 0x%x\n\n", Bsr.Separated_FIS_1_4.Rsvd1);
-      } else {
-        Print(L"  [28:27] DR (DRAM Ready(AIT)) --= 0x%x (0:Not trained,Not Loaded; 1:Trained,Not Loaded; 2:Error; 3:Trained,Loaded(Ready))\n", Bsr.Separated_Current_FIS.DR);
-        Print(L"  [29:29] RR (Reboot Required)= 0x%x (0:No reset is needed by the DIMM; 1:The DIMMs internal state requires a platform power cycle)\n", Bsr.Separated_Current_FIS.RR);
-        Print(L"  [30:63] Rsvd ----------------- = 0x%x\n", Bsr.Separated_Current_FIS.Rsvd);
-      }
+      PRINTER_BUILD_KEY_PATH(pPath, DS_REGISTER_INDEX_PATH, DimmIndex, RegIndex);
+      RegIndex++;
+      PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, REGISTER_TARGET_STR, REGISTER_BSR_STR);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"Boot Status", FORMAT_UINT64_HEX, Bsr.AsUint64);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [07:00] MajorCheckpoint -----------------------", FORMAT_HEX_NOWIDTH, Bsr.Separated_Current_FIS.Major);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [15:08] MinorCheckpoint -----------------------", FORMAT_HEX_NOWIDTH, Bsr.Separated_Current_FIS.Minor);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [17:16] MR (Media Ready) ----------------------", FORMAT_HEX_NOWIDTH L" (00:notReady; 1:Ready; 2:Error; 3:Rsv)", Bsr.Separated_Current_FIS.MR);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [18:18] DT (DDRT IO Init Started) -------------", FORMAT_HEX_NOWIDTH L" (0:notStarted; 1:Training Started)", Bsr.Separated_Current_FIS.DT);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [19:19] PCR (PCR access locked) ---------------", FORMAT_HEX_NOWIDTH L" (0:Unlocked; 1:Locked)", Bsr.Separated_Current_FIS.PCR);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [20:20] MBR (Mailbox Ready) -------------------", FORMAT_HEX_NOWIDTH L" (0:notReady; 1:Ready)", Bsr.Separated_Current_FIS.MBR);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [21:21] WTS (Watchdog Status)------------------", FORMAT_HEX_NOWIDTH L" (0:noChange; 1:WT NMI generated)", Bsr.Separated_Current_FIS.WTS);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [22:22] FRCF (First Fast Refresh Completed) ---", FORMAT_HEX_NOWIDTH L" (0:noChange; 1:1stRefreshCycleCompleted)", Bsr.Separated_Current_FIS.FRCF);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [23:23] CR (Credit Ready) ---------------------", FORMAT_HEX_NOWIDTH L" (0:WDB notFlushed; 1:WDB Flushed)", Bsr.Separated_Current_FIS.CR);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [24:24] MD (Media Disabled) -------------------", FORMAT_HEX_NOWIDTH L" (0:User Data is accessible; 1:User Data is not accessible)", Bsr.Separated_Current_FIS.MD);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [25:25] OIE (SVN Downgrade Opt-In Enable) -----", FORMAT_HEX_NOWIDTH L" (0:Not Enabled; 1:Enabled)", Bsr.Separated_Current_FIS.OIE);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [26:26] OIWE (SVN Downgrade Opt-In Was Enabled)", FORMAT_HEX_NOWIDTH L" (0:Never Enabled; 1:Has Been Enabled)", Bsr.Separated_Current_FIS.OIWE);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [28:27] DR (DRAM Ready(AIT)) ------------------", FORMAT_HEX_NOWIDTH L" (0:Not trained,Not Loaded; 1:Trained,Not Loaded; 2:Error; 3:Trained,Loaded(Ready))", Bsr.Separated_Current_FIS.DR);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [29:29] RR (Reboot Required) ------------------", FORMAT_HEX_NOWIDTH L" (0:No reset is needed by the DIMM; 1:The DIMMs internal state requires a platform power cycle)", Bsr.Separated_Current_FIS.RR);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  [30:63] Rsvd ----------------------------------", FORMAT_HEX_NOWIDTH L" (0:WDB notFlushed; 1:WDB Flushed)\n", Bsr.Separated_Current_FIS.Rsvd);
     }
     if (ContainsValue(pRegisterValues, REGISTER_OS_STR) || ShowAllRegisters) {
-      Print(L"FW Mailbox Status:          0x%016lx\n", FwMailboxStatus);
+      PRINTER_BUILD_KEY_PATH(pPath, DS_REGISTER_INDEX_PATH, DimmIndex, RegIndex);
+      RegIndex++;
+      PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, REGISTER_TARGET_STR, REGISTER_OS_STR);
+      PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, L"  FW Mailbox Status -----------------------------", FORMAT_UINT64_HEX, FwMailboxStatus);
       for (Index2 = 0; Index2 < FW_MB_SMALL_OUTPUT_REG_USED; Index2++) {
-        Print(L"FW Mailbox Small Output[%d]: 0x%016lx\n", Index2, FwMailboxStatus);
+        FwMailboxSmallOutput = CatSPrint(NULL, L"  FW Mailbox Small Output[%d] --------------------", Index2);
+        PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, FwMailboxSmallOutput, FORMAT_UINT64_HEX, FwMailboxStatus);
+        FREE_POOL_SAFE(FwMailboxSmallOutput);
       }
     }
+    DimmIndex++;
   }
 
   ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
-  DisplayCommandStatus(L"ShowRegister", L" on", pCommandStatus);
+  PRINTER_SET_COMMAND_STATUS(pPrinterCtx, ReturnCode, CLI_INFO_SHOW_REGISTER, L" on", pCommandStatus);
+
+  //Specify DataSet attributes
+  PRINTER_CONFIGURE_DATA_ATTRIBUTES(pPrinterCtx, DS_ROOT_PATH, &ShowRegisterDataSetAttribs);
+
+  //Force as list
+  PRINTER_ENABLE_LIST_TABLE_FORMAT(pPrinterCtx);
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
+  FREE_POOL_SAFE(pPath);
   FreeCommandStatus(&pCommandStatus);
   FREE_POOL_SAFE(pDimms);
   FREE_POOL_SAFE(pDimmIds);

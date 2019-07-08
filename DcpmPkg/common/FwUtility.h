@@ -60,6 +60,9 @@ typedef struct {
   UINT8 Opcode;
   UINT8 SubOpcode;
   UINT8 Status;
+#ifdef OS_BUILD
+  UINT8 DsmStatus;
+#endif
 } FW_CMD;
 #pragma pack(pop)
 
@@ -108,7 +111,7 @@ typedef union {
 #pragma pack(1)
 typedef struct _FW_VERSION {
   BUILD_WORD BuildNumber;             //!< dddd
-  VERSION_BYTE SecurityVersionNumber; //!< cc
+  VERSION_BYTE SecurityRevisionNumber; //!< cc
   VERSION_BYTE RevisionNumber;        //!< bb
   VERSION_BYTE ProductNumber;         //!< aa
 } FW_VERSION;
@@ -117,28 +120,28 @@ typedef struct _FW_VERSION {
   FW Image header: Intel CSS Header (128 bytes)
 **/
 typedef struct {
-  UINT32 ModuleType;    //!< moduleType = LT_MODULETYPE_CSS
-  UINT32 HeaderLen;     //!< headerLen == dword_sizeof(fixedHeader) + (modulusSize * 2) + exponentSize
-  UINT32 HeaderVersion; //!< bits [31:16] are major version, bits [15:0] are minor version
-  UINT32 ModuleID;      //!< if bit 31 == 1 this is a debug module
-  UINT32 ModuleVendor;  //!< moduleVendor = 0x00008086
-  DATE Date;            //!< BCD format: yyyymmdd
-  UINT32 Size;          //!< Size of entire module (header, crypto(modulus, exponent, signature), data) in DWORDs
-  UINT32 KeySize;       //!< Size of RSA public key in DWORDs
-  UINT32 ModulusSize;   //!< Size of RSA public key modulus in DWORDs
-  UINT32 ExponentSize;  //!< Size of RSA public key exponent
-  UINT8  ImageType;
-  FW_VERSION ImageVersion;
-  UINT32 PerPartIdHigh;
-  UINT32 PerPartIdLow;
-  UINT32 ImageSize;
-  API_VERSION FwApiVersion;
-  UINT8 StageNumber;
-  UINT32 fwImageStartAddr;
-  UINT16 VendorId;
-  UINT16 DeviceId;
-  UINT16 RevisionId;
-  UINT8 NumberofStages;
+  UINT32 ModuleType;         //!< moduleType = LT_MODULETYPE_CSS
+  UINT32 HeaderLen;          //!< headerLen == dword_sizeof(fixedHeader) + (modulusSize * 2) + exponentSize
+  UINT32 HeaderVersion;      //!< bits [31:16] are major version, bits [15:0] are minor version
+  UINT32 ModuleID;           //!< if bit 31 == 1 this is a debug module
+  UINT32 ModuleVendor;       //!< moduleVendor = 0x00008086
+  DATE Date;                 //!< BCD format: yyyymmdd
+  UINT32 Size;               //!< Size of entire module (header, crypto(modulus, exponent, signature), data) in DWORDs
+  UINT32 KeySize;            //!< Size of RSA public key in DWORDs
+  UINT32 ModulusSize;        //!< Size of RSA public key modulus in DWORDs
+  UINT32 ExponentSize;       //!< Size of RSA public key exponent
+  UINT8  ImageType;          //!< Image type: 0x1D - PRQ, 0x1E - DFX, 0x1F - DBG
+  FW_VERSION ImageVersion;   //!< Image version
+  UINT32 PerPartIdHigh;      //!< Part id high
+  UINT32 PerPartIdLow;       //!< Part id low
+  UINT32 ImageSize;          //!< Size of (header , signature , data) in DWORDs (ie size - 65 DWORDs)
+  API_VERSION FwApiVersion;  //!< BCD format: aa.bb
+  UINT8 StageNumber;         //!< Stage number: 0 - stage1 , 1 - stage 2
+  UINT32 fwImageStartAddr;   //!< Firmware SRAM start address. This value must agree with actual image start produced by the .ld file. The fwImageStartAddr address MUST be 64 byte aligned.
+  UINT16 VendorId;           //!< Specifies vendor. Intel (0x8086)
+  UINT16 DeviceId;           //!< Specifies root arch type (ekv, bwv, cwv, etc .).
+  UINT16 RevisionId;         //!< Specifies base and metal steppings of arch (A0, A1 , S0, S1, B0, B2, etc.).
+  UINT8 NumberofStages;      //!< Specifies the number of expected stages to load. 1 - one stage to load , 2 - two stages to load
   UINT8 Reserved[56];
 } FW_IMAGE_HEADER;
 
@@ -148,6 +151,37 @@ typedef struct {
 
 // Copied March 2018 from spi_memory_map_ekvs1.h
 #define SPI_DIRECTORY_VERSION 1
+
+
+/**
+  Tests a FW version to see if it is an undefined version
+
+  @param  FwProduct
+  @param  FwRevision
+  @param  FwSecurityVersion
+  @param  FwBuild
+
+  @return TRUE if relevant fields are all 0.
+
+**/
+#define FW_VERSION_UNDEFINED_BYVERS(FwProduct, FwRevision, FwSecurityVersion, FwBuild) (FwProduct == 0 && \
+                                              FwRevision == 0 && \
+                                              FwSecurityVersion == 0 && \
+                                              FwBuild == 0)
+
+/**
+  Tests a FW version to see if it is an undefined version
+
+  @param  FirmareVersionStruct           a FIRMWARE_VERSION struct
+
+  @return TRUE if relevant fields are all 0.
+
+**/
+#define FW_VERSION_UNDEFINED(FirmareVersionStruct) FW_VERSION_UNDEFINED_BYVERS(\
+                                               FirmareVersionStruct.FwProduct, \
+                                               FirmareVersionStruct.FwRevision, \
+                                               FirmareVersionStruct.FwSecurityVersion, \
+                                               FirmareVersionStruct.FwBuild)
 
 typedef struct {
   UINT16 DirectoryVersion;

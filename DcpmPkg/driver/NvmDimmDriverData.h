@@ -18,15 +18,6 @@
 #define SKU_CONTROLLED_COUNTRY          2
 
 /**
-  Security states bitmask
-**/
-#define SECURITY_MASK_ENABLED         BIT1
-#define SECURITY_MASK_LOCKED          BIT2
-#define SECURITY_MASK_FROZEN          BIT3
-#define SECURITY_MASK_COUNTEXPIRED    BIT4
-#define SECURITY_MASK_NOT_SUPPORTED   BIT5
-
-/**
   Persistent Partition Settings masks
 **/
 #define PARTITION_ENABLE_MASK BIT0
@@ -52,4 +43,7 @@ extern EFI_GUID gNvmDimmNgnvmVariableGuid;
 
 extern EFI_GUID gIntelDimmConfigVariableGuid;
 
+extern EFI_GUID gIntelDimmPbrVariableGuid;
+
+extern EFI_GUID gIntelDimmPbrTagIdVariableguid;
 #endif /** _NVMDIMM_DRIVER_DATA_H_ **/

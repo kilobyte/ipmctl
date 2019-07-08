@@ -8,16 +8,20 @@ endif::manpage[]
 
 NAME
 ----
-ipmctl-erase-device-security - Erases the persistent data on one or more DCPMMs
+ipmctl-erase-device-data - Erases the persistent data on one or more DCPMMs
 
-DESCRIPTION
------------
-Erases the persistent data on one or more DCPMMs.
+ifdef::os_build[]
+NOTE: This command is subject to OS Vendor (OSV) support. It will return "Not Supported."
+endif::os_build[]
 
 SYNOPSIS
 --------
 [verse]
 ipmctl delete [OPTIONS] -dimm [TARGETS] Passphrase=(string)
+
+DESCRIPTION
+-----------
+Erases the persistent data on one or more DCPMMs.
 
 OPTIONS
 -------
@@ -29,6 +33,22 @@ OPTIONS
 -h::
 -help::
   Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
+
+-master::
+  Erases DCPMMs using master passphrase. Valid only if master passphrase is enabled on specified
+  DCPMMs (see MasterPassphraseEnabled attribute in section <<Show Device>>).
+
+-default::
+  Use this option when the current master passphrase is set to the default value. Valid only
+  if used along with the '-master' option. May not be combined with the Passphrase property.
 
 ifdef::os_build[]
 -o (text|nvmxml)::
@@ -42,14 +62,15 @@ endif::os_build[]
 TARGETS
 -------
 -dimm (DimmIDs)::
-Erases specific specifics by supplying one or more comma-separated specific
+Erases specific DCPMMs by supplying one or more comma-separated DCPMM
 identifiers. However, this is not recommended as it may put the system in an
 undesirable state. The default is to erase all manageable DCPMMs.
 
 PROPERTIES
 ----------
 Passphrase::
-  If security state is disabled, then passphrase must not be supplied. +
+  If security state is disabled, then passphrase is not required and will be ignored
+  if supplied. +
   If security state is enabled, then a passphrase must be supplied. +
   The current passphrase (1-32 characters). For better passphrase protection, specify
   an empty string (e.g., Passphrase="") to be prompted for the passphrase or to use a
@@ -67,7 +88,17 @@ system.
 [verse]
 ipmctl delete -dimm Passphrase=123
 
-Erases all the persistent data on all DCPMEM DIMMs by having the CLI prompt for
+Security enabled specifics: Erases all the persistent data on all DCPMMs in the
+system using the default master passphrase.
+[verse]
+ipmctl delete -master -default -dimm
+
+Security enabled specifics: Erases all the persistent data on all DCPMMs in the
+system using the master passphrase.
+[verse]
+ipmctl delete -master -dimm Passphrase=masterpassphrase
+
+Erases all the persistent data on all DCPMMs by having the CLI prompt for
 the current passphrase.
 [verse]
 ipmctl delete -dimm Passphrase=""
@@ -75,13 +106,13 @@ ipmctl delete -dimm Passphrase=""
 LIMITATIONS
 -----------
 To successfully execute this command, the caller must have the appropriate privileges
-and the specified DCPMEM DIMM(s) must be manageable by the host software, not be
-in the "frozen" or "exceeded" lock states and any namespaces associated with the
-requested DCPMEM DIMM(s) must be deleted before running this command.
+and the specified DCPMM(s) must be manageable by the host software, not be
+in the "Frozen" or "Exceeded" lock states and any namespaces associated with the 
+requested DCPMM(s) must be deleted before running this command.
 
 ifdef::os_build[]
-NOTE: The command is subject to OS Vendor (OSV) support. If OSV does not provide
-support, the command will return “Not Supported.”
+The command is subject to OS Vendor (OSV) support. If OSV does not provide
+support, the command will return "Not Supported."
 endif::os_build[]
 
 RETURN DATA

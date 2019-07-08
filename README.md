@@ -19,24 +19,30 @@ ipmctl refers to the following interface components:
 
 ## Packages
 
-Fedora and EPEL 7 packages can be found at: https://copr.fedorainfracloud.org/coprs/jhli/ipmctl
+ipmctl is availible on Fedora.
+
+EPEL 7 packages can be found at: https://copr.fedorainfracloud.org/coprs/jhli/ipmctl
 
 OpenSUSE and SLES packages can be found at: https://build.opensuse.org/package/show/home:jhli/ipmctl
 
-Ubuntu packages can be found at: https://launchpad.net/~jhli/+archive/ubuntu/ipmctl
-
 ### libsafec
 
-ipmctl requires libsafec as a dependency
 
-Packages are available on Fedora 27 and 28.
+ipmctl requires libsafec as a dependency.
+
+
+libsafec is availible on Fedora.
+
 
 EPEL 7 packages can be found at: https://copr.fedorainfracloud.org/coprs/jhli/safeclib/
 
+
 OpenSUSE and SLES packages can be found at: https://build.opensuse.org/package/show/home:jhli/safeclib
+
 
 Ubuntu packages can be found at: https://launchpad.net/~jhli/+archive/ubuntu/libsafec
 
+Alternately, -DSAFECLIB_SRC_DOWNLOAD_AND_STATIC_LINK=ON to download sources and statically link to safeclib
 
 ## Build
 

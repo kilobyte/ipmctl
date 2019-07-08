@@ -16,22 +16,26 @@
 struct Command SetSensorCommand =
 {
   SET_VERB,                                                         //!< verb
-  {                                                              //!< options
-    {FORCE_OPTION_SHORT, FORCE_OPTION, L"", L"", FALSE, ValueEmpty}
+  {                                                                 //!< options
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"",HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
+    {FORCE_OPTION_SHORT, FORCE_OPTION, L"", L"",HELP_FORCE_DETAILS_TEXT, FALSE, ValueEmpty}
 #ifdef OS_BUILD
-    ,{ OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired }
+    ,{ OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP,HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired }
 #endif
   },
   {                                                                 //!< targets
-    {SENSOR_TARGET, L"", SENSOR_TARGETS, TRUE, ValueRequired},
-    {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, FALSE, ValueRequired}
+    {SENSOR_TARGET, L"", HELP_TEXT_SENSORS, TRUE, ValueRequired},
+    {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, FALSE, ValueOptional}
   },
   {                                                                 //!< properties
-    {NON_CRIT_THRESHOLD_PROPERTY, L"", HELP_TEXT_VALUE, FALSE},
+    {ALARM_THRESHOLD_PROPERTY, L"", HELP_TEXT_VALUE, FALSE},
     {ENABLED_STATE_PROPERTY, L"", PROPERTY_VALUE_0 L"|" PROPERTY_VALUE_1, FALSE}
   },
   L"Modify the alarm threshold(s) for one or more DIMMs.",          //!< help
-  SetSensor
+  SetSensor,
+  TRUE
 };
 
 /**
@@ -47,7 +51,7 @@ SetSensor(
   IN     struct Command *pCmd
   )
 {
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   UINT16 *pDimmIds = NULL;
   UINT32 DimmHandle = 0;
   UINT32 DimmIndex = 0;
@@ -67,69 +71,74 @@ SetSensor(
   DIMM_INFO *pDimms = NULL;
   UINT32 DimmCount = 0;
   CHAR16 DimmStr[MAX_DIMM_UID_LENGTH];
+  PRINT_CONTEXT *pPrinterCtx = NULL;
 
   NVDIMM_ENTRY();
-
-  SetDisplayInfo(L"SetSensor", ResultsView, NULL);
 
   ZeroMem(DimmStr, sizeof(DimmStr));
 
   if (pCmd == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
     ReturnCode = EFI_INVALID_PARAMETER;
+    NVDIMM_DBG("pCmd parameter is NULL.\n");
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
     goto Finish;
   }
 
+  pPrinterCtx = pCmd->pPrintCtx;
+
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 
   // Populate the list of DIMM_INFO structures with relevant information
-  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
+  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
   if (EFI_ERROR(ReturnCode)) {
+    if(ReturnCode == EFI_NOT_FOUND) {
+        PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_INFO_NO_FUNCTIONAL_DIMMS);
+    }
     goto Finish;
   }
 
   // check targets
   if (ContainTarget(pCmd, DIMM_TARGET)) {
     pTargetValue = GetTargetValue(pCmd, DIMM_TARGET);
-    ReturnCode = GetDimmIdsFromString(pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
+    ReturnCode = GetDimmIdsFromString(pCmd, pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
     if (EFI_ERROR(ReturnCode)) {
       NVDIMM_DBG("Failed on GetDimmIdsFromString");
       goto Finish;
     }
     if (!AllDimmsInListAreManageable(pDimms, DimmCount, pDimmIds, DimmIdsCount)){
-      Print(FORMAT_STR_NL, CLI_ERR_UNMANAGEABLE_DIMM);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_UNMANAGEABLE_DIMM);
       goto Finish;
     }
   }
 
   if (DimmIdsCount == 0) {
-    ReturnCode = GetManageableDimmsNumberAndId(&DimmIdsCount, &pDimmIds);
+    ReturnCode = GetManageableDimmsNumberAndId(pNvmDimmConfigProtocol, &DimmIdsCount, &pDimmIds);
     if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
       goto Finish;
     }
     if (DimmIdsCount == 0) {
-      Print(FORMAT_STR_NL, CLI_INFO_NO_MANAGEABLE_DIMMS);
       ReturnCode = EFI_NOT_FOUND;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_INFO_NO_MANAGEABLE_DIMMS);
       goto Finish;
     }
   }
 
   // check properties
 
-  if (!EFI_ERROR(ContainsProperty(pCmd, NON_CRIT_THRESHOLD_PROPERTY))) {
-    if (PropertyToUint64(pCmd, NON_CRIT_THRESHOLD_PROPERTY, &TempValue)) {
+  if (!EFI_ERROR(ContainsProperty(pCmd, ALARM_THRESHOLD_PROPERTY))) {
+    if (PropertyToUint64(pCmd, ALARM_THRESHOLD_PROPERTY, &TempValue)) {
       NonCriticalThreshold = (INT16) TempValue;
       ValidPropertyAndValue = TRUE;
     } else {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_PROPERTY_NONCRIT_THRESHOLD);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_PROPERTY_ALARM_THRESHOLD);
       goto Finish;
     }
   }
@@ -138,14 +147,14 @@ SetSensor(
       EnabledState = (UINT8) TempValue;
       ValidPropertyAndValue = TRUE;
     } else {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_PROPERTY_ENABLED_STATE);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_PROPERTY_ENABLED_STATE);
       goto Finish;
     }
   }
   if (!ValidPropertyAndValue) {
-    Print(FORMAT_STR_NL, CLI_ERR_INCOMPLETE_SYNTAX);
     ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCOMPLETE_SYNTAX);
     goto Finish;
   }
 
@@ -158,8 +167,8 @@ SetSensor(
     } else if (StrICmp(pTargetValue, SPARE_CAPACITY_TARGET_VALUE) == 0) {
       SensorId = SENSOR_TYPE_PERCENTAGE_REMAINING;
     } else {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_TARGET_SENSOR);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_TARGET_SENSOR);
       goto Finish;
     }
   }
@@ -172,7 +181,7 @@ SetSensor(
   // initialize status structure
   ReturnCode = InitializeCommandStatus(&pCommandStatus);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     NVDIMM_DBG("Failed on InitializeCommandStatus");
     goto Finish;
   }
@@ -189,14 +198,16 @@ SetSensor(
     for (Index = 0; Index < DimmIdsCount; Index++) {
       ReturnCode = GetDimmHandleByPid(pDimmIds[Index], pDimms, DimmCount, &DimmHandle, &DimmIndex);
       if (EFI_ERROR(ReturnCode)) {
+        PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
         goto Finish;
       }
       ReturnCode = GetPreferredDimmIdAsString(DimmHandle, pDimms[DimmIndex].DimmUid,
           DimmStr, MAX_DIMM_UID_LENGTH);
       if (EFI_ERROR(ReturnCode)) {
+        PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
         goto Finish;
       }
-      Print(L"Modifying settings on DIMM (" FORMAT_STR L").", DimmStr);
+      PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, L"Modifying settings on DIMM " FORMAT_STR L".", DimmStr);
       ReturnCode = PromptYesNo(&Confirmation);
       if (!EFI_ERROR(ReturnCode) && Confirmation) {
         ReturnCode = pNvmDimmConfigProtocol->SetAlarmThresholds(pNvmDimmConfigProtocol, &pDimmIds[Index], 1,
@@ -205,7 +216,7 @@ SetSensor(
           goto FinishCommandStatusSet;
         }
       } else {
-        Print(L"Skipped modifying settings for DIMM (" FORMAT_STR L")\n", DimmStr);
+        PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, L"Skipped modifying settings for DIMM " FORMAT_STR L"\n", DimmStr);
         continue;
       }
     }
@@ -219,8 +230,9 @@ SetSensor(
 
 FinishCommandStatusSet:
   ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
-  DisplayCommandStatus(pCommandStatusMessage, L" on", pCommandStatus);
+  PRINTER_SET_COMMAND_STATUS(pPrinterCtx, ReturnCode, pCommandStatusMessage, L" on", pCommandStatus);
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
   FreeCommandStatus(&pCommandStatus);
   FREE_POOL_SAFE(pDimmIds);
   FREE_POOL_SAFE(pCommandStatusMessage);

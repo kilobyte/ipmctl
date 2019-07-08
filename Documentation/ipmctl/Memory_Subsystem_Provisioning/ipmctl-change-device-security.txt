@@ -10,10 +10,11 @@ NAME
 ----
 ipmctl-change-device-security - Changes the DCPMM security lock state
 
-DESCRIPTION
------------
-Changes the data-at-rest security lock state for the persistent memory on one or more
-DCPMMs.
+ifdef::os_build[]
+NOTE: This command is subject to OS Vendor (OSV) support. It will return "Not Supported."
+An exception is if the DCPMM is Unlocked Seurity State, then transitioning to Disabled
+is permitted.
+endif::os_build[]
 
 SYNOPSIS
 --------
@@ -21,11 +22,24 @@ SYNOPSIS
 ipmctl set [OPTIONS] -dimm [TARGETS] Lockstate=(Unlocked|Disabled|Frozen)
 Passphrase=(string)
 
+DESCRIPTION
+-----------
+Changes the data-at-rest security lock state for the persistent memory on one or more
+DCPMMs.
+
 OPTIONS
 -------
 -h::
 -help::
   Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::
@@ -77,13 +91,15 @@ Passphrase=""
 LIMITATIONS
 -----------
 To successfully execute this command, the caller must have the appropriate privileges
-and the specified DCPMMs must be manageable by the host software, have
-security enabled and not be in the "frozen" or "exceeded" lock states.
+and the specified DCPMMs must be manageable by the host software, have security enabled,
+not be in the "Frozen" or "Exceeded" lock states, and not executing a long operation 
+(ARS, Overwrite, FWUpdate).
 
 ifdef::os_build[]
 The command is subject to OS Vendor (OSV) support. If OSV does not provide support,
-the command may return “Not Supported.” Set LockState=Disabled is available
-regardless of OSV support.
+the command may return "Not Supported." An exception is if the DCPMM is Unlocked
+(via UEFI or OSV tool), then transitioning to Disabled is possible regardless of
+OSV support.
 endif::os_build[]
 
 RETURN DATA

@@ -14,6 +14,64 @@
 #include "ShowSocketsCommand.h"
 #include "Common.h"
 #include "Convert.h"
+#include <ReadRunTimePreferences.h>
+
+#define DS_ROOT_PATH                        L"/SocketList"
+#define DS_SOCKET_PATH                      L"/SocketList/Socket"
+#define DS_SOCKET_INDEX_PATH                L"/SocketList/Socket[%d]"
+
+ /*
+  *  PRINT LIST ATTRIBUTES
+  *  ---SocketId=0x0001---
+  *     MappedMemoryLimit=X
+  *     TotalMappedMemory=X
+  *     ...
+  */
+PRINTER_LIST_ATTRIB ShowSocketListAttributes =
+{
+ {
+    {
+      SOCKET_NODE_STR,                                        //GROUP LEVEL TYPE
+      L"---" SOCKET_ID_STR L"=$(" SOCKET_ID_STR L")---",      //NULL or GROUP LEVEL HEADER
+      SHOW_LIST_IDENT L"%ls=%ls",                             //NULL or KEY VAL FORMAT STR
+      SOCKET_ID_STR                                           //NULL or IGNORE KEY LIST (K1;K2)
+    }
+  }
+};
+
+ /*
+ *  PRINTER TABLE ATTRIBUTES (3 columns)
+ *   SocketID | MappedMemoryLimit | TotalMappedMemory
+ *   ================================================
+ *   0x0001   | X                 | X
+ *   ...
+ */
+PRINTER_TABLE_ATTRIB ShowSocketTableAttributes =
+{
+  {
+    {
+      SOCKET_ID_STR,                                        //COLUMN HEADER
+      SOCKET_MAX_STR_WIDTH,                                 //COLUMN MAX STR WIDTH
+      DS_SOCKET_PATH PATH_KEY_DELIM SOCKET_ID_STR           //COLUMN DATA PATH
+    },
+    {
+      MAPPED_MEMORY_LIMIT_STR,                               //COLUMN HEADER
+      MAPPED_MEMORY_LIMIT_MAX_STR_WIDTH,                     //COLUMN MAX STR WIDTH
+      DS_SOCKET_PATH PATH_KEY_DELIM MAPPED_MEMORY_LIMIT_STR  //COLUMN DATA PATH
+    },
+    {
+      TOTAL_MAPPED_MEMORY_STR,                                //COLUMN HEADER
+      TOTAL_MAPPED_MEMORY_MAX_STR_WIDTH,                      //COLUMN MAX STR WIDTH
+      DS_SOCKET_PATH PATH_KEY_DELIM TOTAL_MAPPED_MEMORY_STR   //COLUMN DATA PATH
+    }
+  }
+};
+
+PRINTER_DATA_SET_ATTRIBS ShowSocketDataSetAttribs =
+{
+  &ShowSocketListAttributes,
+  &ShowSocketTableAttributes
+};
 
 /**
   Command syntax definition
@@ -25,10 +83,14 @@ struct Command ShowSocketsCommand =
    options
   **/
   {
-    {DISPLAY_OPTION_SHORT, DISPLAY_OPTION, L"", HELP_TEXT_ATTRIBUTES, FALSE, ValueRequired},
-    {UNITS_OPTION_SHORT, UNITS_OPTION, L"", UNITS_OPTION_HELP, FALSE, ValueRequired}
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"", HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
+    {ALL_OPTION_SHORT, ALL_OPTION, L"", L"", HELP_ALL_DETAILS_TEXT, FALSE, ValueEmpty},
+    {DISPLAY_OPTION_SHORT, DISPLAY_OPTION, L"", HELP_TEXT_ATTRIBUTES, HELP_DISPLAY_DETAILS_TEXT, FALSE, ValueRequired},
+    {UNITS_OPTION_SHORT, UNITS_OPTION, L"", UNITS_OPTION_HELP, HELP_UNIT_DETAILS_TEXT, FALSE, ValueRequired}
 #ifdef OS_BUILD
-    ,{ OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired }
+    ,{ OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired }
 #endif
   },
   /**
@@ -37,10 +99,11 @@ struct Command ShowSocketsCommand =
   {
     {SOCKET_TARGET, L"", HELP_TEXT_SOCKET_IDS, TRUE, ValueOptional}
   },
-  {{L"", L"", L"", FALSE, ValueOptional}},           //!< properties
-  L"Show basic information about the physical \
-    processors in the host server.",                 //!< help
-  ShowSockets                                        //!< run function
+  {{L"", L"", L"", FALSE, ValueOptional}},            //!< properties
+  L"Show basic information about the physical\
+  processors in the host server.",                  //!< help
+  ShowSockets,                                        //!< run function
+  TRUE,                                               //!< enable print control support
 };
 
 CHAR16 *mppAllowedShowSocketsDisplayValues[] =
@@ -88,8 +151,7 @@ ShowSockets(
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
-  EFI_STATUS TempReturnCode = EFI_SUCCESS;
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   UINT32 SocketCount = 0;
   SOCKET_INFO *pSockets = NULL;
   UINT16 *pSocketIds = NULL;
@@ -99,12 +161,14 @@ ShowSockets(
   UINT32 Index2 = 0;
   UINT16 UnitsOption = DISPLAY_SIZE_UNIT_UNKNOWN;
   UINT16 UnitsToDisplay = FixedPcdGet32(PcdDcpmmCliDefaultCapacityUnit);
-  BOOLEAN DisplayOptionSet = FALSE;
-  CHAR16 *pDisplayValues = NULL;
   DISPLAY_PREFERENCES DisplayPreferences;
   CHAR16 *pMappedMemLimitStr = NULL;
   CHAR16 *pTotalMappedMemStr = NULL;
   BOOLEAN SocketIdFound = FALSE;
+  CMD_DISPLAY_OPTIONS *pDispOptions = NULL;
+  BOOLEAN ShowAll = FALSE;
+  PRINT_CONTEXT *pPrinterCtx = NULL;
+  CHAR16 *pPath = NULL;
 
   NVDIMM_ENTRY();
 
@@ -112,17 +176,36 @@ ShowSockets(
 
   if (pCmd == NULL) {
     ReturnCode = EFI_INVALID_PARAMETER;
-    Print(FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
+    NVDIMM_DBG("pCmd parameter is NULL.\n");
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
     goto Finish;
   }
+
+  pPrinterCtx = pCmd->pPrintCtx;
+
+  pDispOptions = AllocateZeroPool(sizeof(CMD_DISPLAY_OPTIONS));
+  if (NULL == pDispOptions) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
+    goto Finish;
+  }
+
+  ReturnCode = CheckAllAndDisplayOptions(pCmd, mppAllowedShowSocketsDisplayValues,
+    ALLOWED_DISP_VALUES_COUNT(mppAllowedShowSocketsDisplayValues), pDispOptions);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("CheckAllAndDisplayOptions has returned error. Code " FORMAT_EFI_STATUS "\n", ReturnCode);
+    goto Finish;
+  }
+
+  ShowAll = (!pDispOptions->AllOptionSet && !pDispOptions->DisplayOptionSet) || pDispOptions->AllOptionSet;
 
   /**
     Make sure we can access the config protocol
   **/
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 
@@ -134,33 +217,7 @@ ShowSockets(
     ReturnCode = GetUintsFromString(pSocketsValue, &pSocketIds, &SocketIdsNum);
 
     if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_TARGET_SOCKET);
-      goto Finish;
-    }
-  }
-
-  /**
-    if the display option was specified
-  **/
-  pDisplayValues = getOptionValue(pCmd, DISPLAY_OPTION);
-  if (pDisplayValues) {
-    DisplayOptionSet = TRUE;
-  }
-  else {
-    pDisplayValues = getOptionValue(pCmd, DISPLAY_OPTION_SHORT);
-    if (pDisplayValues) {
-      DisplayOptionSet = TRUE;
-    }
-  }
-
-  /**
-    Check that the display parameters are correct (if display option is set)
-  **/
-  if (DisplayOptionSet) {
-    ReturnCode = CheckDisplayList(pDisplayValues, mppAllowedShowSocketsDisplayValues,
-        ALLOWED_DISP_VALUES_COUNT(mppAllowedShowSocketsDisplayValues));
-    if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_OPTION_DISPLAY);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_TARGET_SOCKET);
       goto Finish;
     }
   }
@@ -168,10 +225,10 @@ ShowSockets(
   /**
     Determine the units to display the sizes in
   **/
-  ReturnCode = ReadRunTimeCliDisplayPreferences(&DisplayPreferences);
+  ReturnCode = ReadRunTimePreferences(&DisplayPreferences, DISPLAY_CLI_INFO);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_DISPLAY_PREFERENCES_RETRIEVE);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_DISPLAY_PREFERENCES_RETRIEVE);
     goto Finish;
   }
   UnitsToDisplay = DisplayPreferences.SizeUnit;
@@ -192,10 +249,10 @@ ShowSockets(
   **/
   ReturnCode = pNvmDimmConfigProtocol->GetSockets(pNvmDimmConfigProtocol, &SocketCount, &pSockets);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     goto Finish;
   } else if (pSockets == NULL) {
-    Print(L"Platform does not support socket SKU limits.\n");
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_SOCKET_SKU_SUPPORT);
     goto Finish;
   }
 
@@ -216,73 +273,53 @@ ShowSockets(
     }
     if (!SocketIdFound) {
       ReturnCode = EFI_NOT_FOUND;
-      Print(L"\nSocket not found. Invalid SocketID: %d\n", pSocketIds[Index]);
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_TARGET_SOCKET);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_SOCKET_NOT_FOUND CLI_ERR_INCORRECT_VALUE_TARGET_SOCKET, pSocketIds[Index]);
       goto Finish;
     }
   }
 
-  /**
-    Display a summary table of all sockets
-  **/
-  if (!DisplayOptionSet) {
-
-    SetDisplayInfo(L"Socket", TableView, NULL);
-
-    Print(FORMAT_SHOW_SOCKET_HEADER,
-	  SOCKET_ID_STR,
-	  MAPPED_MEMORY_LIMIT_STR,
-	  TOTAL_MAPPED_MEMORY_STR);
-
-    for (Index = 0; Index < SocketCount; Index++) {
-      if (SocketIdsNum > 0 && !ContainUint(pSocketIds, SocketIdsNum, pSockets[Index].SocketId)) {
-        continue;
-      }
-
-      TempReturnCode = MakeCapacityString(pSockets[Index].MappedMemoryLimit, UnitsToDisplay, TRUE, &pMappedMemLimitStr);
-      KEEP_ERROR(ReturnCode, TempReturnCode);
-
-      TempReturnCode = MakeCapacityString(pSockets[Index].TotalMappedMemory, UnitsToDisplay, TRUE, &pTotalMappedMemStr);
-      KEEP_ERROR(ReturnCode, TempReturnCode);
-
-      Print(FORMAT_SHOW_SOCKET,
-        pSockets[Index].SocketId,
-        pMappedMemLimitStr,
-        pTotalMappedMemStr);
-
-      FREE_POOL_SAFE(pMappedMemLimitStr);
-      FREE_POOL_SAFE(pTotalMappedMemStr);
+  for (Index = 0; Index < SocketCount; Index++) {
+    if (SocketIdsNum > 0 && !ContainUint(pSocketIds, SocketIdsNum, pSockets[Index].SocketId)) {
+      continue;
     }
-  } else {  /** display detailed view **/
 
-    for (Index = 0; Index < SocketCount; Index++) {
-      if (SocketIdsNum > 0 && !ContainUint(pSocketIds, SocketIdsNum, pSockets[Index].SocketId)) {
-        continue;
-      }
+    PRINTER_BUILD_KEY_PATH(pPath, DS_SOCKET_INDEX_PATH, Index);
 
-      /** always print the socket ID **/
-      Print(L"---" FORMAT_STR L"=0x%04x---\n", SOCKET_ID_STR, pSockets[Index].SocketId);
+    /** SocketID **/
+    PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, SOCKET_ID_STR, FORMAT_HEX, pSockets[Index].SocketId);
 
-      /** MappedMemoryLimit **/
-      if (DisplayOptionSet && ContainsValue(pDisplayValues, MAPPED_MEMORY_LIMIT_STR)) {
-        TempReturnCode = MakeCapacityString(pSockets[Index].MappedMemoryLimit, UnitsToDisplay, TRUE, &pMappedMemLimitStr);
-        KEEP_ERROR(ReturnCode, TempReturnCode);
-        Print(FORMAT_SPACE_SPACE_SPACE_STR_EQ_STR_NL, MAPPED_MEMORY_LIMIT_STR, pMappedMemLimitStr);
+    /** MappedMemoryLimit **/
+    if (ShowAll || (pDispOptions->DisplayOptionSet && ContainsValue(pDispOptions->pDisplayValues, MAPPED_MEMORY_LIMIT_STR))) {
+      ReturnCode = MakeCapacityString(gNvmDimmCliHiiHandle, pSockets[Index].MappedMemoryLimit, UnitsToDisplay, TRUE, &pMappedMemLimitStr);
+        if (EFI_ERROR(ReturnCode)) {
+            PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_CAPACITY_STRING);
+            goto Finish;
+        }
+        PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, MAPPED_MEMORY_LIMIT_STR, pMappedMemLimitStr);
         FREE_POOL_SAFE(pMappedMemLimitStr);
-      }
+    }
 
-      /** TotalMappedMemory **/
-      if (DisplayOptionSet && ContainsValue(pDisplayValues, TOTAL_MAPPED_MEMORY_STR)) {
-        ReturnCode = MakeCapacityString(pSockets[Index].TotalMappedMemory, UnitsToDisplay, TRUE, &pTotalMappedMemStr);
-        Print(FORMAT_SPACE_SPACE_SPACE_STR_EQ_STR_NL, TOTAL_MAPPED_MEMORY_STR, pTotalMappedMemStr);
+    /** TotalMappedMemory **/
+    if (ShowAll || (pDispOptions->DisplayOptionSet && ContainsValue(pDispOptions->pDisplayValues, TOTAL_MAPPED_MEMORY_STR))) {
+      ReturnCode = MakeCapacityString(gNvmDimmCliHiiHandle, pSockets[Index].TotalMappedMemory, UnitsToDisplay, TRUE, &pTotalMappedMemStr);
+        if (EFI_ERROR(ReturnCode)) {
+            PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_CAPACITY_STRING);
+            goto Finish;
+        }
+        PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, TOTAL_MAPPED_MEMORY_STR, pTotalMappedMemStr);
         FREE_POOL_SAFE(pTotalMappedMemStr);
-      }
     }
   }
-
+  //Specify table attributes
+  PRINTER_CONFIGURE_DATA_ATTRIBUTES(pPrinterCtx, DS_ROOT_PATH, &ShowSocketDataSetAttribs);
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
+  FREE_POOL_SAFE(pPath);
+  FREE_CMD_DISPLAY_OPTIONS_SAFE(pDispOptions);
   FREE_POOL_SAFE(pSockets);
   FREE_POOL_SAFE(pSocketIds);
+  FREE_POOL_SAFE(pMappedMemLimitStr);
+  FREE_POOL_SAFE(pTotalMappedMemStr);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }

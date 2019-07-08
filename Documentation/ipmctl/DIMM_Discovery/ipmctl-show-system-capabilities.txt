@@ -10,14 +10,14 @@ NAME
 ----
 ipmctl-show-system-capabilities - Shows the platform supported DCPMM capabilities
 
-DESCRIPTION
------------
-Shows the total DCPMM memory resource allocation across the host server.
-
 SYNOPSIS
 --------
 [verse]
 ipmctl show [OPTIONS] -system -capabilities
+
+DESCRIPTION
+-----------
+Shows the total DCPMM memory resource allocation across the host server.
 
 OPTIONS
 -------
@@ -37,6 +37,14 @@ NOTE: The all and display options are exclusive and may not be used together.
 -h::
 -help::
   Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::
@@ -65,8 +73,10 @@ PlatformConfigSupported::
   (Default) Whether the platform level configuration of DCPMMs can be modified
   with the host software. One of:
   - 0: Changes must be made in the BIOS.
-  - 1: The command Section 2.2.5, “Create Memory Allocation Goal” is supported.
-    Alignment (Default) Capacity alignment requirement for all memory types as reported by the BIOS.
+  - 1: The command *_Create Memory Allocation Goal_* is supported.
+
+Alignment (Default)::
+  Capacity alignment requirement for all memory types as reported by the BIOS.
 
 AllowedVolatileMode::
   (Default) The volatile mode allowed as determined by BIOS setup. One of:
@@ -94,7 +104,7 @@ AllowedAppDirectMode::
 
 ModesSupported::
   A list of DCPMM modes supported by the BIOS. Refer to the command
-  Section 2.1.3, “Show Device” to determine the modes supported by the individual
+  *_Show Device_* to determine the modes supported by the individual
   DCPMMs. One or more of:
   - 1LM: One-level volatile mode. All memory resources in the platform are
     independently accessible, and not captive of the other resources.
@@ -107,13 +117,13 @@ ModesSupported::
 SupportedAppDirectSettings::
   The BIOS supported list of App Direct interleave settings in the format:
   - x[Way] - [(IMCSize) iMC x (ChannelSize) Channel] followed by the input
-    format for the command Section 2.5.7, “Change Preferences”:
+    format for the command *_Change Preferences_*:
     (ByOne|(IMCSize)_(ChannelSize)).
 
 RecommendedAppDirectSettings::
   The BIOS recommended list of App Direct interleave settings in the format:
   - x[Way] - [(IMCSize) iMC x (ChannelSize) Channel] followed by the input format for
-  the command Section 2.5.7, “Change Preferences”:
+  the command *_Change Preferences_*:
   (ByOne|(IMCSize)_(ChannelSize)).
 
 MinNamespaceSize::
@@ -136,19 +146,19 @@ AppDirectMigrationSupported::
 
 RenameNamespaceSupported::
   If the host software supports renaming a namespace with the command Section
-  2.4.4, “Modify Namespace.”. One of:
+  <<Modify Namespace>>. One of:
   - 0: Not supported
   - 1: Supported
 
 GrowAppDirectNamespaceSupported::
   If the host software supports increasing the capacity of an App Direct
-  namespace with the command Section 2.4.4, “Modify Namespace.” One of:
+  namespace with the command Section <<Modify Namespace>>. One of:
   - 0: Not supported
   - 1: Supported
 
 ShrinkAppDirectNamespaceSupported::
   If the host software supports decreasing the capacity of an App Direct
-  namespace with the command Section 2.4.4, “Modify Namespace.” One of:
+  namespace with the command Section <<Modify Namespace>>. One of:
   - 0: Not supported
   - 1: Supported
 
@@ -193,3 +203,15 @@ ChangeDevicePassphraseSupported::
   Whether Change Device Passphrase is supported.
   - 0: Not supported
   - 1: Supported
+
+ChangeMasterPassphraseSupported::
+  Whether Change Master Passphrase is supported.
+  - 0: Not supported
+  - 1: Supported
+
+MasterEraseDeviceDataSupported::
+  Whether Master Erase Device Data is supported.
+  - 0: Not supported
+  - 1: Supported
+
+

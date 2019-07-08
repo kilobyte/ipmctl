@@ -8,12 +8,21 @@
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiDriverEntryPoint.h>
 
+/*
+ * Note: Autogen.c and Autogen.h in UEFI builds are normally automatically generated
+ * files in Build/.../cli/... or Build/.../driver/... that are built from preferences set
+ * in DcpmPkg.dsc and DcpmPkg.dec by the UEFI pre-processor python scripts.
+ * Since we don't have that pre-processor set up yet for OS builds, we need a stop gap
+ * so that the UEFI libraries we compile against are happy. So we define our own
+ * Autogen.c and Autogen.h here and have a minimum of defines.
+ */
+
 GLOBAL_REMOVE_IF_UNREFERENCED GUID gEfiCallerIdGuid = {0x9ce4325e, 0x003e, 0x11e3, {0xb5, 0x82, 0xb8, 0xac, 0x6f, 0x19, 0x9a, 0x57}};
 
 GLOBAL_REMOVE_IF_UNREFERENCED CHAR8 *gEfiCallerBaseName = "IntelDCPersistentMemoryDriver";
 
 // Guids
-GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gNvmDimmCliVariableGuid = { 0x11c64219, 0xbfa2, 0x42ce,{ 0x99, 0xb1, 0x17, 0x0b, 0x4a, 0x2b, 0xe0, 0x8e } };
+GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gNvmDimmVariableGuid = { 0xbac1898e, 0x751d, 0x11e6, {0x8b, 0x77, 0x86, 0xf3, 0x0c, 0xa8, 0x93, 0xd3} };
 GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiIfrTianoGuid = { 0xf0b1735, 0x87a0, 0x4193, {0xb2, 0x66, 0x53, 0x8c, 0x38, 0xaf, 0x48, 0xce }};
 GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiSmbiosTableGuid = { 0xEB9D2D31, 0x2D88, 0x11D3, { 0x9A, 0x16, 0x00, 0x90, 0x27, 0x3F, 0xC1, 0x4D }};
 GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiSmbios3TableGuid = { 0xF2FD1544, 0x9794, 0x4A2C, { 0x99, 0x2E, 0xE5, 0xBB, 0xCF, 0x20, 0xE3, 0x94 }};
@@ -22,7 +31,6 @@ GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiAcpi10TableGuid = { 0xEB9D2D30, 0x2D8
 GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiAcpi20TableGuid = { 0x8868E871, 0xE4F1, 0x11D3, { 0xBC, 0x22, 0x00, 0x80, 0xC7, 0x3C, 0x88, 0x81 }};
 GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiFileInfoGuid = { 0x09576E92, 0x6D3F, 0x11D2, { 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B }};
 GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gNvmDimmNgnvmVariableGuid = { 0x8986be7a, 0x212f, 0x427e, {0x81, 0xa5, 0x42, 0x0d, 0xab, 0xc7, 0x92, 0xdf}};
-GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gNvmDimmHiiVariableGuid = {0xbac1898e, 0x751d, 0x11e6, {0x8b, 0x77, 0x86, 0xf3, 0x0c, 0xa8, 0x93, 0xd3}};
 GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiMdePkgTokenSpaceGuid = { 0x914AEBE7, 0x4635, 0x459b, { 0xAA, 0x1C, 0x11, 0xE2, 0x19, 0xB0, 0x3A, 0x10 }};
 GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiVTUTF8Guid = { 0xAD15A0D6, 0x8BEC, 0x4ACF, { 0xA0, 0x73, 0xD0, 0x1D, 0xE7, 0x7E, 0x2D, 0x88 }};
 GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiVT100Guid = { 0xDFA66065, 0xB419, 0x11D3, { 0x9A, 0x2D, 0x00, 0x90, 0x27, 0x3F, 0xC1, 0x4D }};
@@ -71,116 +79,44 @@ GLOBAL_REMOVE_IF_UNREFERENCED EFI_GUID gEfiFormBrowser2ProtocolGuid = {0xb9d4c36
 UINT64 _gPcd_BinaryPatch_PcdPciExpressBaseAddress = _PCD_PATCHABLE_VALUE_PcdPciExpressBaseAddress;
 GLOBAL_REMOVE_IF_UNREFERENCED UINTN _gPcd_BinaryPatch_Size_PcdPciExpressBaseAddress = 8;
 
-// Definition of PCDs used in libraries
+/*
+ * The "tokens" here are just unique identifiers. Their value doesn't
+ * matter as long as it doesn't overlap another token.
+ */
 
 #define _PCD_TOKEN_PcdVerifyNodeInList  2U
 #define _PCD_SIZE_PcdVerifyNodeInList 1
 #define _PCD_GET_MODE_SIZE_PcdVerifyNodeInList  _PCD_SIZE_PcdVerifyNodeInList
 #define _PCD_VALUE_PcdVerifyNodeInList  ((BOOLEAN)0U)
 GLOBAL_REMOVE_IF_UNREFERENCED const BOOLEAN _gPcd_FixedAtBuild_PcdVerifyNodeInList = _PCD_VALUE_PcdVerifyNodeInList;
-extern const  BOOLEAN  _gPcd_FixedAtBuild_PcdVerifyNodeInList;
-#define _PCD_GET_MODE_BOOL_PcdVerifyNodeInList  _gPcd_FixedAtBuild_PcdVerifyNodeInList
-//#define _PCD_SET_MODE_BOOL_PcdVerifyNodeInList  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
 
 #define _PCD_TOKEN_PcdMaximumLinkedListLength  3U
 #define _PCD_SIZE_PcdMaximumLinkedListLength 4
 #define _PCD_GET_MODE_SIZE_PcdMaximumLinkedListLength  _PCD_SIZE_PcdMaximumLinkedListLength
 #define _PCD_VALUE_PcdMaximumLinkedListLength  1000000U
 GLOBAL_REMOVE_IF_UNREFERENCED const UINT32 _gPcd_FixedAtBuild_PcdMaximumLinkedListLength = _PCD_VALUE_PcdMaximumLinkedListLength;
-extern const  UINT32  _gPcd_FixedAtBuild_PcdMaximumLinkedListLength;
-#define _PCD_GET_MODE_32_PcdMaximumLinkedListLength  _gPcd_FixedAtBuild_PcdMaximumLinkedListLength
-//#define _PCD_SET_MODE_32_PcdMaximumLinkedListLength  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
 
 #define _PCD_TOKEN_PcdMaximumAsciiStringLength  4U
 #define _PCD_SIZE_PcdMaximumAsciiStringLength 4
 #define _PCD_GET_MODE_SIZE_PcdMaximumAsciiStringLength  _PCD_SIZE_PcdMaximumAsciiStringLength
 #define _PCD_VALUE_PcdMaximumAsciiStringLength  1000000U
 GLOBAL_REMOVE_IF_UNREFERENCED const UINT32 _gPcd_FixedAtBuild_PcdMaximumAsciiStringLength = _PCD_VALUE_PcdMaximumAsciiStringLength;
-extern const  UINT32  _gPcd_FixedAtBuild_PcdMaximumAsciiStringLength;
-#define _PCD_GET_MODE_32_PcdMaximumAsciiStringLength  _gPcd_FixedAtBuild_PcdMaximumAsciiStringLength
-//#define _PCD_SET_MODE_32_PcdMaximumAsciiStringLength  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
 
 #define _PCD_TOKEN_PcdMaximumUnicodeStringLength  5U
 #define _PCD_SIZE_PcdMaximumUnicodeStringLength 4
 #define _PCD_GET_MODE_SIZE_PcdMaximumUnicodeStringLength  _PCD_SIZE_PcdMaximumUnicodeStringLength
 #define _PCD_VALUE_PcdMaximumUnicodeStringLength  1000000U
 GLOBAL_REMOVE_IF_UNREFERENCED const UINT32 _gPcd_FixedAtBuild_PcdMaximumUnicodeStringLength = _PCD_VALUE_PcdMaximumUnicodeStringLength;
-extern const  UINT32  _gPcd_FixedAtBuild_PcdMaximumUnicodeStringLength;
-#define _PCD_GET_MODE_32_PcdMaximumUnicodeStringLength  _gPcd_FixedAtBuild_PcdMaximumUnicodeStringLength
-//#define _PCD_SET_MODE_32_PcdMaximumUnicodeStringLength  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
-
-#define _PCD_TOKEN_PcdDebugPropertyMask  6U
-#define _PCD_SIZE_PcdDebugPropertyMask 1
-#define _PCD_GET_MODE_SIZE_PcdDebugPropertyMask  _PCD_SIZE_PcdDebugPropertyMask
-#define _PCD_VALUE_PcdDebugPropertyMask  0xffU
-GLOBAL_REMOVE_IF_UNREFERENCED const UINT8 _gPcd_FixedAtBuild_PcdDebugPropertyMask = _PCD_VALUE_PcdDebugPropertyMask;
-extern const  UINT8  _gPcd_FixedAtBuild_PcdDebugPropertyMask;
-#define _PCD_GET_MODE_8_PcdDebugPropertyMask  _gPcd_FixedAtBuild_PcdDebugPropertyMask
-//#define _PCD_SET_MODE_8_PcdDebugPropertyMask  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
 
 #define _PCD_TOKEN_PcdMaximumDevicePathNodeCount  7U
 #define _PCD_SIZE_PcdMaximumDevicePathNodeCount 4
 #define _PCD_GET_MODE_SIZE_PcdMaximumDevicePathNodeCount  _PCD_SIZE_PcdMaximumDevicePathNodeCount
 #define _PCD_VALUE_PcdMaximumDevicePathNodeCount  0U
 GLOBAL_REMOVE_IF_UNREFERENCED const UINT32 _gPcd_FixedAtBuild_PcdMaximumDevicePathNodeCount = _PCD_VALUE_PcdMaximumDevicePathNodeCount;
-extern const  UINT32  _gPcd_FixedAtBuild_PcdMaximumDevicePathNodeCount;
-#define _PCD_GET_MODE_32_PcdMaximumDevicePathNodeCount  _gPcd_FixedAtBuild_PcdMaximumDevicePathNodeCount
-//#define _PCD_SET_MODE_32_PcdMaximumDevicePathNodeCount  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
 
-#define _PCD_TOKEN_PcdDriverDiagnosticsDisable  8U
-#define _PCD_SIZE_PcdDriverDiagnosticsDisable 1
-#define _PCD_GET_MODE_SIZE_PcdDriverDiagnosticsDisable  _PCD_SIZE_PcdDriverDiagnosticsDisable
-#define _PCD_VALUE_PcdDriverDiagnosticsDisable  ((BOOLEAN)0U)
-GLOBAL_REMOVE_IF_UNREFERENCED const BOOLEAN _gPcd_FixedAtBuild_PcdDriverDiagnosticsDisable = _PCD_VALUE_PcdDriverDiagnosticsDisable;
-extern const  BOOLEAN  _gPcd_FixedAtBuild_PcdDriverDiagnosticsDisable;
-#define _PCD_GET_MODE_BOOL_PcdDriverDiagnosticsDisable  _gPcd_FixedAtBuild_PcdDriverDiagnosticsDisable
-//#define _PCD_SET_MODE_BOOL_PcdDriverDiagnosticsDisable  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
 
-#define _PCD_TOKEN_PcdComponentNameDisable  9U
-#define _PCD_SIZE_PcdComponentNameDisable 1
-#define _PCD_GET_MODE_SIZE_PcdComponentNameDisable  _PCD_SIZE_PcdComponentNameDisable
-#define _PCD_VALUE_PcdComponentNameDisable  ((BOOLEAN)0U)
-GLOBAL_REMOVE_IF_UNREFERENCED const BOOLEAN _gPcd_FixedAtBuild_PcdComponentNameDisable = _PCD_VALUE_PcdComponentNameDisable;
-extern const  BOOLEAN  _gPcd_FixedAtBuild_PcdComponentNameDisable;
-#define _PCD_GET_MODE_BOOL_PcdComponentNameDisable  _gPcd_FixedAtBuild_PcdComponentNameDisable
-//#define _PCD_SET_MODE_BOOL_PcdComponentNameDisable  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
-
-#define _PCD_TOKEN_PcdDriverDiagnostics2Disable  10U
-#define _PCD_SIZE_PcdDriverDiagnostics2Disable 1
-#define _PCD_GET_MODE_SIZE_PcdDriverDiagnostics2Disable  _PCD_SIZE_PcdDriverDiagnostics2Disable
-#define _PCD_VALUE_PcdDriverDiagnostics2Disable  ((BOOLEAN)0U)
-GLOBAL_REMOVE_IF_UNREFERENCED const BOOLEAN _gPcd_FixedAtBuild_PcdDriverDiagnostics2Disable = _PCD_VALUE_PcdDriverDiagnostics2Disable;
-extern const  BOOLEAN  _gPcd_FixedAtBuild_PcdDriverDiagnostics2Disable;
-#define _PCD_GET_MODE_BOOL_PcdDriverDiagnostics2Disable  _gPcd_FixedAtBuild_PcdDriverDiagnostics2Disable
-//#define _PCD_SET_MODE_BOOL_PcdDriverDiagnostics2Disable  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
-
-#define _PCD_TOKEN_PcdComponentName2Disable  11U
-#define _PCD_SIZE_PcdComponentName2Disable 1
-#define _PCD_GET_MODE_SIZE_PcdComponentName2Disable  _PCD_SIZE_PcdComponentName2Disable
-#define _PCD_VALUE_PcdComponentName2Disable  ((BOOLEAN)0U)
-GLOBAL_REMOVE_IF_UNREFERENCED const BOOLEAN _gPcd_FixedAtBuild_PcdComponentName2Disable = _PCD_VALUE_PcdComponentName2Disable;
-extern const  BOOLEAN  _gPcd_FixedAtBuild_PcdComponentName2Disable;
-#define _PCD_GET_MODE_BOOL_PcdComponentName2Disable  _gPcd_FixedAtBuild_PcdComponentName2Disable
-//#define _PCD_SET_MODE_BOOL_PcdComponentName2Disable  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
-
-#define _PCD_TOKEN_PcdUgaConsumeSupport  12U
-#define _PCD_SIZE_PcdUgaConsumeSupport 1
-#define _PCD_GET_MODE_SIZE_PcdUgaConsumeSupport  _PCD_SIZE_PcdUgaConsumeSupport
-#define _PCD_VALUE_PcdUgaConsumeSupport  ((BOOLEAN)1U)
-GLOBAL_REMOVE_IF_UNREFERENCED const BOOLEAN _gPcd_FixedAtBuild_PcdUgaConsumeSupport = _PCD_VALUE_PcdUgaConsumeSupport;
-extern const  BOOLEAN  _gPcd_FixedAtBuild_PcdUgaConsumeSupport;
-#define _PCD_GET_MODE_BOOL_PcdUgaConsumeSupport  _gPcd_FixedAtBuild_PcdUgaConsumeSupport
-//#define _PCD_SET_MODE_BOOL_PcdUgaConsumeSupport  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
-
-#define _PCD_TOKEN_PcdUefiLibMaxPrintBufferSize  13U
-#define _PCD_SIZE_PcdUefiLibMaxPrintBufferSize 4
-#define _PCD_GET_MODE_SIZE_PcdUefiLibMaxPrintBufferSize  _PCD_SIZE_PcdUefiLibMaxPrintBufferSize
-#define _PCD_VALUE_PcdUefiLibMaxPrintBufferSize  320U
-GLOBAL_REMOVE_IF_UNREFERENCED const UINT32 _gPcd_FixedAtBuild_PcdUefiLibMaxPrintBufferSize = _PCD_VALUE_PcdUefiLibMaxPrintBufferSize;
-extern const  UINT32  _gPcd_FixedAtBuild_PcdUefiLibMaxPrintBufferSize;
-#define _PCD_GET_MODE_32_PcdUefiLibMaxPrintBufferSize  _gPcd_FixedAtBuild_PcdUefiLibMaxPrintBufferSize
-//#define _PCD_SET_MODE_32_PcdUefiLibMaxPrintBufferSize  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD
-
+extern EFI_STATUS EFIAPI NvmDimmDriverDriverEntryPoint(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *pSystemTable);
+extern EFI_STATUS EFIAPI NvmDimmDriverUnload(IN EFI_HANDLE ImageHandle);
 
 EFI_STATUS
 EFIAPI
@@ -1151,9 +1087,6 @@ unsigned char IntelDCPersistentMemoryDriverStrings[] = {
 // 0x0081: STR_DCPMM_BOOT_STATUS_MEDIA_DISABLED:0x0081
   0x14,  0x4D,  0x00,  0x65,  0x00,  0x64,  0x00,  0x69,  0x00,  0x61,  0x00,  0x20,  0x00,  0x44,  0x00,  0x69,
   0x00,  0x73,  0x00,  0x61,  0x00,  0x62,  0x00,  0x6C,  0x00,  0x65,  0x00,  0x64,  0x00,  0x00,  0x00,
-// 0x0082: STR_DCPMM_BOOT_STATUS_FW_ASSERT:0x0082
-  0x14,  0x46,  0x00,  0x57,  0x00,  0x20,  0x00,  0x41,  0x00,  0x73,  0x00,  0x73,  0x00,  0x65,  0x00,  0x72,
-  0x00,  0x74,  0x00,  0x00,  0x00,
 // 0x0083: STR_DCPMM_BOOT_STATUS_DDRT_NOT_READY:0x0083
   0x14,  0x44,  0x00,  0x44,  0x00,  0x52,  0x00,  0x54,  0x00,  0x20,  0x00,  0x4E,  0x00,  0x6F,  0x00,  0x74,
   0x00,  0x20,  0x00,  0x52,  0x00,  0x65,  0x00,  0x61,  0x00,  0x64,  0x00,  0x79,  0x00,  0x00,  0x00,
@@ -1457,15 +1390,6 @@ unsigned char IntelDCPersistentMemoryDriverStrings[] = {
   0x00,  0x73,  0x00,  0x20,  0x00,  0x69,  0x00,  0x73,  0x00,  0x20,  0x00,  0x6E,  0x00,  0x6F,  0x00,  0x74,
   0x00,  0x20,  0x00,  0x72,  0x00,  0x65,  0x00,  0x61,  0x00,  0x64,  0x00,  0x61,  0x00,  0x62,  0x00,  0x6C,
   0x00,  0x65,  0x00,  0x2E,  0x00,  0x00,  0x00,
-// 0x00AC: STR_DIAGNOSTIC_BSR_FW_ASSERT:0x00AC
-  0x14,  0x43,  0x00,  0x72,  0x00,  0x69,  0x00,  0x74,  0x00,  0x69,  0x00,  0x63,  0x00,  0x61,  0x00,  0x6C,
-  0x00,  0x3A,  0x00,  0x20,  0x00,  0x54,  0x00,  0x68,  0x00,  0x65,  0x00,  0x20,  0x00,  0x66,  0x00,  0x69,
-  0x00,  0x72,  0x00,  0x6D,  0x00,  0x77,  0x00,  0x61,  0x00,  0x72,  0x00,  0x65,  0x00,  0x20,  0x00,  0x6F,
-  0x00,  0x6E,  0x00,  0x20,  0x00,  0x41,  0x00,  0x45,  0x00,  0x50,  0x00,  0x20,  0x00,  0x44,  0x00,  0x49,
-  0x00,  0x4D,  0x00,  0x4D,  0x00,  0x20,  0x00,  0x25,  0x00,  0x73,  0x00,  0x20,  0x00,  0x72,  0x00,  0x65,
-  0x00,  0x70,  0x00,  0x6F,  0x00,  0x72,  0x00,  0x74,  0x00,  0x65,  0x00,  0x64,  0x00,  0x20,  0x00,  0x61,
-  0x00,  0x6E,  0x00,  0x20,  0x00,  0x61,  0x00,  0x73,  0x00,  0x73,  0x00,  0x65,  0x00,  0x72,  0x00,  0x74,
-  0x00,  0x2E,  0x00,  0x00,  0x00,
 // 0x00AD: STR_DIAGNOSTIC_BSR_DDRT_IO_NOT_COMPLETE:0x00AD
   0x14,  0x43,  0x00,  0x72,  0x00,  0x69,  0x00,  0x74,  0x00,  0x69,  0x00,  0x63,  0x00,  0x61,  0x00,  0x6C,
   0x00,  0x3A,  0x00,  0x20,  0x00,  0x41,  0x00,  0x45,  0x00,  0x50,  0x00,  0x20,  0x00,  0x44,  0x00,  0x49,

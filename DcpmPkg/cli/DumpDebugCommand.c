@@ -19,19 +19,24 @@ struct Command DumpDebugCommandSyntax =
 {
   DUMP_VERB,                                                        //!< verb
   {                                                                 //!< options
-    { L"", DESTINATION_OPTION, L"", DESTINATION_OPTION_HELP, TRUE, ValueRequired },
+    {L"", DESTINATION_PREFIX_OPTION, L"", L"", DESTINATION_PREFIX_OPTION_HELP, FALSE, ValueRequired },
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"",HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_DDRT,  L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", LARGE_PAYLOAD_OPTION,  L"", L"",HELP_LPAYLOAD_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", SMALL_PAYLOAD_OPTION,  L"", L"",HELP_SPAYLOAD_DETAILS_TEXT, FALSE, ValueEmpty},
 #ifdef OS_BUILD
-    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired },
+    { OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, HELP_OPTIONS_DETAILS_TEXT,FALSE, ValueRequired },
 #endif
-    { L"", DICTIONARY_OPTION, L"", DICTIONARY_OPTION_HELP, FALSE, ValueOptional }
+    { L"", DICTIONARY_OPTION, L"", DICTIONARY_OPTION_HELP, L"Dictionary to interpret the log",FALSE, ValueOptional }
   },
   {
     {DEBUG_TARGET, L"", L"", TRUE, ValueEmpty},
-    {DIMM_TARGET, L"", HELP_TEXT_DIMM_ID, TRUE, ValueRequired}
+    {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, TRUE, ValueOptional}
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                          //!< properties
   L"Dump firmware debug log",                                       //!< help
-  DumpDebugCommand                                                  //!< run function
+  DumpDebugCommand, TRUE                                                  //!< run function
 };
 
 /**
@@ -65,65 +70,70 @@ DumpDebugCommand(
   IN    struct Command *pCmd
 )
 {
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   COMMAND_STATUS *pCommandStatus = NULL;
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   UINT32 DimmCount = 0;
-  UINT16 *pDimmIdsFilter = NULL;
+  UINT32 InitializedDimmCount = 0;
+  UINT32 UninitializedDimmCount = 0;
+  UINT16 *pDimmIds = NULL;
+  UINT32 DimmIdsNum = 0;
   CHAR16 *pTargetValue = NULL;
-  UINT32 DimmIdsFilterNum = 0;
-  VOID *pDebugBuffer = NULL;
-  UINT64 CurrentDebugBufferSize = 0;
-  UINT64 BytesWritten = 0;
-  UINT64 Length = 0;
-  UINT64 Index = 0;
-  BOOLEAN Found = FALSE;
   CHAR16 *pDumpUserPath = NULL;
   DIMM_INFO *pDimms = NULL;
+  UINT32 Index = 0;
   nlog_dict_entry * next;
   BOOLEAN dictExists = FALSE;
   CHAR16 *pDictUserPath = NULL;
+  CHAR16 *raw_file_name = NULL;
   CHAR16 *decoded_file_name = NULL;
   nlog_dict_entry* dict_head = NULL;
   UINT32 dict_version;
   UINT64 dict_entries;
+  PRINT_CONTEXT *pPrinterCtx = NULL;
+  CHAR16 *SourceNames[NUM_FW_DEBUG_LOG_SOURCES] = {L"media", L"sram", L"spi"};
+  UINT8 IndexSource = 0;
+  VOID *RawLogBuffer = NULL;
+  UINT64 RawLogBufferSizeBytes = 0;
+  INT8 SuccessesPerDimm[MAX_DIMMS];
+  UINT32 Reserved = 0;
 
   NVDIMM_ENTRY();
 
+  // Make sure SuccessesPerDimm is fully initialized to -1's.
+  // -1 indicates a dimm that ends up to not be specified
+  // so we don't care about its number of successes
+  SetMem(SuccessesPerDimm, MAX_DIMMS * sizeof(SuccessesPerDimm[0]), (UINT8)(-1));
+
   if (pCmd == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
     goto Finish;
   }
+
+  pPrinterCtx = pCmd->pPrintCtx;
 
   /** Open Config protocol **/
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 
-  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
+  ReturnCode = GetAllDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_NONE, &pDimms,
+      &DimmCount, &InitializedDimmCount, &UninitializedDimmCount);
   if (EFI_ERROR(ReturnCode)) {
+    if(ReturnCode == EFI_NOT_FOUND) {
+        PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_INFO_NO_FUNCTIONAL_DIMMS);
+    }
     goto Finish;
   }
 
   /** get specific DIMM pid passed in, set it **/
   pTargetValue = GetTargetValue(pCmd, DIMM_TARGET);
-  ReturnCode = GetDimmIdsFromString(pTargetValue, pDimms, DimmCount, &pDimmIdsFilter, &DimmIdsFilterNum);
-  if (EFI_ERROR(ReturnCode) || (pDimmIdsFilter == NULL)) {
+  ReturnCode = GetDimmIdsFromString(pCmd, pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsNum);
+  if (EFI_ERROR(ReturnCode)) {
     NVDIMM_WARN("Target value is not a valid Dimm ID");
-    goto Finish;
-  }
-  if (DimmIdsFilterNum > 1) {
-    NVDIMM_WARN("Target value is not a valid Dimm ID");
-    Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_TARGET_DIMM);
-    goto Finish;
-  }
-
-  if (!AllDimmsInListAreManageable(pDimms, DimmCount, pDimmIdsFilter, DimmIdsFilterNum)) {
-    Print(FORMAT_STR_NL, CLI_ERR_UNMANAGEABLE_DIMM);
-    ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
   }
 
@@ -132,13 +142,14 @@ DumpDebugCommand(
     pDumpUserPath = getOptionValue(pCmd, DESTINATION_OPTION);
     if (pDumpUserPath == NULL) {
       ReturnCode = EFI_OUT_OF_RESOURCES;
-      NVDIMM_ERR("Could not get -destination value. Out of memory.");
-      Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+      NVDIMM_ERR("Could not get -destination value. Out of memory");
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
       goto Finish;
     }
   }
   else {
     ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_PARSER_DETAILED_ERR_OPTION_REQUIRED, DESTINATION_OPTION);
     goto Finish;
   }
 
@@ -146,105 +157,136 @@ DumpDebugCommand(
     pDictUserPath = getOptionValue(pCmd, DICTIONARY_OPTION);
     if (pDictUserPath == NULL) {
       ReturnCode = EFI_OUT_OF_RESOURCES;
-      NVDIMM_ERR("Could not get -dict value. Out of memory.");
-      Print(FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
+      NVDIMM_ERR("Could not get -dict value. Out of memory");
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, FORMAT_STR_NL, CLI_ERR_OUT_OF_MEMORY);
       goto Finish;
     }
 
     if (EFI_ERROR(FileExists(pDictUserPath, &dictExists)))
     {
       ReturnCode = EFI_END_OF_FILE;
-      NVDIMM_ERR("Could not check for existence of the dictionary file.");
-      Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+      NVDIMM_ERR("Could not check for existence of the dictionary file");
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
       goto Finish;
     }
 
     if (!dictExists)
     {
-      Print(L"The passed dictionary file doesn't exist.\n");
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"The passed dictionary file doesn't exist\n");
     }
   }
 
-  ReturnCode = InitializeCommandStatus(&pCommandStatus);
-  if (EFI_ERROR(ReturnCode)) {
-    ReturnCode = EFI_DEVICE_ERROR;
-    goto Finish;
-  }
-
-  BytesWritten = 0;
-
-  ReturnCode = pNvmDimmConfigProtocol->DumpFwDebugLog(pNvmDimmConfigProtocol,
-    pDimmIdsFilter[0], &pDebugBuffer, &BytesWritten, pCommandStatus);
-
-  if (EFI_ERROR(ReturnCode)) {
-    if (pCommandStatus->GeneralStatus != NVM_SUCCESS) {
-      ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
-      DisplayCommandStatus(CLI_INFO_DUMP_DEBUG_LOG, L"", pCommandStatus);
+  // Only load the dictionary once
+  if (dictExists)
+  {
+    dict_head = load_nlog_dict(pCmd, pDictUserPath, &dict_version, &dict_entries);
+    if (!dict_head)
+    {
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"Failed to load the dictionary file " FORMAT_STR L"\n", pDictUserPath);
       goto Finish;
     }
+
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"Loaded %d dictionary entries\n", dict_entries);
   }
 
-  /** Get Fw debug log  **/
-  ReturnCode = DumpToFile(pDumpUserPath, BytesWritten, pDebugBuffer, TRUE);
-  if (EFI_ERROR(ReturnCode)) {
-    if (ReturnCode == EFI_VOLUME_FULL) {
-      Print(L"Not enough space to save file " FORMAT_STR L" with size %lu\n", pDumpUserPath, CurrentDebugBufferSize);
-    }
-    else {
-      Print(L"Failed to dump FW Debug logs to file (" FORMAT_STR L")\n", pDumpUserPath);
-    }
-  }
-  else {
-    Print(L"Successfully dumped FW Debug logs to file (" FORMAT_STR L"). (%lu) MiB were written.\n",
-      pDumpUserPath, BYTES_TO_MIB(BytesWritten));
+  for (Index = 0; Index < DimmCount; Index++) {
+    // Initialize to -1 so we can ignore dimms that aren't specified
+    SuccessesPerDimm[Index] = -1;
 
-    if (dictExists)
-    {
-      dict_head = load_nlog_dict(pDictUserPath, &dict_version, &dict_entries);
-      if (!dict_head)
-      {
-        Print(L"Failed to load the dictionary file " FORMAT_STR L"\n", pDictUserPath);
-        goto Finish;
+    // If a dimm was not specified, filter it out here
+    if (DimmIdsNum > 0 && !ContainUint(pDimmIds, DimmIdsNum, pDimms[Index].DimmID)) {
+      continue;
+    }
+
+    // Initialize the successes of the specified dimm to 0
+    // Used to calculate if we return an error or not to CLI
+    SuccessesPerDimm[Index] = 0;
+
+    // For easier reading
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"\n");
+
+    // Collect logs from every debug log source on each dimm
+    for (IndexSource = 0; IndexSource < NUM_FW_DEBUG_LOG_SOURCES; IndexSource++) {
+
+      // Re-initialize pCommandStatus messages for each dimm and debug log source
+      ReturnCode = InitializeCommandStatus(&pCommandStatus);
+      if (EFI_ERROR(ReturnCode)) {
+        ReturnCode = EFI_DEVICE_ERROR;
+        PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
+        goto FreeAndContinue;
       }
 
-      Length = StrLen(pDumpUserPath);
-      //find the extention value
-      for (Index = Length-1; Index >= 0; Index--)
-      {
-        if (pDumpUserPath[Index] == L'.')
-        {
-          Found = TRUE;
-          break;
+      // Append dimm info, source, and .txt
+      // We want to re-use pDumpUserPath, so use CatSPrint instead of
+      // CatSPrintClean
+      raw_file_name = CatSPrint(pDumpUserPath, L"_" FORMAT_STR L"_0x%04x_" FORMAT_STR L".bin",
+          pDimms[Index].DimmUid, pDimms[Index].DimmHandle, SourceNames[IndexSource]);
+      decoded_file_name = CatSPrint(pDumpUserPath, L"_" FORMAT_STR L"_0x%04x_" FORMAT_STR L".txt",
+          pDimms[Index].DimmUid, pDimms[Index].DimmHandle, SourceNames[IndexSource]);
+      if (raw_file_name == NULL || decoded_file_name == NULL) {
+        goto FreeAndContinue;
+      }
+
+
+      ReturnCode = pNvmDimmConfigProtocol->GetFwDebugLog(pNvmDimmConfigProtocol,
+          pDimms[Index].DimmID, IndexSource, Reserved, &RawLogBuffer, &RawLogBufferSizeBytes, pCommandStatus);
+
+      if (EFI_ERROR(ReturnCode)) {
+        if (ReturnCode == EFI_NOT_STARTED) {
+          PRINTER_SET_MSG(pPrinterCtx, ReturnCode,
+            L"No " FORMAT_STR L" FW debug logs found\n",
+            SourceNames[IndexSource]);
+          goto FreeAndContinue;
+        }
+        if (pCommandStatus->GeneralStatus != NVM_SUCCESS) {
+          ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
+          PRINTER_SET_MSG(pPrinterCtx, ReturnCode,
+            L"Unexpected error in retrieving " FORMAT_STR L" FW debug logs\n",
+            SourceNames[IndexSource]);
+          PRINTER_SET_COMMAND_STATUS(pPrinterCtx, ReturnCode, CLI_INFO_DUMP_DEBUG_LOG, L" ", pCommandStatus);
+          goto FreeAndContinue;
         }
       }
 
-      if (FALSE == Found)
-      {
-        //no extention was found, just append
-        decoded_file_name = CatSPrintClean(pDumpUserPath, L".txt");
-      }
-      else
-      {
-        //append .txt to the extentionless string
-        Length = Index;
-        decoded_file_name = AllocateZeroPool((sizeof(CHAR16) * Length) + sizeof(CHAR16));
-        if (decoded_file_name) {
-          for (Index = 0; Index < Length; Index++)
-          {
-            decoded_file_name[Index] = pDumpUserPath[Index];
-          }
-          decoded_file_name = CatSPrintClean(decoded_file_name, L".txt");
+      /** Get FW debug log  **/
+      ReturnCode = DumpToFile(raw_file_name, RawLogBufferSizeBytes, RawLogBuffer, TRUE);
+      if (EFI_ERROR(ReturnCode)) {
+        if (ReturnCode == EFI_VOLUME_FULL) {
+          PRINTER_SET_MSG(pPrinterCtx, ReturnCode,
+              L"Not enough space to save file " FORMAT_STR L" with size %lu MiB\n",
+              raw_file_name, BYTES_TO_MIB(RawLogBufferSizeBytes));
         }
-        FREE_POOL_SAFE(pDumpUserPath);
+        else {
+          PRINTER_SET_MSG(pPrinterCtx, ReturnCode,
+              L"Failed to dump " FORMAT_STR L" FW debug logs to file " FORMAT_STR L"\n",
+              SourceNames[IndexSource], raw_file_name);
+        }
+        goto FreeAndContinue;
       }
 
-      Print(L"Loaded %d dictionary entries.\n", dict_entries);
-      if (decoded_file_name) {
-        decode_nlog_binary(decoded_file_name, pDebugBuffer, BytesWritten, dict_version, dict_head);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"Dumped " FORMAT_STR L" FW debug logs to file " FORMAT_STR L"\n",
+            SourceNames[IndexSource], raw_file_name);
+
+      /** Decode FW debug log **/
+      if (dictExists) {
+        decode_nlog_binary(pCmd, decoded_file_name, RawLogBuffer, RawLogBufferSizeBytes,
+            dict_version, dict_head);
       }
+
+      SuccessesPerDimm[Index]++;
+
+FreeAndContinue:
+
+      FREE_POOL_SAFE(raw_file_name);
+      FREE_POOL_SAFE(decoded_file_name);
+      FREE_POOL_SAFE(RawLogBuffer);
+      FreeCommandStatus(&pCommandStatus);
     }
   }
+
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
+
   while (dict_head)
   {
     next = dict_head->next;
@@ -255,12 +297,22 @@ Finish:
     dict_head = next;
   }
 
-  FREE_POOL_SAFE(decoded_file_name);
   FREE_POOL_SAFE(pDimms);
+  FREE_POOL_SAFE(pDimmIds);
   FREE_POOL_SAFE(pDictUserPath);
-  FREE_POOL_SAFE(pDimmIdsFilter);
-  FREE_POOL_SAFE(pDebugBuffer);
-  FreeCommandStatus(&pCommandStatus);
+  FREE_POOL_SAFE(pDumpUserPath);
+
+  // Return success if any of 3 logs were retrieved on every specified dimm
+  ReturnCode = EFI_SUCCESS;
+  for (Index = 0; Index < DimmCount; Index++)
+  {
+    if (SuccessesPerDimm[Index] == 0)
+    {
+      // If any specified dimm (initialized with 0) had no successes, then return error
+      ReturnCode = EFI_DEVICE_ERROR;
+    }
+  }
+
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }

@@ -15,6 +15,8 @@
 #include "NvmDimmCli.h"
 #include "ShowGoalCommand.h"
 #include <Convert.h>
+#include <ReadRunTimePreferences.h>
+
 
 #define CREATE_GOAL_COMMAND_STATUS_HEADER       L"Create region configuration goal"
 #define CREATE_GOAL_COMMAND_STATUS_CONJUNCTION  L" on"
@@ -26,15 +28,18 @@ struct Command CreateGoalCommand =
 {
   CREATE_VERB,                                                   //!< verb
   {                                                              //!< options
-    {FORCE_OPTION_SHORT, FORCE_OPTION, L"", L"", FALSE, ValueEmpty},
-    {UNITS_OPTION_SHORT, UNITS_OPTION, L"", UNITS_OPTION_HELP, FALSE, ValueRequired},
+    {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"", HELP_VERBOSE_DETAILS_TEXT,FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
+    {FORCE_OPTION_SHORT, FORCE_OPTION, L"", L"",HELP_FORCE_DETAILS_TEXT, FALSE, ValueEmpty},
+    {UNITS_OPTION_SHORT, UNITS_OPTION, L"", UNITS_OPTION_HELP,HELP_UNIT_DETAILS_TEXT, FALSE, ValueRequired},
 #ifdef OS_BUILD
-    {OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP, FALSE, ValueRequired}
+    {OUTPUT_OPTION_SHORT, OUTPUT_OPTION, L"", OUTPUT_OPTION_HELP,HELP_OPTIONS_DETAILS_TEXT, FALSE, ValueRequired}
 #endif
 
   },
   {                                                              //!< targets
-    {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, FALSE, ValueRequired},
+    {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, FALSE, ValueOptional},
     {GOAL_TARGET, L"", L"", TRUE, ValueEmpty},
     {SOCKET_TARGET, L"", HELP_TEXT_SOCKET_IDS, FALSE, ValueRequired}
   },
@@ -45,7 +50,8 @@ struct Command CreateGoalCommand =
     {NS_LABEL_VERSION_PROPERTY, L"", HELP_TEXT_NS_LABEL_VERSION, FALSE, ValueRequired}
   },
   L"Provision capacity on one or more DIMMs into regions",     //!< help
-  CreateGoal
+  CreateGoal,
+  TRUE,                                               //!< enable print control support
 };
 
 STATIC
@@ -127,7 +133,8 @@ Finish:
   Send user capacities to driver and retrieve alignments that will have to be done. Display these alignments and
   confirm using prompt mechanism.
 
-  @param[in] pNvmDimmConfigProtocol is a pointer to the EFI_DCPMM_CONFIG_PROTOCOL instance.
+  @param[in] pCmd command from CLI
+  @param[in] pNvmDimmConfigProtocol is a pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance.
   @param[in] pDimmIds Pointer to an array of DIMM IDs
   @param[in] DimmIdsCount Number of items in array of DIMM IDs
   @param[in] pSocketIds Pointer to an array of Socket IDs
@@ -145,7 +152,8 @@ Finish:
 STATIC
 EFI_STATUS
 CheckAndConfirmAlignments(
-  IN     EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol,
+  IN     struct Command *pCmd,
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
   IN     UINT16 *pDimmIds OPTIONAL,
   IN     UINT32 DimmIdsCount,
   IN     UINT16 *pSocketIds OPTIONAL,
@@ -173,7 +181,7 @@ CheckAndConfirmAlignments(
   ZeroMem(RegionConfigsInfo, sizeof(RegionConfigsInfo[0]) * MAX_DIMMS);
 
   if (pNvmDimmConfigProtocol == NULL || pConfirmation == NULL) {
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     goto Finish;
   }
 
@@ -182,7 +190,7 @@ CheckAndConfirmAlignments(
   ReturnCode = InitializeCommandStatus(&pCommandStatus);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Failed on InitializeCommandStatus");
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     goto Finish;
   }
 
@@ -204,8 +212,11 @@ CheckAndConfirmAlignments(
     pCommandStatus);
 
   if (EFI_ERROR(ReturnCode)) {
+    if (EFI_VOLUME_CORRUPTED == ReturnCode) {
+      PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_PCD_CORRUPTED);
+    }
     ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
-    DisplayCommandStatus(CREATE_GOAL_COMMAND_STATUS_HEADER, CLI_INFO_ON, pCommandStatus);
+    PRINTER_SET_COMMAND_STATUS(pCmd->pPrintCtx, ReturnCode, CREATE_GOAL_COMMAND_STATUS_HEADER, CLI_INFO_ON, pCommandStatus);
     goto Finish;
   }
 
@@ -215,18 +226,17 @@ CheckAndConfirmAlignments(
     PercentDiff = VolatilePercentAligned - VolatilePercent;
   }
 
-  NVDIMM_BUFFER_CONTROLLED_MSG(FALSE, FORMAT_STR_NL, CLI_CREATE_GOAL_PROMPT_HEADER);
-  NVDIMM_BUFFER_CONTROLLED_MSG(FALSE, L"\n");
-
-#ifdef OS_BUILD
-  ReturnCode = ShowGoalPrintTableView(RegionConfigsInfo, UnitsToDisplay, RegionConfigsCount, NULL, FALSE);
-#else // OS_BUILD
-  ReturnCode = ShowGoalPrintTableView(RegionConfigsInfo, UnitsToDisplay, RegionConfigsCount, FALSE);
-#endif // OSBUILD
+  PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, CLI_CREATE_GOAL_PROMPT_HEADER  L"\n");
+  
+  PRINTER_ENABLE_TEXT_TABLE_FORMAT(pCmd->pPrintCtx);
+  ReturnCode = ShowGoalPrintTableView(pCmd, RegionConfigsInfo, UnitsToDisplay, RegionConfigsCount, FALSE);
 
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     goto Finish;
+  }
+  else {
+    PRINTER_PROCESS_SET_BUFFER_FORCE_TEXT_TABLE_MODE(pCmd->pPrintCtx);
   }
 
   for (Index = 0; Index < pCommandStatus->ObjectStatusCount; Index++) {
@@ -238,30 +248,29 @@ CheckAndConfirmAlignments(
 
   if (pCommandStatus->GeneralStatus == NVM_WARN_2LM_MODE_OFF) {
     pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(gNvmDimmCliHiiHandle, NVM_WARN_2LM_MODE_OFF);
-    NVDIMM_BUFFER_CONTROLLED_MSG(FALSE, L"\n" FORMAT_STR_NL, pSingleStatusCodeMessage);
+    PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, pSingleStatusCodeMessage);
     FREE_POOL_SAFE(pSingleStatusCodeMessage);
   }
 
   if (pCommandStatus->GeneralStatus == NVM_WARN_IMC_DDR_PMM_NOT_PAIRED) {
     pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(gNvmDimmCliHiiHandle, NVM_WARN_IMC_DDR_PMM_NOT_PAIRED);
-    NVDIMM_BUFFER_CONTROLLED_MSG(FALSE, L"\n" FORMAT_STR_NL, pSingleStatusCodeMessage);
+    PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, pSingleStatusCodeMessage);
     FREE_POOL_SAFE(pSingleStatusCodeMessage);
   }
 
   if (PercentDiff > PROMPT_ALIGN_PERCENTAGE) {
-     NVDIMM_BUFFER_CONTROLLED_MSG(FALSE, L"\n");
-     NVDIMM_BUFFER_CONTROLLED_MSG(FALSE, CLI_CREATE_GOAL_PROMPT_VOLATILE L"\n");
+     PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, L"\n" CLI_CREATE_GOAL_PROMPT_VOLATILE L"\n");
   }
 
   if (CapacityReducedForSKU) {
     pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(gNvmDimmCliHiiHandle, NVM_WARN_MAPPED_MEM_REDUCED_DUE_TO_CPU_SKU);
-    NVDIMM_BUFFER_CONTROLLED_MSG(FALSE, L"\n" FORMAT_STR_NL, pSingleStatusCodeMessage);
+    PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, L"\n" FORMAT_STR_NL, pSingleStatusCodeMessage);
     FREE_POOL_SAFE(pSingleStatusCodeMessage);
   }
 
   ReturnCode = PromptYesNo(pConfirmation);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_PROMPT_INVALID);
+    PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_PROMPT_INVALID);
     NVDIMM_DBG("Failed on PromptedInput");
   }
 
@@ -270,6 +279,7 @@ Finish:
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
+
 
 /**
   Execute the Create Goal command
@@ -285,7 +295,7 @@ CreateGoal(
   IN     struct Command *pCmd
   )
 {
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   COMMAND_STATUS *pCommandStatus = NULL;
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
 
@@ -309,12 +319,14 @@ CreateGoal(
   BOOLEAN Valid = FALSE;
   UINT16 UnitsOption = DISPLAY_SIZE_UNIT_UNKNOWN;
   UINT16 UnitsToDisplay = FixedPcdGet32(PcdDcpmmCliDefaultCapacityUnit);
+  CHAR16 *pUnitsStr = NULL;
   CHAR16 *pCommandStr = NULL;
   DISPLAY_PREFERENCES DisplayPreferences;
   UINT16 LabelVersionMajor = 0;
   UINT16 LabelVersionMinor = 0;
   INTEL_DIMM_CONFIG *pIntelDIMMConfig = NULL;
-
+  PRINT_CONTEXT *pPrinterCtx = NULL;
+  CHAR16 *pShowGoalOutputArgs = NULL;
   NVDIMM_ENTRY();
 
   ZeroMem(&DisplayPreferences, sizeof(DisplayPreferences));
@@ -323,21 +335,27 @@ CreateGoal(
 
   if (pCmd == NULL) {
     ReturnCode = EFI_INVALID_PARAMETER;
-    Print(FORMAT_STR_NL, CLI_ERR_NO_COMMAND);
+    NVDIMM_DBG("pCmd parameter is NULL.\n");
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_NO_COMMAND);
     goto Finish;
   }
+
+  pPrinterCtx = pCmd->pPrintCtx;
 
   // NvmDimmConfigProtocol required
   ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID **)&pNvmDimmConfigProtocol, NULL);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
     goto Finish;
   }
 
   // Populate the list of DIMM_INFO structures with relevant information
-  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
+  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
   if (EFI_ERROR(ReturnCode)) {
+    if(ReturnCode == EFI_NOT_FOUND) {
+        PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_INFO_NO_FUNCTIONAL_DIMMS);
+    }
     goto Finish;
   }
 
@@ -345,10 +363,10 @@ CreateGoal(
     Force = TRUE;
   }
 
-  ReturnCode = ReadRunTimeCliDisplayPreferences(&DisplayPreferences);
+  ReturnCode = ReadRunTimePreferences(&DisplayPreferences, DISPLAY_CLI_INFO);
   if (EFI_ERROR(ReturnCode)) {
-    Print(FORMAT_STR_NL, CLI_ERR_DISPLAY_PREFERENCES_RETRIEVE);
     ReturnCode = EFI_NOT_FOUND;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_DISPLAY_PREFERENCES_RETRIEVE);
     goto Finish;
   }
 
@@ -369,7 +387,7 @@ CreateGoal(
   if(pIntelDIMMConfig != NULL) {
     if (pIntelDIMMConfig->ProvisionCapacityMode == PROVISION_CAPACITY_MODE_AUTO) {
       ReturnCode = EFI_INVALID_PARAMETER;
-      Print(FORMAT_STR_NL, CLI_ERR_CREATE_GOAL_AUTO_PROV_ENABLED);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_CREATE_GOAL_AUTO_PROV_ENABLED);
       FreePool(pIntelDIMMConfig);
       goto Finish;
     } else {
@@ -380,14 +398,14 @@ CreateGoal(
   // check targets
   if (ContainTarget(pCmd, DIMM_TARGET)) {
     pTargetValue = GetTargetValue(pCmd, DIMM_TARGET);
-    ReturnCode = GetDimmIdsFromString(pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
+    ReturnCode = GetDimmIdsFromString(pCmd, pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsCount);
     if (EFI_ERROR(ReturnCode)) {
       NVDIMM_DBG("Failed on GetDimmIdsFromString");
       goto Finish;
     }
     if (!AllDimmsInListAreManageable(pDimms, DimmCount, pDimmIds, DimmIdsCount)){
-      Print(FORMAT_STR_NL, CLI_ERR_UNMANAGEABLE_DIMM);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_UNMANAGEABLE_DIMM);
       goto Finish;
     }
   }
@@ -396,7 +414,7 @@ CreateGoal(
     pTargetValue = GetTargetValue(pCmd, SOCKET_TARGET);
     ReturnCode = GetUintsFromString(pTargetValue, &pSocketIds, &SocketIdsCount);
     if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_TARGET_SOCKET);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_TARGET_SOCKET);
       NVDIMM_DBG("Failed on GetSocketsFromString");
       goto Finish;
     }
@@ -406,7 +424,7 @@ CreateGoal(
   ReturnCode = InitializeCommandStatus(&pCommandStatus);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Failed on InitializeCommandStatus");
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     goto Finish;
   }
 
@@ -417,7 +435,7 @@ CreateGoal(
     if (Valid && PropertyValue <= 100) {
       VolatileMode = (UINT32)PropertyValue;
     } else {
-        Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_PROPERTY_MEMORY_MODE);
+        PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_PROPERTY_MEMORY_MODE);
         ReturnCode = EFI_INVALID_PARAMETER;
         goto Finish;
      }
@@ -427,17 +445,17 @@ CreateGoal(
 
   if ((ReturnCode = ContainsProperty(pCmd, PERSISTENT_MEM_TYPE_PROPERTY)) != EFI_NOT_FOUND) {
     if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
       goto Finish;
     }
     ReturnCode = GetPropertyValue(pCmd, PERSISTENT_MEM_TYPE_PROPERTY, &pPropertyValue);
     if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
       goto Finish;
     }
     ReturnCode = GetPersistentMemTypeValue(pPropertyValue, &PersistentMemType);
     if (EFI_ERROR(ReturnCode)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_PROPERTY_PERSISTENT_MEM_TYPE);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_PROPERTY_PERSISTENT_MEM_TYPE);
       goto Finish;
     }
   }
@@ -449,17 +467,17 @@ CreateGoal(
     if (Valid && PropertyValue <= 100) {
       ReservedPercent = (UINT32)PropertyValue;
     } else {
-        Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_PROPERTY_RESERVED);
-        ReturnCode = EFI_INVALID_PARAMETER;
-        goto Finish;
+      ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_PROPERTY_RESERVED);
+      goto Finish;
     }
   } else {
       ReservedPercent = 0;
   }
 
   if (ReservedPercent + VolatileMode > 100) {
-    Print(FORMAT_STR_NL, CLI_ERR_PROPERTIES_MEMORYMODE_RESERVED_TOO_LARGE);
     ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_PROPERTIES_MEMORYMODE_RESERVED_TOO_LARGE);
     goto Finish;
   }
 
@@ -477,19 +495,20 @@ CreateGoal(
 
     ReturnCode = GetLabelVersionFromStr(pPropertyValue, &LabelVersionMajor, &LabelVersionMinor);
     if (EFI_ERROR(ReturnCode)) {
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
       goto Finish;
     }
 
     if (LabelVersionMajor != NSINDEX_MAJOR) {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_PROPERTY_NS_LABEL_VERSION);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_PROPERTY_NS_LABEL_VERSION);
       goto Finish;
     }
 
     if ((LabelVersionMinor != NSINDEX_MINOR_1) &&
         (LabelVersionMinor != NSINDEX_MINOR_2)) {
-      Print(FORMAT_STR_NL, CLI_ERR_INCORRECT_VALUE_PROPERTY_NS_LABEL_VERSION);
       ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INCORRECT_VALUE_PROPERTY_NS_LABEL_VERSION);
       goto Finish;
     }
 
@@ -498,12 +517,12 @@ CreateGoal(
     LabelVersionMajor = NSINDEX_MAJOR;
     LabelVersionMinor = NSINDEX_MINOR_2;
   } else {
-    Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
     goto Finish;
   }
 
   if (!Force) {
-    ReturnCode = CheckAndConfirmAlignments(pNvmDimmConfigProtocol, pDimmIds, DimmIdsCount, pSocketIds, SocketIdsCount,
+    ReturnCode = CheckAndConfirmAlignments(pCmd, pNvmDimmConfigProtocol, pDimmIds, DimmIdsCount, pSocketIds, SocketIdsCount,
         PersistentMemType, VolatileMode, ReservedPercent, ReserveDimm, UnitsToDisplay, &Confirmation);
     if (EFI_ERROR(ReturnCode) || !Confirmation) {
       goto Finish;
@@ -514,50 +533,54 @@ CreateGoal(
     LabelVersionMajor, LabelVersionMinor, pCommandStatus);
 
   if (!EFI_ERROR(ReturnCode)) {
-#ifdef OS_BUILD
-    if (Force) {
-      if (UnitsOption != DISPLAY_SIZE_UNIT_UNKNOWN) {
-          pCommandStr = CatSPrintClean(pCommandStr, FORMAT_STR_SPACE FORMAT_STR L" " FORMAT_STR L" " FORMAT_STR L" " FORMAT_STR, L"show", UNITS_OPTION, UnitsToStr(UnitsToDisplay),
-              ACTION_REQ_OPTION, L"-goal");
-      } else {
-          pCommandStr = CatSPrintClean(pCommandStr, FORMAT_STR, L"show -ar -goal");
-      }
-    } else
-#endif // OS_BUILD
+    
+    ReturnCode = CreateCmdLineOutputStr(pCmd, &pShowGoalOutputArgs);
+    if (EFI_ERROR(ReturnCode)) {
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
+      goto Finish;
+    }
+
     if (UnitsOption != DISPLAY_SIZE_UNIT_UNKNOWN) {
-      pCommandStr = CatSPrintClean(pCommandStr, FORMAT_STR_SPACE FORMAT_STR L" " FORMAT_STR L" " FORMAT_STR, L"show", UNITS_OPTION, UnitsToStr(UnitsToDisplay),
-                        L"-goal");
+      CHECK_RESULT(UnitsToStr(gNvmDimmCliHiiHandle, UnitsToDisplay, &pUnitsStr), Finish);
+      pCommandStr = CatSPrintClean(pCommandStr, FORMAT_STR_SPACE FORMAT_STR FORMAT_STR L" " FORMAT_STR L" " FORMAT_STR, SHOW_VERB, pShowGoalOutputArgs, UNITS_OPTION, pUnitsStr, GOAL_TARGET);
     } else {
-      pCommandStr = CatSPrintClean(pCommandStr, FORMAT_STR, L"show -goal");
+      pCommandStr = CatSPrintClean(pCommandStr, FORMAT_STR_SPACE FORMAT_STR FORMAT_STR, SHOW_VERB, pShowGoalOutputArgs, GOAL_TARGET);
     }
     FillCommandInput(pCommandStr, &ShowGoalCmdInput);
     ReturnCode = Parse(&ShowGoalCmdInput, &ShowGoalCmd);
     if (EFI_ERROR(ReturnCode)) {
       NVDIMM_WARN("Failed parsing command input");
-      Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
       goto Finish;
     }
     if (ShowGoalCmd.run == NULL) {
       NVDIMM_WARN("Couldn't find show -goal command");
-      Print(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
       ReturnCode = EFI_NOT_FOUND;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
       goto Finish;
     }
-    NVDIMM_BUFFER_CONTROLLED_MSG(FALSE, L"Created following region configuration goal\n");
+    if (!Force) {
+      PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, CLI_CREATE_SUCCESS_STATUS);
+    }
     ExecuteCmd(&ShowGoalCmd);
     FREE_POOL_SAFE(pCommandStr);
+    goto FinishSkipPrinterProcess;
   } else {
     ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
-    DisplayCommandStatus(CREATE_GOAL_COMMAND_STATUS_HEADER, CLI_INFO_ON, pCommandStatus);
+    PRINTER_SET_COMMAND_STATUS(pPrinterCtx, ReturnCode, CREATE_GOAL_COMMAND_STATUS_HEADER, CLI_INFO_ON, pCommandStatus);
   }
 
 Finish:
+  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
+FinishSkipPrinterProcess:
   FreeCommandInput(&ShowGoalCmdInput);
   FreeCommandStructure(&ShowGoalCmd);
   FreeCommandStatus(&pCommandStatus);
   FREE_POOL_SAFE(pSocketIds);
   FREE_POOL_SAFE(pDimmIds);
   FREE_POOL_SAFE(pDimms);
+  FREE_POOL_SAFE(pShowGoalOutputArgs);
+  FREE_POOL_SAFE(pUnitsStr);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }

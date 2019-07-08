@@ -40,6 +40,7 @@ typedef struct _NVM_IS
   UINT64 Signature;
   UINT16 SocketId;                  //!< Identifies the processor socket containing the DCPMM
   UINT16 InterleaveSetIndex;
+  UINT16 RegionId;                 //!< Used to uniquely identify regions as InterleavesetIndex is not unique enough
   UINT64 Size;                      //!< Current total capacity of the Interleave Setqq
   /**
     bit0 set - IS_STATE_INIT_FAILURE - Interleave Set or dimm region (one or more) initialization failure
@@ -108,6 +109,7 @@ typedef struct _REGION_GOAL {
 EFI_STATUS
 InitializeIS(
   IN     NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo,
+  IN     UINT16 RegionId,
      OUT NVM_IS **ppIS
   );
 
@@ -221,10 +223,14 @@ FreeISResources(
   Allocate and initialize the dimm region by using Interleave Information table from Platform Config Data
 
   @param[in] pDimmList Head of the list of all Intel NVM Dimm in the system
-  @param[in] pIS Interleave Set parent for new dimm region
+  @param[in] pISList List of interleaveset formed so far
   @param[in] pIdentificationInfo Identification Information table
+  @param[in] pInterleaveInfo Interleave information for the particular dimm
   @param[in] PcdConfRevision Revision of the PCD Config tables
+  @param[out] pRegionId The next consecutive region id
+  @param[out] ppNewIS Interleave Set parent for new dimm region
   @param[out] ppDimmRegion new allocated dimm region will be put here
+  @param[out] pISAlreadyExists TRUE if Interleave Set already exists
 
   @retval EFI_SUCCESS
   @retval EFI_NOT_FOUND the Dimm related with DimmRegion has not been found on the Dimm list
@@ -233,11 +239,15 @@ FreeISResources(
 EFI_STATUS
 InitializeDimmRegion(
   IN     LIST_ENTRY *pDimmList,
-  IN     NVM_IS *pIS,
+  IN     LIST_ENTRY *pISList,
   IN     NVDIMM_IDENTIFICATION_INFORMATION *pIdentificationInfo,
+  IN     NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo,
   IN     UINT8 PcdConfRevision,
-     OUT DIMM_REGION **ppDimmRegion
-  );
+  OUT    UINT16 *pRegionId,
+  OUT    NVM_IS **ppNewIS,
+  OUT DIMM_REGION **ppDimmRegion,
+  OUT    BOOLEAN *pISAlreadyExists
+);
 
 /**
   Retrieve Interleave Sets by using Platform Config Data from Intel NVM Dimms
@@ -266,6 +276,7 @@ RetrieveISsFromPlatformConfigData(
   @param[in] pInterleaveInfo Interleave Information table retrieve from DIMM
   @param[in] PcdCurrentConfRevision PCD Current Config table revision
   @param[in] pDimm the DIMM from which Interleave Information table was retrieved
+  @param[in, out] pRegionId Unique id for region
   @param[out] pISList Head of the list for Interleave Sets
 
   @retval EFI_SUCCESS
@@ -278,6 +289,7 @@ RetrieveISFromInterleaveInformationTable(
   IN     NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo,
   IN     UINT8 PcdCurrentConfRevision,
   IN     DIMM *pDimm,
+  IN OUT UINT16 *pRegionId,
      OUT LIST_ENTRY *pISList
   );
 
@@ -407,7 +419,8 @@ ADNamespaceMinAndMaxAvailableSizeOnIS(
 **/
 EFI_STATUS
 RetrieveGoalConfigsFromPlatformConfigData(
-  IN OUT LIST_ENTRY *pDimmList
+  IN OUT LIST_ENTRY *pDimmList,
+  IN     BOOLEAN RestoreCorrupt
   );
 
 /**
@@ -540,22 +553,6 @@ VerifySKUSupportForCreateGoal(
   );
 
 /**
-  Get security state for the DIMM
-
-  @param[in]  pDimm The current DIMM
-  @param[out] pIsLocked Return true if the secruity state is locked
-
-  @retval EFI_INVALID_PARAMETER Input parameter is NULL
-  @retval EFI_OUT_OF_RESOURCES Allocation failed
-  @retval EFI_SUCCESS
-**/
-EFI_STATUS
-GetSecurityStateForDimm(
-  IN     DIMM *pDimm,
-     OUT BOOLEAN *pIsLocked
-  );
-
-/**
   Check for new goal configs for the DIMM
 
   @param[in] pDimm The current DIMM
@@ -569,8 +566,6 @@ FindIfNewGoalOnDimm(
   IN     DIMM *pDimm,
      OUT BOOLEAN *pHasNewGoal
   );
-
-
 
 /**
 Calculate free Region capacity
@@ -826,6 +821,23 @@ FindUniqueRegionsGoal(
   );
 
 /**
+  Cleans up pointers that are about to be freed so that double-free doesn't take place later on
+
+  @param[in] pDimms Input array of pointers to dimms
+  @param[in] DimmsNum Number of pointers in pDimms
+  @param[in] pRegionsGoal to list of regions containing the candidate pointers
+  @param[in] pRegionsGoalNum the number of region goal items
+
+  **/
+EFI_STATUS
+ClearRegionsGoal(
+  IN     DIMM *pDimms[],
+  IN     UINT32 DimmsNum,
+  IN     REGION_GOAL **pRegionsGoal,
+  IN     UINT32 pRegionsGoalNum
+);
+
+/**
   Create REGION goal
 
   @param[in] pRegionGoalTemplate Pointer to REGION goal template
@@ -919,17 +931,17 @@ FindIfNewGoalOnDimm(
   );
 
 /**
-  Get security state for the DIMM
+  Check if security state of specified DIMM is locked
 
   @param[in] pDimm The current DIMM
-  @param[out] pIsLocked TRUE if any of the dimm is locked, else FALSE
+  @param[out] pIsLocked TRUE if security state of specified dimm is locked
 
   @retval EFI_SUCCESS
-  #retval EFI_INVALID_PARAMETER If IS is null
+  #retval EFI_INVALID_PARAMETER one or more parameters are NULL
   @retval EFI_OUT_OF_RESOURCES Allocation failed
 **/
 EFI_STATUS
-GetSecurityStateForDimm(
+IsDimmLocked(
   IN     DIMM *pDimm,
      OUT BOOLEAN *pIsLocked
   );

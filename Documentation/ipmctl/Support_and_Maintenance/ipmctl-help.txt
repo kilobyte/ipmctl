@@ -10,14 +10,14 @@ NAME
 ----
 ipmctl-help - Shows help for the supported commands
 
-DESCRIPTION
------------
-Shows help for the supported commands.
-
 SYNOPSIS
 --------
 [verse]
 ipmctl help [OPTIONS]
+
+DESCRIPTION
+-----------
+Shows help for the supported commands.
 
 OPTIONS
 -------
@@ -41,7 +41,7 @@ RETURN DATA
 -----------
 The default behavior is to display an introduction to CLI followed by a list of
 the supported commands. To display detailed help for a specific command, use the
-help option with that specific command
+help option with that specific command.
 
 SAMPLE OUTPUT
 -------------

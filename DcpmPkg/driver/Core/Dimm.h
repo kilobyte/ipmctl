@@ -14,6 +14,21 @@
 #include <NvmDimmPassThru.h>
 #include <PlatformConfigData.h>
 
+#ifdef OS_BUILD
+#define FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode) \
+  if (FW_ERROR(pFwCmd->Status)) { \
+    ReturnCode = MatchFwReturnCode(pFwCmd->Status); \
+  } \
+  else if (DSM_ERROR(pFwCmd->DsmStatus)) { \
+      ReturnCode = MatchDsmReturnCode(pFwCmd->DsmStatus); \
+  }
+#else
+#define FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode) \
+  if (FW_ERROR(pFwCmd->Status)) { \
+    ReturnCode = MatchFwReturnCode(pFwCmd->Status); \
+  }
+#endif
+
 //---> Turn on/off large payload support
 #define USE_LARGE_PAYLOAD
 //<---
@@ -55,6 +70,18 @@
 
 #define PT_LONG_TIMEOUT_INTERVAL EFI_TIMER_PERIOD_MILLISECONDS(150)
 #define PT_UPDATEFW_TIMEOUT_INTERVAL EFI_TIMER_PERIOD_SECONDS(4)
+
+#define DEBUG_LOG_PAYLOAD_TYPE_LARGE 0
+#define DEBUG_LOG_PAYLOAD_TYPE_SMALL 1
+
+//
+// Translate between the NFIT device handle node/socket pair and an absolute socket index
+// The 4 bit Socket ID field allows a maximum of 16 sockets per node
+//
+#define NFIT_SOCKETS_PER_NODE                                   16
+#define SOCKET_INDEX_TO_NFIT_SOCKET_ID(_skt)                    (_skt % NFIT_SOCKETS_PER_NODE)
+#define SOCKET_INDEX_TO_NFIT_NODE_ID(_skt)                      (_skt / NFIT_SOCKETS_PER_NODE)
+#define NFIT_NODE_SOCKET_TO_SOCKET_INDEX(_nodeId, _socketId)    ((_nodeId * NFIT_SOCKETS_PER_NODE) + (_socketId))
 
 typedef enum _BW_COMMAND_CODE {
   BwRead = 0,
@@ -183,7 +210,11 @@ typedef struct _DIMM {
   UINT8 LsaStatus;                         //!< The status of the LSA partition parsing for this DIMM
 
   BLOCK_WINDOW *pBw;
+#ifndef OS_BUILD
   MAILBOX *pHostMailbox;
+#else // OS_BUILD
+  VOID *Reserved;
+#endif // OS_BUILD
   NvDimmRegionTbl *pCtrlTbl;      //!< ptr to the table used to configure the mailbox
   SpaRangeTbl *pCtrlSpaTbl;       //!> ptr to the spa range table associated with the mailbox table
   NvDimmRegionTbl *pDataTbl;      //!< ptr to the table used to configure the block windows
@@ -260,6 +291,30 @@ typedef struct _MEMMAP_RANGE {
 
 #define MEMMAP_RANGE_SIGNATURE     SIGNATURE_64('M', 'M', 'A', 'P', 'R', 'N', 'G', 'E')
 #define MEMMAP_RANGE_FROM_NODE(a)  CR(a, MEMMAP_RANGE, MemmapNode, MEMMAP_RANGE_SIGNATURE)
+
+#define DISABLE_ARS_TOTAL_TIMEOUT_SEC     2
+#define POLL_ARS_LONG_OP_DELAY_US         100000  //100ms delay between calls to retreive long op
+#define MAX_FW_UPDATE_RETRY_ON_DEV_BUSY   3
+#define DSM_RETRY_SUGGESTED               0x5
+
+
+#ifdef OS_BUILD
+#define INI_PREFERENCES_LARGE_PAYLOAD_DISABLED L"LARGE_PAYLOAD_DISABLED"
+/*
+* Function get the ini configuration only on the first call
+*
+* It returns TRUE in case of large payload access is disabled and FALSE otherwise
+*/
+BOOLEAN ConfigIsLargePayloadDisabled();
+
+#define INI_PREFERENCES_DDRT_PROTOCOL_DISABLED L"DDRT_PROTOCOL_DISABLED"
+/*
+* Function get the ini configuration only on the first call
+*
+* It returns TRUE in case of DDRT protocol access is disabled and FALSE otherwise
+*/
+BOOLEAN ConfigIsDdrtProtocolDisabled();
+#endif // OS_BUILD
 
 EFI_STATUS
 DimmInit(
@@ -377,21 +432,6 @@ DIMM *
 GetDimmByIndex(
   IN     INT32 Index,
   IN     struct _PMEM_DEV *pDev
-  );
-
-
-/**
-  Get DIMM by Smbus address in global structure
-
-  @param[in] Address - Smbus address of Dimm
-  @param[in] pDimms - The head of the dimm list
-
-  @retval Found Dimm or NULL
-**/
-DIMM *
-GetDimmBySmbusAddress(
-  IN     SMBUS_DIMM_ADDR Address,
-  IN     LIST_ENTRY *pDimms
   );
 
 /**
@@ -670,6 +710,21 @@ FwCmdGetARS(
   );
 
 /**
+  Firmware command to disable ARS
+
+  @param[in] pDimm Pointer to the DIMM to retrieve ARSStatus on
+
+  @retval EFI_SUCCESS           Success
+  @retval EFI_INVALID_PARAMETER One or more parameters are NULL
+  @retval EFI_OUT_OF_RESOURCES  Memory allocation failure
+  @retval Various errors from FW
+**/
+EFI_STATUS
+FwCmdDisableARS(
+  IN     DIMM *pDimm
+);
+
+/**
   This helper function is used to determine the ARS status for the
   particular DIMM by inspecting the firmware ARS return payload.
 
@@ -712,25 +767,27 @@ FwCmdGetErrorLog (
   );
 
 /**
-  Firmware command to get debug logs
+  Firmware command to get a specified debug log
 
-  @param[in] pDimm Target DIMM structure pointer
-  @param[in] LogSizeInMbs - number of MB to be fetched
-  @param[out] pBytesWritten - number of MB fetched
-  @param[out] ppOutPayload - pointer to buffer start
-  @param[in] OutputBufferSz - size of ppOutPayload in bytes
+  @param[in]  pDimm Target DIMM structure pointer
+  @param[in]  LogSource Debug log source buffer to retrieve
+  @param[out] ppDebugLogBuffer - an allocated buffer containing the raw debug logs
+  @param[out] pDebugLogBufferSize - the size of the raw debug log buffer
+  @param[out] pCommandStatus structure containing detailed NVM error codes
+
+  Note: The caller is responsible for freeing the returned buffers
 
   @retval EFI_SUCCESS Success
   @retval EFI_DEVICE_ERROR if failed to open PassThru protocol
   @retval EFI_OUT_OF_RESOURCES memory allocation failure
 **/
 EFI_STATUS
-FwCmdGetFWDebugLog(
+FwCmdGetFwDebugLog (
   IN     DIMM *pDimm,
-  IN     UINT64 LogSizeInMbs,
-     OUT UINT64 *pBytesWritten,
-     OUT VOID *ppOutPayload,
-  IN UINTN OutputBufferSz
+  IN     UINT8 LogSource,
+     OUT VOID **ppDebugLogBuffer,
+     OUT UINTN *pDebugLogBufferSize,
+     OUT COMMAND_STATUS *pCommandStatus
   );
 
  /**
@@ -744,7 +801,7 @@ FwCmdGetFWDebugLog(
   @retval EFI_OUT_OF_RESOURCES memory allocation failure
 **/
 EFI_STATUS
-FwCmdGetFWDebugLogSize(
+FwCmdGetFwDebugLogSize(
   IN     DIMM *pDimm,
      OUT UINT64 *pLogSizeInMb
   );
@@ -753,7 +810,6 @@ FwCmdGetFWDebugLogSize(
   Execute a FW command to get information about DIMM.
 
   @param[in] pDimm The Intel NVM Dimm to retrieve identify info on
-  @param[in] Execute on Smbus mailbox instead of DDRT
   @param[out] pPayload Area to place the identity info returned from FW
 
   @retval EFI_SUCCESS: Success
@@ -762,7 +818,6 @@ FwCmdGetFWDebugLogSize(
 EFI_STATUS
 FwCmdIdDimm(
   IN     DIMM *pDimm,
-  IN     BOOLEAN Smbus,
      OUT PT_ID_DIMM_PAYLOAD *pPayload
   );
 
@@ -782,6 +837,30 @@ FwCmdDeviceCharacteristics (
   IN     DIMM *pDimm,
      OUT PT_DEVICE_CHARACTERISTICS_PAYLOAD **ppPayload
   );
+
+/**
+  Firmware command access/read Platform Config Data using small payload only.
+
+  The function allows to specify the requested data offset and the size.
+  The function is going to allocate the ppRawData buffer if it is not allocated.
+  The buffer's minimal size is the size of the Partition!
+
+  @param[in] pDimm The Intel NVM Dimm to retrieve identity info on
+  @param[in] PartitionId Partition number to get data from
+  @param[in] ReqOffset Data read starting point
+  @param[in] ReqDataSize Number of bytes to read
+  @param[out] Pointer to the buffer pointer for storing retrieved data
+
+  @retval EFI_SUCCESS Success
+  @retval Error code
+**/
+EFI_STATUS
+FwGetPCDFromOffsetSmallPayload(
+  IN  DIMM *pDimm,
+  IN  UINT8 PartitionId,
+  IN  UINT32 ReqOffset,
+  IN  UINT32 ReqDataSize,
+  OUT UINT8 **ppRawData);
 
 /**
   Firmware command get Platform Config Data.
@@ -805,30 +884,6 @@ FwCmdGetPlatformConfigData(
   );
 
 /**
-Firmware command get Platform Config Data.
-Execute a FW command to get information about DIMM regions and REGIONs configuration.
-
-The caller is responsible for a memory deallocation of the ppPlatformConfigData
-
-@param[in] pDimm The Intel NVM Dimm to retrieve identity info on
-@param[in] PartitionId Partition number to get data from
-@param[in] DataOffset Data read starting point
-@param[in] DataSize Number of bytes to read
-@param[out] ppRawData Pointer to a new buffer pointer for storing retrieved data
-
-@retval EFI_SUCCESS: Success
-@retval EFI_OUT_OF_RESOURCES: memory allocation failure
-**/
-EFI_STATUS
-FwCmdGetPcdDataFromOffset(
-	IN     DIMM *pDimm,
-	IN     UINT8 PartitionId,
-	IN     UINT32 *pDataOffset,
-	IN     UINT32 *pDataSize,
-	OUT    UINT8 *ppRawData
-);
-
-/**
   Firmware command to get the PCD size
 
   @param[in] pDimm The target DIMM
@@ -845,6 +900,29 @@ FwCmdGetPlatformConfigDataSize (
   IN     UINT8 PartitionId,
      OUT UINT32 *pPcdSize
   );
+
+/**
+  Firmware command access/write Platform Config Data using small payload only.
+
+  The function allows to specify the requested data offset and the size.
+  The buffer's minimal size is the size of the Partition!
+
+  @param[in] pDimm The Intel NVM Dimm to send Platform Config Data to
+  @param[in] PartitionId Partition number for data to be send to
+  @param[in] pRawData Pointer to a data buffer that will be sent to the DIMM
+  @param[in] ReqOffset Data write starting point
+  @param[in] ReqDataSize Number of bytes to write
+
+  @retval EFI_SUCCESS Success
+  @retval Error code
+**/
+EFI_STATUS
+FwSetPCDFromOffsetSmallPayload(
+  IN  DIMM *pDimm,
+  IN  UINT8 PartitionId,
+  IN  UINT8 *pRawData,
+  IN  UINT32 ReqOffset,
+  IN  UINT32 ReqDataSize);
 
 /**
   Firmware command set Platform Config Data.
@@ -1277,22 +1355,26 @@ ClearInterleavedBuffer(
   );
 
 /**
-  Get Platform Config Data oem partition and check a correctness of header.
+  Get Platform Config Data OEM partition Intel config region and check a correctness of header.
+  We only return the actua PCD config data, from the first 64KiB of Intel FW/SW config metadata.
+  The latter 64KiB is reserved for OEM use.
 
   The caller is responsible for a memory deallocation of the ppPlatformConfigData
 
   @param[in] pDimm The Intel NVM Dimm to retrieve PCD from
+  @param[in] RetoreCorrupt If true will generate a default PCD when a corrupt header is found
   @param[out] ppPlatformConfigData Pointer to a new buffer pointer for storing retrieved data
 
   @retval EFI_SUCCESS Success
   @retval EFI_DEVICE_ERROR Incorrect PCD header
-  @retval Other return codes from FwCmdGetPlatformConfigData
+  @retval Other return codes from GetPcdOemConfigDataUsingSmallPayload
 **/
 EFI_STATUS
 GetPlatformConfigDataOemPartition(
   IN     DIMM *pDimm,
-     OUT NVDIMM_CONFIGURATION_HEADER **ppPlatformConfigData
-  );
+  IN     BOOLEAN RestoreCorrupt,
+  OUT NVDIMM_CONFIGURATION_HEADER **ppPlatformConfigData
+);
 
 /**
   Set Platform Config Data OEM Partition Intel config region.
@@ -1427,6 +1509,20 @@ MatchFwReturnCode (
   IN     UINT8 FwStatus
   );
 
+#ifdef OS_BUILD
+/**
+  Matches DSM return code to one of available EFI_STATUS EFI base types
+
+  @param[in] DsmStatus - status byte returned from FW command
+
+  @retval - Appropriate EFI_STATUS
+**/
+EFI_STATUS
+MatchDsmReturnCode(
+  IN     UINT8 DsmStatus
+);
+#endif
+
 /**
   Check if SKU conflict occurred.
   Any mixed modes between DIMMs are prohibited on a platform.
@@ -1534,22 +1630,19 @@ GetOverwriteDimmStatus(
   Send a customer format command through the smbus
 
   @param[in] pDimm The dimm to attempt to format
-  @param[in] Smbus Execute on SMBUS mailbox or DDRT
 
   @retval EFI_SUCCESS Success
   @retval EFI_INVALID_PARAMETER Invalid FW Command Parameter
 **/
 EFI_STATUS
 FwCmdFormatDimm(
-  IN    DIMM *pDimm,
-  IN    BOOLEAN Smbus
+  IN    DIMM *pDimm
   );
 
 /**
   Firmware command to get DDRT IO init info
 
   @param[in] pDimm Target DIMM structure pointer
-  @param[in] Execute on Smbus mailbox instead of DDRT
   @param[out] pDdrtIoInitInfo pointer to filled payload with DDRT IO init info
 
   @retval EFI_SUCCESS Success
@@ -1560,7 +1653,6 @@ FwCmdFormatDimm(
 EFI_STATUS
 FwCmdGetDdrtIoInitInfo(
   IN     DIMM *pDimm,
-  IN     BOOLEAN Smbus,
      OUT PT_OUTPUT_PAYLOAD_GET_DDRT_IO_INIT_INFO *pDdrtIoInitInfo
   );
 
@@ -1675,4 +1767,56 @@ Clears the PCD Cache on each DIMM in the global DIMM list
 **/
 EFI_STATUS ClearPcdCacheOnDimmList(VOID);
 
+/**
+  Set Obj Status when DIMM is not found using Id expected by end user
+
+  @param[in] DimmId the Pid for the DIMM that was not found
+  @param[in] pDimms Pointer to head of list where DimmId should be found
+  @param[out] pCommandStatus Pointer to command status structure
+
+**/
+VOID
+SetObjStatusForDimmNotFound(
+  IN     UINT16 DimmId,
+  IN     LIST_ENTRY *pDimms,
+  OUT COMMAND_STATUS *pCommandStatus
+);
+
+/**
+Set object status for DIMM
+
+@param[out] pCommandStatus Pointer to command status structure
+@param[in] pDimm DIMM for which the object status is being set
+@param[in] Status Object status to set
+@param[in] If TRUE - clear all other status before setting this one
+**/
+VOID
+SetObjStatusForDimmWithErase(
+  OUT COMMAND_STATUS *pCommandStatus,
+  IN     DIMM *pDimm,
+  IN     NVM_STATUS Status,
+  IN     BOOLEAN EraseFirst
+);
+
+/**
+Determine the total size of PCD Config Data area by finding the largest
+offset any of the 3 data sets.
+
+@param[in]  pOemHeader    Pointer to NVDIMM Configuration Header
+@param[out] pOemDataSize  Size of the PCD Config Data
+
+@retval EFI_INVALID_PARAMETER NULL pointer for DIMM structure provided
+@retval EFI_SUCCESS           Success
+**/
+EFI_STATUS GetPcdOemDataSize(
+  NVDIMM_CONFIGURATION_HEADER *pOemHeader,
+  UINT32 *pOemDataSize
+);
+
+EFI_STATUS
+PassThru(
+  IN     struct _DIMM *pDimm,
+  IN OUT FW_CMD *pCmd,
+  IN     UINT64 Timeout
+);
 #endif

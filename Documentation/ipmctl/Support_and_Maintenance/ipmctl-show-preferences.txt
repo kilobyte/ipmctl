@@ -10,20 +10,28 @@ NAME
 ----
 ipmctl-show-preferences - Displays a list of the DCPMM software user preferences
 
-DESCRIPTION
------------
-Displays a list of the DCPMM software user preferences and their current values.
-
 SYNOPSIS
 --------
 [verse]
 ipmctl show [OPTIONS] -preferences
+
+DESCRIPTION
+-----------
+Displays a list of the DCPMM software user preferences and their current values.
 
 OPTIONS
 -------
 -h::
 -help::
   Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::
@@ -88,7 +96,7 @@ DBG_LOG_MAX::
 
 APPDIRECT_SETTINGS::
   The interleave settings to use when creating App Direct capacity in the
-  format: (IMCSize_ChannelSize). The default is “RECOMMENDED” which uses the
+  format: (IMCSize_ChannelSize). The default is "RECOMMENDED" which uses the
   BIOS recommended App Direct settings returned by the command Show System
   Capabilities.
 

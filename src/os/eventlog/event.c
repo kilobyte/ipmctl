@@ -19,6 +19,8 @@
 #include <Debug.h>
 #include <PrintLib.h>
 #include "s_str.h"
+#include "os.h"
+#include <os_efi_api.h>
 
 #if defined(__LINUX__)
 #include <safe_str_lib.h>
@@ -125,57 +127,71 @@ static void remove_control_characters(CHAR8 *string)
 */
 static EFI_STATUS get_the_system_log_file_name(log_file_type file, UINTN file_size, CHAR8 *file_name)
 {
-    EFI_STATUS efi_status = EFI_SUCCESS;
-    EFI_GUID guid = { 0 };
-    CHAR8 temp_file_name[SYSTEM_LOG_FILE_NAME_MAX_LEN];
-    CHAR8 environment_variable[ENVIRONMENT_VARIABLE_MAX_LEN];
-    CHAR8 *p_env_variable_path;
-    CHAR8 *p_env_start = NULL;
-    CHAR8 *p_env_stop = NULL;
+  EFI_STATUS efi_status = EFI_SUCCESS;
+  EFI_GUID guid = { 0 };
+  CHAR8 temp_file_name[SYSTEM_LOG_FILE_NAME_MAX_LEN];
+  CHAR8 environment_variable[ENVIRONMENT_VARIABLE_MAX_LEN];
+  CHAR8 *p_env_variable_path;
+  CHAR8 *p_env_start = NULL;
+  CHAR8 *p_env_stop = NULL;
+  static BOOLEAN temp_dir_created = FALSE;
 
-    if (FALSE == g_log_file_table[file].name_initialized) {
-        // The system log file name not configured yet, check the preferences
-        efi_status = preferences_get_string_ascii(g_log_file_table[file].ini_entry_name, guid, SYSTEM_LOG_FILE_NAME_MAX_LEN, g_log_file_table[file].file_name);
-        if (EFI_SUCCESS == efi_status) {
-            // Overwrite environment variables
-            // Find the environment variable control chars 
-            p_env_start = strchr(g_log_file_table[file].file_name, ENVIRONMENT_VARIABLE_CHAR_START);
-            if (NULL != p_env_start)
-            {
-                p_env_start++; // start + 1 cause we have to skip the ENVIRONMENT_VARIABLE_CHAR_START char
-                p_env_stop = strchr(p_env_start, ENVIRONMENT_VARIABLE_CHAR_STOP);
-                if (NULL != p_env_stop) {
-                  // Replace the environment variable with the real value
-                  environment_variable[0] = 0; // Initialize the environemt variable string as empty
-                  strncat_s(environment_variable, ENVIRONMENT_VARIABLE_MAX_LEN, p_env_start, p_env_stop - p_env_start);
-                  if (NULL != (p_env_variable_path = getenv(environment_variable))) {
-                    snprintf(temp_file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN, "%s", p_env_variable_path);
-                  }
-                  p_env_stop++; // stop + 1 cause we have to skip the ENVIRONMENT_VARIABLE_CHAR_STOP char
-                  strcat_s(temp_file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN, p_env_stop);
-                  // Store the proper file name
-                  strncpy_s(g_log_file_table[file].file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN, temp_file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN);
-                }
-            }
-            g_log_file_table[file].name_initialized = TRUE;
-        }
+  // Check if the TEMP_FILE_DIR exists and create it if not
+  if (FALSE == temp_dir_created) {
+    if (FALSE == g_log_file_table[SYSTEM_LOG_AR_FILE].name_initialized) {
+      efi_status = preferences_get_string_ascii(g_log_file_table[SYSTEM_LOG_AR_FILE].ini_entry_name, guid, SYSTEM_LOG_FILE_NAME_MAX_LEN, g_log_file_table[SYSTEM_LOG_AR_FILE].file_name);
+      if (EFI_SUCCESS == efi_status) {
+        g_log_file_table[SYSTEM_LOG_AR_FILE].name_initialized = TRUE;
+      }
     }
-    if (FALSE == g_log_file_table[file].value_initialized) {
-        // Initialize the file limits
-        // Don't worry about the returns status, the limit_value doesn't have to be configured
-        UINTN limit_value_size = sizeof(g_log_file_table[file].limit_value);
-        preferences_get_var_ascii(g_log_file_table[file].ini_entry_limit, guid, (void *)&g_log_file_table[file].limit_value, &limit_value_size);
-        g_log_file_table[file].value_initialized = TRUE;
-    }
+    // Create the TMEP_FILE_DIR
+    os_mkdir(g_log_file_table[SYSTEM_LOG_AR_FILE].file_name);
+    temp_dir_created = TRUE;
+  }
+
+  if (FALSE == g_log_file_table[file].name_initialized) {
+    // The system log file name not configured yet, check the preferences
+    efi_status = preferences_get_string_ascii(g_log_file_table[file].ini_entry_name, guid, SYSTEM_LOG_FILE_NAME_MAX_LEN, g_log_file_table[file].file_name);
     if (EFI_SUCCESS == efi_status) {
-        if (file_size < sizeof(g_log_file_table[file].file_name))
-            efi_status = EFI_BUFFER_TOO_SMALL;
-        else {
-            // the name has been read successfuly from the ini file
-            memcpy_s(file_name, file_size, g_log_file_table[file].file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN);
+      // Overwrite environment variables
+      // Find the environment variable control chars 
+      p_env_start = strchr(g_log_file_table[file].file_name, ENVIRONMENT_VARIABLE_CHAR_START);
+      if (NULL != p_env_start)
+      {
+        p_env_start++; // start + 1 cause we have to skip the ENVIRONMENT_VARIABLE_CHAR_START char
+        p_env_stop = strchr(p_env_start, ENVIRONMENT_VARIABLE_CHAR_STOP);
+        if (NULL != p_env_stop) {
+          // Replace the environment variable with the real value
+          environment_variable[0] = 0; // Initialize the environemt variable string as empty
+          strncat_s(environment_variable, ENVIRONMENT_VARIABLE_MAX_LEN, p_env_start, p_env_stop - p_env_start);
+          if (NULL != (p_env_variable_path = getenv(environment_variable))) {
+            snprintf(temp_file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN, "%s", p_env_variable_path);
+          }
+          p_env_stop++; // stop + 1 cause we have to skip the ENVIRONMENT_VARIABLE_CHAR_STOP char
+          strcat_s(temp_file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN, p_env_stop);
+          // Store the proper file name
+          strncpy_s(g_log_file_table[file].file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN, temp_file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN);
         }
+      }
+      g_log_file_table[file].name_initialized = TRUE;
     }
-    return efi_status;
+  }
+  if (FALSE == g_log_file_table[file].value_initialized) {
+    // Initialize the file limits
+    // Don't worry about the returns status, the limit_value doesn't have to be configured
+    UINTN limit_value_size = sizeof(g_log_file_table[file].limit_value);
+    preferences_get_var_ascii(g_log_file_table[file].ini_entry_limit, guid, (void *)&g_log_file_table[file].limit_value, &limit_value_size);
+    g_log_file_table[file].value_initialized = TRUE;
+  }
+  if (EFI_SUCCESS == efi_status) {
+    if (file_size < sizeof(g_log_file_table[file].file_name))
+      efi_status = EFI_BUFFER_TOO_SMALL;
+    else {
+      // the name has been read successfuly from the ini file
+      strncpy_s(file_name, file_size, g_log_file_table[file].file_name, SYSTEM_LOG_FILE_NAME_MAX_LEN);
+    }
+  }
+  return efi_status;
 }
 
 /*
@@ -194,7 +210,7 @@ static EFI_STATUS get_the_ar_file_name(CHAR8 *p_file_name, UINTN file_name_buff_
   efi_status = get_the_system_log_file_name(SYSTEM_LOG_AR_FILE, sizeof(temp_file_name), temp_file_name);
   if (EFI_SUCCESS == efi_status) {
       // the name has been read successfuly from the ini file
-      stored_chars = snprintf(p_file_name, file_name_buff_size, ACTION_REQUIRED_FILE_PARSING_STRING, temp_file_name, p_device_uid);
+      stored_chars = snprintf(p_file_name, (size_t)file_name_buff_size, ACTION_REQUIRED_FILE_PARSING_STRING, temp_file_name, p_device_uid);
       if (stored_chars < 0) {
         efi_status = EFI_PROTOCOL_ERROR;
       }
@@ -335,7 +351,7 @@ static void store_entry_in_buffer(char *event_entry, size_t *p_event_buff_size, 
         // Add the event code string
         AsciiSPrint(code_str, SYSTEM_LOG_CODE_STRING_SIZE, "%03d", SYSTEM_EVENT_TYPE_NUMBER_GET(event_type));
         // Increase buffer size
-        *p_event_buff_size += str_size + AsciiStrLen(code_str) + AsciiStrLen(p_ctl_stop);
+        *p_event_buff_size += str_size + (size_t)AsciiStrLen(code_str) + (size_t)AsciiStrLen(p_ctl_stop);
         *event_buffer = realloc(*event_buffer, *p_event_buff_size);
         if (NULL != *event_buffer) {
             ((char*)*event_buffer)[end_of_event_buffer] = 0;
@@ -360,7 +376,7 @@ static void store_entry_in_buffer(char *event_entry, size_t *p_event_buff_size, 
     {
         // No cotrol characters in the entry
         // Increase buffer size
-        *p_event_buff_size += AsciiStrLen(event_entry);
+        *p_event_buff_size += (size_t)AsciiStrLen(event_entry);
         *event_buffer = realloc(*event_buffer, *p_event_buff_size);
         if (NULL != *event_buffer) {
             ((char*)*event_buffer)[end_of_event_buffer] = 0;
@@ -413,7 +429,7 @@ static long int find_last_line_in_file(FILE * stream)
     // Jump over the previous EOL char
     pos -= 2;
     // Find the previous line
-    while (fgetc(stream) != '\n')
+    while ((fgetc(stream) != '\n') && (pos != 0))
     {
         if (fseek(stream, --pos, SEEK_SET) != 0)
             return 0;
@@ -435,11 +451,15 @@ static char* fgetsrev(char* str, int num, FILE * stream)
     // Check if we reached begin of file
     if (b_o_f)
         return NULL;
+    // Check if the pointer is not skipping the first char
+    if (pos == 1) {
+      fseek(stream, --pos, SEEK_SET); // Read out the first char
+    }
     // Get the line
     rc = fgets(str, num, stream);
     if (NULL == rc)
         return rc;
-    // Stor information about reached begin of file
+    // Store information about reached begin of file
     if (pos == 0)
     {
         b_o_f = TRUE;
@@ -783,7 +803,7 @@ static size_t get_system_events_from_file(BOOLEAN reversed, BOOLEAN not_matching
 */
 static inline void *allocate_buffer_for_file(FILE *h_file, size_t *buff_size)
 {
-    UINTN file_size = 0;
+    size_t file_size = 0;
     void *file_buffer = NULL;
 
     // Check the file size
@@ -1014,10 +1034,15 @@ NVM_API NvmStatusCode nvm_store_system_entry (CONST CHAR8 *source,  UINT32 event
     VA_LIST args;
     NVM_EVENT_MSG event_message = { 0 };
     UINT32 size = sizeof(event_message);
-    int ret_code;
+    int ret_code = 0;
 
     VA_START(args, message);
-    ret_code = (int) AsciiVSPrint(event_message, size, message, args);
+    if (get_first_arg_from_va_list(args) != DO_NOT_PARSE_ARGS) {
+      ret_code = (int)AsciiVSPrint(event_message, size, message, args);
+    }
+    else {
+      ret_code = strcpy_s(event_message, sizeof(event_message), message);
+    }
     VA_END(args); // Cleans up the list
     if (ret_code > -1 && ret_code < (int)size)
     {
@@ -1288,10 +1313,10 @@ NVM_API NvmStatusCode nvm_store_system_entry_widechar(CONST CHAR16 *source, UINT
     UnicodeStrToAsciiStr(source, ascii_source);
     if (NULL != device_uid) {
       UnicodeStrToAsciiStr(device_uid, ascii_dimm_id);
-      nvm_store_system_entry(ascii_source, event_type, ascii_dimm_id, ascii_event_message);
+      nvm_store_system_entry(ascii_source, event_type, ascii_dimm_id, ascii_event_message, DO_NOT_PARSE_ARGS);
     }
     else {
-      nvm_store_system_entry(ascii_source, event_type, NULL, ascii_event_message);
+      nvm_store_system_entry(ascii_source, event_type, NULL, ascii_event_message, DO_NOT_PARSE_ARGS);
     }
   }
   else {

@@ -203,7 +203,7 @@ PollCmdCompletion(
 **/
 EFI_STATUS
 EFIAPI
-PassThru (
+DefaultPassThru (
   IN     struct _DIMM *pDimm,
   IN OUT FW_CMD *pCmd,
   IN     UINT64 Timeout
@@ -278,6 +278,7 @@ enum GetSecInfoSubop {
 **/
 enum SetSecInfoSubop {
   SubopOverwriteDimm = 0x01,
+  SubopSetMasterPass  = 0xF0,           //!< Changes the security master passphrase
   SubopSetPass  = 0xF1,                 //!< Changes the security administrator passphrase
   SubopDisablePass = 0xF2,              //!< Disables the current password on a drive
   SubopUnlockUnit = 0xF3,               //!< Unlocks the persistent region
@@ -427,7 +428,8 @@ typedef struct {
   TEMPERATURE MediaThrottlingStopThreshold;
   TEMPERATURE ControllerThrottlingStartThreshold;
   TEMPERATURE ControllerThrottlingStopThreshold;
-  UINT8 Reserved[116];
+  UINT16 MaxAveragePowerBudget;
+  UINT8 Reserved[114];
 } PT_DEVICE_CHARACTERISTICS_PAYLOAD;
 
 /**
@@ -463,8 +465,32 @@ typedef struct {
     Sub-Opcode: 0x00h (Get Security State)
 **/
 typedef struct {
-  UINT8 SecurityStatus;
-  UINT8 Resrvd[127];
+  union {
+    struct {
+      UINT32 Reserved1                  : 1;
+      UINT32 SecurityEnabled            : 1;
+      UINT32 SecurityLocked             : 1;
+      UINT32 SecurityFrozen             : 1;
+      UINT32 UserSecurityCountExpired   : 1;
+      UINT32 SecurityNotSupported       : 1; //!< This SKU does not support Security Feature Set
+      UINT32 BIOSSecurityNonceSet       : 1;
+      UINT32 Reserved2                  : 1;
+      UINT32 MasterPassphraseEnabled    : 1;
+      UINT32 MasterSecurityCountExpired : 1;
+      UINT32 Reserved3                  : 22;
+    } Separated;
+    UINT32 AsUint32;
+  } SecurityStatus;
+
+  union {
+    struct {
+      UINT32 SecurityErasePolicy  : 1; //!< 0 - Never been set, 1 - Secure Erase Policy opted in
+      UINT32 Reserved             :31;
+    } Separated;
+    UINT32 AsUint32;
+  } OptInStatus;
+
+  UINT8 Reserved[120];
 } PT_GET_SECURITY_PAYLOAD;
 
 /**
@@ -473,9 +499,11 @@ typedef struct {
     Sub-Opcode: 0xF1h (Set Passphrase)
 **/
 typedef struct {
-  INT8 PassphraseCurrent[PASSPHRASE_BUFFER_SIZE]; //!< 31:0 The current security passphrase
-  UINT8 Reserved[32];                             //!< 63:32 Reserved
-  INT8 PassphraseNew[PASSPHRASE_BUFFER_SIZE];     //!< The new passphrase to be set/changed to
+  UINT8 PassphraseCurrent[PASSPHRASE_BUFFER_SIZE]; //!< 31:0 The current security passphrase
+  UINT8 PassphraseType;                            //!< 32 Passphrase Type for secure erase
+  UINT8 Reserved1[31];                             //!< 63:33 Reserved
+  UINT8 PassphraseNew[PASSPHRASE_BUFFER_SIZE];     //!< 64:95 The new passphrase to be set/changed to
+  UINT8 Reserved2[32];                             //!< 127:96 Reserved
 } PT_SET_SECURITY_PAYLOAD;
 
 /**
@@ -484,7 +512,7 @@ typedef struct {
     Sub-Opcode:  0x06h (Optional Configuration Data Policy)
 **/
 typedef struct {
-  UINT8 FirstFastRefresh;     //!< Enable / disable of acceleration of first refresh cycle
+  UINT8 FirstFastRefresh;     //!< DEPRECATED
 } PT_OPTIONAL_DATA_POLICY_PAYLOAD;
 
 /**
@@ -684,12 +712,25 @@ typedef struct {
 **/
 typedef struct {
   UINT8 Enable;              //!< Indicates whether an Address Range Scrub is in progress.
-  UINT8 Reserved1[2];
+  UINT8 Reserved1[3];
   UINT64 DPAStartAddress;    //!< Address from which to start the range scrub.
   UINT64 DPAEndAddress;      //!< Address to end the range scrub.
   UINT64 DPACurrentAddress;  //!< Address that is being currently scrubbed.
-  UINT8 Reserved2[101];
+  UINT8 Reserved2[100];
 } PT_PAYLOAD_ADDRESS_RANGE_SCRUB;
+
+/**
+  Passthrough Payload:
+    Opcode:    0x04h (Get Features)
+    Sub-Opcode:  0x04h (Address Range Scrub)
+**/
+typedef struct {
+  UINT8 Enable;              //!< Indicates whether an Address Range Scrub is in progress.
+  UINT8 Reserved1[3];
+  UINT64 DPAStartAddress;    //!< Address from which to start the range scrub.
+  UINT64 DPAEndAddress;      //!< Address to end the range scrub.
+  UINT8 Reserved2[108];
+} PT_PAYLOAD_SET_ADDRESS_RANGE_SCRUB;
 
 typedef union _SMART_VALIDATION_FLAGS {
   UINT32 AllFlags;
@@ -699,12 +740,12 @@ typedef union _SMART_VALIDATION_FLAGS {
     UINT32                                  : 1; //!< Reserved
     UINT32 MediaTemperature                 : 1;
     UINT32 ControllerTemperature            : 1;
-    UINT32 UnsafeShutdownCount              : 1;
+    UINT32 LatchedDirtyShutdownCount        : 1;
     UINT32 AITDRAMStatus                    : 1;
     UINT32 HealthStatusReason               : 1;
     UINT32                                  : 1;  //!< Reserved
     UINT32 AlarmTrips                       : 1;
-    UINT32 LastShutdownStatus               : 1;
+    UINT32 LatchedLastShutdownStatus        : 1;
     UINT32 SizeOfVendorSpecificDataValid    : 1;
     UINT32                                  : 20; //!< Reserved
   } Separated;
@@ -714,7 +755,7 @@ typedef struct {
   UINT64 PowerCycles;       //!< Number of DIMM power cycles
   UINT64 PowerOnTime;       //!< Lifetime hours the DIMM has been powered on (represented in seconds)
   UINT64 UpTime;            //!< Current uptime of the DIMM for the current power cycle
-  UINT32 DirtyShutdowns;   //!< This is the # of times that the FW received an unexpected power loss
+  UINT32 UnlatchedDirtyShutdownCount;   //!< This is the # of times that the FW received an unexpected power loss
 
   /**
     Display the status of the last shutdown that occurred
@@ -727,7 +768,7 @@ typedef struct {
     Bit 6: Thermal Shutdown Received (0 - Did not occur, 1 Thermal Shutdown Triggered)
     Bit 7: Controller Flush Complete (0 - Did not occur, 1 - Completed)
   **/
-  LAST_SHUTDOWN_STATUS_DETAILS LastShutdownDetails;
+  LAST_SHUTDOWN_STATUS_DETAILS LatchedLastShutdownDetails;
 
   UINT64 LastShutdownTime;
 
@@ -741,9 +782,39 @@ typedef struct {
     Bit 5: Surprise Reset (0 - Not Received, 1 - Received)
     Bit 6-23: Reserved
   **/
-  LAST_SHUTDOWN_STATUS_DETAILS_EXTENDED LastShutdownExtendedDetails;
+  LAST_SHUTDOWN_STATUS_DETAILS_EXTENDED LatchedLastShutdownExtendedDetails;
 
-  UINT8 Reserved[52];
+  UINT8 Reserved[2];
+
+   /**
+    Display the status of the last shutdown that occurred
+    Bit 0: PM ADR Command (0 - Not Received, 1 - Received)
+    Bit 1: PM S3 (0 - Not Received, 1 - Received)
+    Bit 2: PM S5 (0 - Not Received, 1 - Received)
+    Bit 3: DDRT Power Fail Command Received (0 - Not Received, 1 - Received)
+    Bit 4: PMIC Power Loss (0 - Not Received, 1 - PMIC Power Loss)
+    Bit 5: PM Warm Reset (0 - Not Received, 1 - Received)
+    Bit 6: Thermal Shutdown Received (0 - Did not occur, 1 Thermal Shutdown Triggered)
+    Bit 7: Controller Flush Complete (0 - Did not occur, 1 - Completed)
+  **/
+  LAST_SHUTDOWN_STATUS_DETAILS UnlatchedLastShutdownDetails;
+
+  /**
+    Display extended details of the last shutdown that occured
+    Bit 0: Viral Interrupt Command (0 - Not Received, 1 - Received)
+    Bit 1: Surprise Clock Stop Interrupt (0 - Not Received, 1 - Received)
+    Bit 2: Write Data Flush Complete (0 - Not Completed, 1 - Completed)
+    Bit 3: S4 Power State (0 - Not Received, 1 - Received)
+    Bit 4: PM Idle (0 - Not Received, 1 - Received)
+    Bit 5: Surprise Reset (0 - Not Received, 1 - Received)
+    Bit 6-23: Reserved
+  **/
+  LAST_SHUTDOWN_STATUS_DETAILS_EXTENDED UnlatchedLastShutdownExtendedDetails;
+
+  TEMPERATURE MaxMediaTemperature;      //!< The highest die temperature reported in degrees Celsius.
+  TEMPERATURE MaxControllerTemperature; //!< The highest controller temperature repored in degrees Celsius. 
+
+  UINT8 Reserved1[42];
 } SMART_INTEL_SPECIFIC_DATA;
 
 /**
@@ -788,8 +859,8 @@ typedef struct {
   TEMPERATURE MediaTemperature;      //!< Current temperature in Celcius. This is the highest die temperature reported.
   TEMPERATURE ControllerTemperature; //!< Current temperature in Celcius. This is the temperature of the controller.
 
-  UINT32 DirtyShutdownCount;     //!< Number of times the DIMM Last Shutdown State (LSS) was non-zero.
-  UINT8 AITDRAMStatus;            //!< The current state of the AIT DRAM (0 - disabled, 1 - enabled)
+  UINT32 LatchedDirtyShutdownCount;     //!< Number of times the DIMM Last Shutdown State (LSS) was non-zero.
+  UINT8 AITDRAMStatus;            //!< The current state of the AIT DRAM (0 - failure occurred, 1 - loaded)
   UINT16 HealthStatusReason;      //!<  Indicates why the module is in the current Health State
   UINT8 Reserved3[8];
 
@@ -797,7 +868,7 @@ typedef struct {
     00h:       Clean Shutdown
     01h - FFh: Not Clean Shutdown
   **/
-  UINT8 LastShutdownStatus;
+  UINT8 LatchedLastShutdownStatus;
   UINT32 VendorSpecificDataSize; //!< Size of Vendor specific structure
   SMART_INTEL_SPECIFIC_DATA VendorSpecificData;
 } PT_PAYLOAD_SMART_AND_HEALTH;
@@ -816,10 +887,16 @@ typedef struct {
   UINT8 Reserved4[105];
 } PT_PAYLOAD_FW_IMAGE_INFO;
 
+
+#define SRAM_LOG_PAGE_SIZE_BYTES KIB_TO_BYTES(2)
+#define SPI_LOG_PAGE_SIZE_BYTES  KIB_TO_BYTES(2)
+
 enum GetFWDebugLogLogAction {
   ActionRetrieveDbgLogSize = 0x00,
   ActionGetDbgLogPage = 0x01,
-  ActionInvalid = 0x02,
+  ActionGetSramLogPage = 0x02,
+  ActionGetSpiLogPage = 0x03,
+  ActionInvalid = 0x04,
 };
 
 /**
@@ -830,7 +907,8 @@ enum GetFWDebugLogLogAction {
 typedef struct {
   UINT8   LogAction;
   UINT32  LogPageOffset;
-  UINT8   Reserved[123];
+  UINT8   PayloadType;
+  UINT8   Reserved[122];
 } PT_INPUT_PAYLOAD_FW_DEBUG_LOG;
 
 typedef struct {
@@ -943,6 +1021,12 @@ enum GetErrorLogType {
   ErrorLogTypeInvalid = 0x02,
 };
 
+enum GetErrorLogInfo {
+  ErrorLogInfoEntries = 0x00,
+  ErrorLogInfoData = 0x01,
+  ErrorLogInfoInvalid = 0x02,
+};
+
 enum GetErrorLogPayloadReturn {
   ErrorLogSmallPayload = 0x00,
   ErrorLogLargePayload = 0x01,
@@ -978,6 +1062,15 @@ enum GetErrorThermalReportedType {
 };
 
 /**
+  Mailbox status return codes.
+**/
+enum MailboxStatusReturnCode {
+  MailboxSuccess        = FW_SUCCESS,
+  MailboxDeviceBusy     = FW_DEVICE_BUSY,
+  MailboxDataNotSet     = FW_DATA_NOT_SET
+};
+
+/**
   Passthrough Input Payload:
      Opcode:      0x08h (Get Log Page)
      Sub-Opcode:  0x05h (Error Log)
@@ -994,10 +1087,7 @@ typedef struct {
     } Separated;
   } LogParameters;
   UINT16 SequenceNumber;     //!< Log entries with sequence number equal or higher than the provided will be returned
-  union {
-    UINT8 RequestCountFis1_2;
-    UINT16 RequestCountFis1_3;
-  } RequestCount;            //!< Max number of log entries requested for this access
+  UINT16 RequestCount;       //!< Max number of log entries requested for this access
   UINT8 Reserved[123];
 } PT_INPUT_PAYLOAD_GET_ERROR_LOG;
 
@@ -1017,23 +1107,8 @@ typedef struct _LOG_INFO_DATA_RETURN {
      Sub-Opcode:  0x05h (Error Log)
 **/
 typedef struct {
-  union {
-    struct {
-      UINT16 NumTotalEntries;
-      union {
-        UINT8 AsUint8;
-        struct {
-          UINT8 ReturnCount : 7;
-          UINT8 OverrunFlag : 1;
-        } Separated;
-      } ReturnInfo;
-      UINT8 LogEntries[125];
-    } FIS_1_2;
-    struct {
-      UINT16 ReturnCount;           //!< Number of log entries returned
-      UINT8 LogEntries[126];        //!< Media log entry table
-    } FIS_1_3;
-  } Params;
+    UINT16 ReturnCount;           //!< Number of log entries returned
+    UINT8 LogEntries[126];        //!< Media log entry table
 } PT_OUTPUT_PAYLOAD_GET_ERROR_LOG;
 
 /**
@@ -1092,7 +1167,7 @@ typedef struct {
 } PT_INPUT_PAYLOAD_GET_COMMAND_ACCESS_POLICY;
 
 typedef struct {
-  UINT8 Restricted;
+  UINT8 Restriction;
   UINT8  Reserved[127];
 } PT_OUTPUT_PAYLOAD_GET_COMMAND_ACCESS_POLICY;
 

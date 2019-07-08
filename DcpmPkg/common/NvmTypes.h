@@ -92,7 +92,7 @@ typedef struct {
 #define SECURITYCAPABILITES_LEN        18 // @todo confirm label length
 #define IFC_STRING_LEN                255
 #define MEMORY_MODES_LEN               40 // @todo confirm label length
-#define MEMORY_TYPE                    18 // @todo confirm label length
+#define MEMORY_TYPE                    30 
 #define BOOT_STATUS_LEN               100
 #define FW_UPDATE_STATUS_LEN           64
 #define FW_BUILD_LEN                   16
@@ -102,11 +102,12 @@ typedef struct {
 #define DATE_STR_LEN                   29
 #define SW_TRIG_ENABLED_DETAILS_LEN   120
 #define CONTROLLER_RID_LEN             12
+#define SECURITY_STATE_STR_LEN         32
 
 /** DIMM UID length, including null terminator **/
 #define MAX_DIMM_UID_LENGTH      22   //!< DIMM UID hexadecimal-format representation length, including manufacturing fields
 #define MIN_DIMM_UID_LENGTH      14   //!< DIMM UID hexadecimal-format representation length, excluding manufacturing fields
-#define NVM_EVENT_MSG_LEN 1024 // Length of event message string
+#define NVM_EVENT_MSG_LEN        1024 // Length of event message string
 
 #ifdef OS_BUILD
 #define	NVM_SYSLOG_SOURCE	"NVM_MGMT"
@@ -148,6 +149,8 @@ typedef wchar_t NVM_EVENT_MSG_W[NVM_EVENT_MSG_LEN]; // Event message string
 #define APPDIRECT_GRANULARITY_DEFAULT       APPDIRECT_GRANULARITY_32GIB
 
 #define APPDIRECT_GRANULARITY_VARIABLE_NAME L"APPDIRECT_GRANULARITY"
+#define PBR_CONTEXT_VAR L"PBR_CONTEXT"
+#define PBR_TAG_ID_VAR  L"PBR_TAG"
 
 /** IMC interleave size **/
 #define IMC_INTERLEAVE_SIZE_INVALID MAX_UINT8_VALUE
@@ -257,13 +260,14 @@ typedef struct _SMBUS_DIMM_ADDR {
 #define DIMM_INFO_CATEGORY_SECURITY                     (1 << 1)    ///< Security fields will be populated: SecurityState.
 #define DIMM_INFO_CATEGORY_PACKAGE_SPARING              (1 << 2)    ///< Package sparing fields will be populated: PackageSparingEnabled, PackageSparesAvailable.
 #define DIMM_INFO_CATEGORY_ARS_STATUS                   (1 << 3)    ///< ARS status field will be populated: ARSStatus.
-#define DIMM_INFO_CATEGORY_SMART_AND_HEALTH             (1 << 4)    ///< Health related fields will be populated: HealthStatusReason, LastShutdownStatus, LastShutdownTime, AitDramEnabled.
+#define DIMM_INFO_CATEGORY_SMART_AND_HEALTH             (1 << 4)    ///< Health related fields will be populated: HealthStatusReason, LatchedLastShutdownStatus, LastShutdownTime, AitDramEnabled.
 #define DIMM_INFO_CATEGORY_POWER_MGMT_POLICY            (1 << 5)    ///< Power management fields will be populated: PeakPowerBudget, AvgPowerBudget.
-#define DIMM_INFO_CATEGORY_OPTIONAL_CONFIG_DATA_POLICY  (1 << 6)    ///< Optional config data policy fields will be populated: FirstFastRefresh.
+#define DIMM_INFO_CATEGORY_OPTIONAL_CONFIG_DATA_POLICY  (1 << 6)    ///< Optional config data policy fields will be populated:
 #define DIMM_INFO_CATEGORY_OVERWRITE_DIMM_STATUS        (1 << 7)    ///< Overwrite DIMM status field will be populated: OverwriteDimmStatus.
 #define DIMM_INFO_CATEGORY_FW_IMAGE_INFO                (1 << 8)    ///< Firmware Image info fields will be populated: LastFwUpdateStatus, StagedFwVersion, FWImageMaxSize.
 #define DIMM_INFO_CATEGORY_MEM_INFO_PAGE_3              (1 << 9)    ///< Memory info page 3 fields will be populated: ErrorInjectionEnabled, MediaTemperatureInjectionEnabled, SoftwareTriggersEnabled, PoisonErrorInjectionsCounter, PoisonErrorClearCounter, MediaTemperatureInjectionsCouner, SoftwareTriggersCounter, SoftwareTriggersEnabledDetails.
 #define DIMM_INFO_CATEGORY_VIRAL_POLICY                 (1 << 10)   ///< Viral policy fields will be populated: ViralPolicyEnable, ViralStatus.
+#define DIMM_INFO_CATEGORY_DEVICE_CHARACTERISTICS       (1 << 11)
 #define DIMM_INFO_CATEGORY_ALL                          (0xFFFF)    ///< All DIMM_INFO fields will be populated.
 
 /**
@@ -283,6 +287,7 @@ typedef struct _SMBUS_DIMM_ADDR {
 #define DIMM_INFO_ERROR_VIRAL_POLICY                    (1 << 10)
 #define DIMM_INFO_ERROR_MEM_INFO_PAGE                   (1 << 11)
 #define DIMM_INFO_ERROR_MAX                             (1 << 12)
+#define DIMM_INFO_ERROR_DEVICE_CHARACTERISTICS                (1 << 13)
 
 // The "global dimm struct" is at &gNvmDimmData->PMEMDev.Dimms and is populated
 // at HII driver loading, so they are included by default on any call to GetDimmInfo()
@@ -297,7 +302,7 @@ typedef struct _DIMM_INFO {
   CHAR16 PartNumber[PART_NUMBER_STR_LEN];   //!< Part number string
   CHAR16 DeviceLocator[DEVICE_LOCATOR_LEN]; //!< describing the physically-labeled socket or board position
   CHAR16 BankLabel[BANKLABEL_LEN];          //!< identifies the physically labeled bank
-  FIRMWARE_VERSION FwVer;                   //!< FNV FW revision
+  FIRMWARE_VERSION FwVer;                   //!< FW version
   UINT16 DimmID;                            //!< SMBIOS Type 17 handle
   UINT16 SocketId;                          //!< socket id
   UINT16 InterfaceFormatCode[MAX_IFC_NUM];  //!< format interface codes
@@ -327,7 +332,8 @@ typedef struct _DIMM_INFO {
   //DIMM_INFO_CATEGORY_SMART_AND_HEALTH
   UINT8 HealthState;                        //!< overall health state
   UINT16 HealthStatusReason;                //!< Health state reason(s)
-  UINT32 LastShutdownStatusDetails;         //!< The detailed status of the last shutdown of the DIMM.
+  UINT32 LatchedLastShutdownStatusDetails;  //!< The detailed status of the last shutdown of the DIMM.
+  UINT32 UnlatchedLastShutdownStatusDetails; //!< The detailed status of the last shutdown of the DIMM.
   UINT64 LastShutdownTime;                  //!< The time the system was last shutdown.
   UINT8 AitDramEnabled;                     //!< Whether or not the DIMM AIT DRAM is enabled
 
@@ -336,7 +342,7 @@ typedef struct _DIMM_INFO {
   UINT16 AvgPowerBudget;                    //!< The power budget in mW used for average power (100-18000 mW). The default is 100 mW.
 
   //DIMM_INFO_CATEGORY_OPTIONAL_CONFIG_DATA_POLICY
-  BOOLEAN FirstFastRefresh;                 //!< true if acceleration of the first refresh cycle is enabled
+  BOOLEAN FirstFastRefresh;                 //!< DEPRECATED
 
   //DIMM_INFO_CATEGORY_VIRAL_POLICY
   BOOLEAN ViralPolicyEnable;                //!< true if viral policy is enabled
@@ -397,6 +403,13 @@ typedef struct _DIMM_INFO {
 #endif // OS_BUILD
 
   UINT16 ControllerRid;                     //!< Revision id of the subsystem memory controller from FIS
+  UINT16 MaxAveragePowerBudget;             //!< Maximum average power budget supported by the Module in mW
+
+  //DIMM_INFO_CATEGORY_SECURITY
+  BOOLEAN MasterPassphraseEnabled;          //!< If 1, master passphrase is enabled
+  UINT32 SecurityStateBitmask;
+
+  CHAR16 SecurityStateStr[SECURITY_STATE_STR_LEN];
 } DIMM_INFO;
 
 typedef struct _TOPOLOGY_DIMM_INFO {
@@ -450,6 +463,8 @@ typedef struct _SYSTEM_CAPABILITIES_INFO {
   BOOLEAN UnlockDeviceSecuritySupported;
   BOOLEAN FreezeDeviceSecuritySupported;
   BOOLEAN ChangeDevicePassphraseSupported;
+  BOOLEAN ChangeMasterPassphraseSupported;
+  BOOLEAN MasterEraseDeviceDataSupported;
 } SYSTEM_CAPABILITIES_INFO;
 
 typedef struct _MEMORY_RESOURCES_INFO {
@@ -485,8 +500,8 @@ typedef struct _NAMESPACE_INFO {
   UINT8 NamespaceGuid[NSGUID_LEN];              //!< UUID per RFC 4122
   UINT16 NamespaceId;                           //!< Namespace ID
   UINT8 Name[NLABEL_NAME_LEN_WITH_TERMINATOR];  //!< Optional name 63 characters + (NULL-terminator)
-  CHAR16 Capacity[UINT128_DIGITS];              //!< Capacity string
-  CHAR16 FreeCapacity[UINT128_DIGITS];          //!< Remaining Capacity String
+  CHAR16 Reserved1[UINT128_DIGITS];             //!< Unused
+  CHAR16 Reserved2[UINT128_DIGITS];             //!< Unused
   UINT16 HealthState;                           //!< Health state. Ok, Warning, Critical, Broken Mirror.
   UINT16 RegionId;                              //!< ID of related region/IS
   UINT64 BlockSize;                             //!< Internal Block Size to calculate Capacity
@@ -522,6 +537,8 @@ typedef struct _NAMESPACE_INFO {
 #define PM_NAMESPACE_MIN_SIZE           BYTES_IN_GIBIBYTE
 #define BLOCK_NAMESPACE_MIN_SIZE        BYTES_IN_GIBIBYTE
 #define NAMESPACE_4KB_ALIGNMENT_SIZE    KIB_TO_BYTES(4)
+#define NAMESPACE_64KB_ALIGNMENT_SIZE   KIB_TO_BYTES (64)
+#define NAMESPACE_32GB_ALIGNMENT_SIZE   GIB_TO_BYTES (32)
 
 /** Region Health States */
 #define RegionHealthStateNormal     1
@@ -646,26 +663,35 @@ typedef struct _DEBUG_LOG_INFO {
   @}
   Security operations
 **/
-#define SECURITY_OPERATION_UNDEFINED          0
-#define SECURITY_OPERATION_SET_PASSPHRASE     1
-#define SECURITY_OPERATION_CHANGE_PASSPHRASE  2
-#define SECURITY_OPERATION_DISABLE_PASSPHRASE 3
-#define SECURITY_OPERATION_UNLOCK_DEVICE      4
-#define SECURITY_OPERATION_FREEZE_DEVICE      5
-#define SECURITY_OPERATION_ERASE_DEVICE       6
+#define SECURITY_OPERATION_UNDEFINED                0
+#define SECURITY_OPERATION_SET_PASSPHRASE           1
+#define SECURITY_OPERATION_CHANGE_PASSPHRASE        2
+#define SECURITY_OPERATION_DISABLE_PASSPHRASE       3
+#define SECURITY_OPERATION_UNLOCK_DEVICE            4
+#define SECURITY_OPERATION_FREEZE_DEVICE            5
+#define SECURITY_OPERATION_ERASE_DEVICE             6
+#define SECURITY_OPERATION_CHANGE_MASTER_PASSPHRASE 7
+#define SECURITY_OPERATION_MASTER_ERASE_DEVICE      8
 
 /**
   Security states
 **/
-#define SECURITY_UNKNOWN          0
-#define SECURITY_DISABLED         1
-#define SECURITY_LOCKED           2
-#define SECURITY_UNLOCKED         3
-#define SECURITY_FROZEN           4
-#define SECURITY_PW_MAX           5
-#define SECURITY_NOT_SUPPORTED    6
-#define SECURITY_STATES_COUNT     7
-#define SECURITY_MIXED_STATE      8 // Mixed security state in all dims view
+#define SECURITY_UNKNOWN              0
+#define SECURITY_DISABLED             1
+#define SECURITY_LOCKED               2
+#define SECURITY_UNLOCKED             3
+#define SECURITY_FROZEN               4
+#define SECURITY_PW_MAX               5
+#define SECURITY_MASTER_PW_MAX        6
+#define SECURITY_NOT_SUPPORTED        7
+#define SECURITY_STATES_COUNT         8
+#define SECURITY_MIXED_STATE          9 // Mixed security state in all dimms view
+
+/**
+  Passphrase Type
+**/
+#define SECURITY_USER_PASSPHRASE    0x0
+#define SECURITY_MASTER_PASSPHRASE  0x1
 
 /**
   Address Range Scrub (ARS) Status
@@ -694,7 +720,7 @@ typedef struct _DEBUG_LOG_INFO {
 #define DIMM_BOOT_STATUS_MEDIA_NOT_READY      BIT1
 #define DIMM_BOOT_STATUS_MEDIA_ERROR          BIT2
 #define DIMM_BOOT_STATUS_MEDIA_DISABLED       BIT3
-#define DIMM_BOOT_STATUS_FW_ASSERT            BIT4
+#define DIMM_BOOT_STATUS_UNUSED               BIT4
 #define DIMM_BOOT_STATUS_DDRT_NOT_READY       BIT5
 #define DIMM_BOOT_STATUS_MAILBOX_NOT_READY    BIT6
 #define DIMM_BOOT_STATUS_REBOOT_REQUIRED      BIT7
@@ -707,6 +733,17 @@ typedef struct _DEBUG_LOG_INFO {
 #define ARS_STATUS_MASK_IN_PROGRESS    BIT2
 #define ARS_STATUS_MASK_COMPLETED      BIT3
 #define ARS_STATUS_MASK_ABORTED        BIT4
+
+/**
+  Security states bitmask
+**/
+#define SECURITY_MASK_ENABLED             BIT1
+#define SECURITY_MASK_LOCKED              BIT2
+#define SECURITY_MASK_FROZEN              BIT3
+#define SECURITY_MASK_COUNTEXPIRED        BIT4
+#define SECURITY_MASK_NOT_SUPPORTED       BIT5
+#define SECURITY_MASK_MASTER_ENABLED      BIT8
+#define SECURITY_MASK_MASTER_COUNTEXPIRED BIT9
 
 /**
   Form Factor
@@ -757,8 +794,9 @@ typedef struct _DEBUG_LOG_INFO {
   @todo(after official SmBIOS spec release): update with correct values from SMBIOS spec
   DIMM type
 **/
-#define SMBIOS_MEMORY_TYPE_DDR4   0x1A
-#define SMBIOS_MEMORY_TYPE_DCPM   0x18
+#define SMBIOS_MEMORY_TYPE_DDR4                   0x1A
+#define SMBIOS_MEMORY_TYPE_DCPM                   0x18
+#define SMBIOS_MEMORY_TYPE_LOGICAL_NON_VOLATILE   0x1F
 
 /**
   Package Sparing Capable
@@ -810,12 +848,6 @@ typedef struct _DEBUG_LOG_INFO {
 #define FW_LOG_LEVEL_DEBUG    4
 
 #define OPTIONAL_DATA_UNDEFINED 0xFFUL
-/**
-  First Fast Refresh states
-**/
-#define FIRST_FAST_REFRESH_DISABLED  0
-#define FIRST_FAST_REFRESH_ENABLED   1
-#define FIRST_FAST_REFRESH_MIXED     2
 
 /**
   Namespace security capabilities.
@@ -829,27 +861,20 @@ typedef struct _DEBUG_LOG_INFO {
  * Sensor IDs for the various sensor types
  * @{
  */
-#define SENSOR_TYPE_DIMM_HEALTH                0                ///< DIMM Health Sensor ID
-#define SENSOR_TYPE_MEDIA_TEMPERATURE          1                ///< Media Temperature Sensor ID
-#define SENSOR_TYPE_CONTROLLER_TEMPERATURE     2                ///< Controller Temperature Sensor ID
-#define SENSOR_TYPE_PERCENTAGE_REMAINING       3                ///< Percentage Remaining Sensor ID
-#define SENSOR_TYPE_DIRTY_SHUTDOWNS            4                ///< Dirty Shutdowns Count Sensor ID
-#define SENSOR_TYPE_POWER_ON_TIME              5                ///< Power On Time Sensor ID
-#define SENSOR_TYPE_UP_TIME                    6                ///< Up-Time Sensor ID
-#define SENSOR_TYPE_POWER_CYCLES               7                ///< Power Cycles Sensor ID
-#define SENSOR_TYPE_FW_ERROR_COUNT             8                ///< Firmware Error Count Sensor ID
-#define SENSOR_TYPE_UNLATCHED_DIRTY_SHUTDOWNS  9                ///< Unlatched Dirty Shutdowns Count Sensor ID
-#define SENSOR_TYPE_ALL                        10               ///< All Sensor IDs
-#define SENSOR_TYPE_COUNT                      SENSOR_TYPE_ALL  ///< Total count of all supported sensor types
+#define SENSOR_TYPE_DIMM_HEALTH                     0                ///< DIMM Health Sensor ID
+#define SENSOR_TYPE_MEDIA_TEMPERATURE               1                ///< Media Temperature Sensor ID
+#define SENSOR_TYPE_CONTROLLER_TEMPERATURE          2                ///< Controller Temperature Sensor ID
+#define SENSOR_TYPE_PERCENTAGE_REMAINING            3                ///< Percentage Remaining Sensor ID
+#define SENSOR_TYPE_LATCHED_DIRTY_SHUTDOWN_COUNT    4                ///< Latched Dirty Shutdowns Count Sensor ID
+#define SENSOR_TYPE_POWER_ON_TIME                   5                ///< Power On Time Sensor ID
+#define SENSOR_TYPE_UP_TIME                         6                ///< Up-Time Sensor ID
+#define SENSOR_TYPE_POWER_CYCLES                    7                ///< Power Cycles Sensor ID
+#define SENSOR_TYPE_FW_ERROR_COUNT                  8                ///< Firmware Error Count Sensor ID
+#define SENSOR_TYPE_UNLATCHED_DIRTY_SHUTDOWN_COUNT  9                ///< Unlatched Dirty Shutdowns Count Sensor ID
+#define SENSOR_TYPE_ALL                             10               ///< All Sensor IDs
+#define SENSOR_TYPE_COUNT                           SENSOR_TYPE_ALL  ///< Total count of all supported sensor types
 
 /** @} */
-
-/** Sensor states **/
-#define SENSOR_STATE_NORMAL        0    ///< Sensor state normal
-#define SENSOR_STATE_NON_CRITICAL  1    ///< Sensor state non-critical
-#define SENSOR_STATE_CRITICAL      2    ///< Sensor state critical
-#define SENSOR_STATE_FATAL         3    ///< Sensor state fatal
-#define SENSOR_STATE_UNKNOWN       4    ///< Sensor state unknown
 
 /** Sensor enabled/disabled **/
 #define SENSOR_DISABLED     0           ///< Sensor type disabled
@@ -938,11 +963,11 @@ typedef struct {
   UINT8  SupportedThresholds;
   CHAR16 ValueString[HII_SENSOR_VALUE_STRING_SIZE];
   UINT64 Value;
-  UINT64 NonCriticalThreshold;
-  UINT64 NewNonCriticalThreshold;
-  UINT64 CriticalLowerThreshold;
-  UINT64 CriticalUpperThreshold;
-  UINT64 FatalThreshold;
+  UINT64 AlarmThreshold;
+  UINT64 NewAlarmThreshold;
+  UINT64 ThrottlingStopThreshold;
+  UINT64 ThrottlingStartThreshold;
+  UINT64 ShutdownThreshold;
 } DIMM_SENSOR_HII;
 
 #define DIMM_SENSOR_ALARM_DISABLED 0
@@ -1007,6 +1032,19 @@ typedef struct {
 #define INTEL_DIMM_CONFIG_VARIABLE_GUID \
   { 0x76fcbfb6, 0x38fe, 0x41fd, {0x90, 0x1d, 0x16, 0x45, 0x31, 0x22, 0xf0, 0x35}}
 
+ /**
+   GUID for PBR variables for playback and record
+  **/
+#define INTEL_DIMM_PBR_VARIABLE_GUID \
+  { 0x98209ce9, 0x1de5, 0x4dec, {0x93, 0xaf, 0x15, 0x29, 0x98, 0x83, 0x36, 0x2f}}
+
+
+  /**
+     GUID for PBR tagids
+    **/
+#define INTEL_DIMM_PBR_TAGID_VARIABLE_GUID \
+  { 0x543f9bc3, 0x9b50, 0x425b, {0xa4, 0xce, 0x1e, 0x73, 0x30, 0xc4, 0xcf, 0x74}}
+
 typedef struct _INTEL_DIMM_CONFIG {
   UINT8 Revision;
   UINT8 ProvisionCapacityMode;
@@ -1061,7 +1099,7 @@ typedef struct _COMMAND_ACCESS_POLICY_ENTRY
 {
   UINT8   Opcode;         //!< Opcode of the FW command
   UINT8   SubOpcode;      //!< SubOpcode of the FW command
-  BOOLEAN Restricted;     //!< True if the command is restricted.
+  UINT8   Restriction;    //!< Code for mailbox restrictions
 } COMMAND_ACCESS_POLICY_ENTRY;
 
 /** Total number of diagnostic test types */
@@ -1078,4 +1116,25 @@ Start Diagnostic Command tests codes
 #define DIAGNOSTIC_TEST_FW          (BIT3)
 #define DIAGNOSTIC_TEST_ALL         (DIAGNOSTIC_TEST_QUICK | DIAGNOSTIC_TEST_CONFIG | DIAGNOSTIC_TEST_SECURITY | DIAGNOSTIC_TEST_FW)
 
+/** Get FW Debug Log Source Definitions */
+#define FW_DEBUG_LOG_SOURCE_MEDIA   0
+#define FW_DEBUG_LOG_SOURCE_SRAM    1
+#define FW_DEBUG_LOG_SOURCE_SPI     2
+#define FW_DEBUG_LOG_SOURCE_MAX     2
+#define NUM_FW_DEBUG_LOG_SOURCES    3
+
+
+/** Defines for the ModifyPcdConfig API */
+#define DELETE_PCD_CONFIG_LSA_MASK    (BIT0) //!< Delete the namespace partition
+#define DELETE_PCD_CONFIG_CIN_MASK    (BIT1) //!< Zero Configuration Input Data Size and Start Offset in the Configuration Header
+#define DELETE_PCD_CONFIG_COUT_MASK   (BIT2) //!< Zero Configuration Output Data Size and Start Offset in the Configuration Header
+#define DELETE_PCD_CONFIG_CCUR_MASK   (BIT3) //!< Zero Current Configuration Data Size and Start Offset in the Configuration Header
+#define DELETE_PCD_CONFIG_ALL_MASK    (DELETE_PCD_CONFIG_LSA_MASK | DELETE_PCD_CONFIG_CIN_MASK | DELETE_PCD_CONFIG_COUT_MASK | DELETE_PCD_CONFIG_CCUR_MASK) ///< @ref DELETE_PCD_CONFIG_ALL_MASK
+
+
+/** Defines for Restriction values returned from get command access policy **/
+#define COMMAND_ACCESS_POLICY_RESTRICTION_NONE           0
+#define COMMAND_ACCESS_POLICY_RESTRICTION_BIOSONLY       1
+#define COMMAND_ACCESS_POLICY_RESTRICTION_SMBUSONLY      2
+#define COMMAND_ACCESS_POLICY_RESTRICTION_BIOSSMBUSONLY  3
 #endif /** _NVM_TYPES_H_ **/

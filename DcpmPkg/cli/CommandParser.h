@@ -9,21 +9,22 @@
 #include <Uefi.h>
 #include <Debug.h>
 #include <Types.h>
-#include <Show.h>
+#include <Printer.h>
 
-#define DISP_NAME_LEN       32    //!< Display string length (used when formatting output in alternative formats)
-#define DISP_DELIMS_LEN     10    //!< Deliminter string length (used when formatting output in alternative formats)
-#define VERB_LEN            16    //!< Verb string length
-#define TARGET_LEN          32    //!< Target name string length
-#define TARGET_VALUE_LEN    4096  //!< Target value string length for maximum-possible DIMM IDs
-#define OPTION_LEN          16    //!< Option name string length
-#define OPTION_VALUE_LEN    1024  //!< Option value string length
-#define PROPERTY_KEY_LEN    128   //!< Property name string length
-#define PROPERTY_VALUE_LEN  128   //!< Property value string length
-#define MAX_TARGETS         8     //!< Maximum number of targets in a single command
-#define MAX_OPTIONS         8     //!< Maximum number of options in a single command
-#define MAX_PROPERTIES      20    //!< Maximum number of properties in a single command
-#define MAX_TOKENS          50    //!< Maximum number of tokens per line
+#define DISP_NAME_LEN             32    //!< Display string length (used when formatting output in alternative formats)
+#define DISP_DELIMS_LEN           10    //!< Deliminter string length (used when formatting output in alternative formats)
+#define VERB_LEN                  16    //!< Verb string length
+#define TARGET_LEN                32    //!< Target name string length
+#define TARGET_VALUE_LEN          4096  //!< Target value string length for maximum-possible DIMM IDs
+#define OPTION_LEN                16    //!< Option name string length
+#define OPTION_VALUE_LEN          1024  //!< Option value string length
+#define PARSER_OPTION_VALUE_LEN   2048  //!< Option value string length for command parser
+#define PROPERTY_KEY_LEN          128   //!< Property name string length
+#define PROPERTY_VALUE_LEN        128   //!< Property value string length
+#define MAX_TARGETS               8     //!< Maximum number of targets in a single command
+#define MAX_OPTIONS               12     //!< Maximum number of options in a single command
+#define MAX_PROPERTIES            20    //!< Maximum number of properties in a single command
+#define MAX_TOKENS                50    //!< Maximum number of tokens per line
 
 /** command keywords **/
 #define LOAD_VERB     L"load"
@@ -35,6 +36,7 @@
 #define CREATE_VERB   L"create"
 #define DUMP_VERB     L"dump"
 #define START_VERB    L"start"
+#define STOP_VERB     L"stop"
 
 /** command options **/
 #define ALL_OPTION                      L"-all"                                //!< 'all' option name
@@ -47,11 +49,12 @@
 #define HELP_OPTION_SHORT               L"-h"                                  //!< 'help' option short form
 #define SOURCE_OPTION                   L"-source"                             //!< 'source' option name
 #define SOURCE_OPTION_HELP              L"path"                                //!< 'source' option help text
-#define DESTINATION_OPTION              L"-destination"                        //!< 'source' option name
-#define DICTIONARY_OPTION               L"-dict"                               //!< 'source' option name
-#define DESTINATION_OPTION_HELP         L"path"                                //!< 'source' option help text
-#define DICTIONARY_OPTION_HELP \
-  L"path (Decoded file name will be txt file with same name as destination)"   //!< 'source' option help text
+#define DESTINATION_OPTION              L"-destination"
+#define DESTINATION_OPTION_HELP         L"file"
+#define DESTINATION_PREFIX_OPTION       L"-destination"
+#define DESTINATION_PREFIX_OPTION_HELP  L"file_prefix (prefix for output files)"
+#define DICTIONARY_OPTION               L"-dict"
+#define DICTIONARY_OPTION_HELP          L"file"
 #define EXAMINE_OPTION                  L"-examine"                            //!< 'examine' option name
 #define EXAMINE_OPTION_SHORT            L"-x"                                  //!< 'examine' option short form
 #define EXAMINE_OPTION_HELP             L"Verify only"                         //!< 'examine' option help text
@@ -74,16 +77,20 @@
 #define PROPERTY_VALUE_NO_YES_IGN_HELP  L"No|Yes|Ignore"                       //!< Property: No, Yes or Ignore
 #define OUTPUT_OPTION_SHORT             L"-o"                                  //!< 'output' option name short form
 #define OUTPUT_OPTION                   L"-output"                             //!< 'output' option
-#define OUTPUT_OPTION_VERBOSE           L"verbose"                             //!< 'output' option value for verbose
 #define OUTPUT_OPTION_TEXT              L"text"                                //!< 'output' option value for text
 #define OUTPUT_OPTION_NVMXML            L"nvmxml"                              //!< 'output' option value for nvmxml
 #define OUTPUT_OPTION_ESX_XML           L"esx"                                 //!< 'output' option value for esx xml
 #define OUTPUT_OPTION_ESX_TABLE_XML     L"esxtable"                            //!< 'output' option value for esx xml
 #define OUTPUT_OPTION_HELP              L"text|nvmxml"                         //!< 'output' option help text
-#ifdef OS_BUILD
-#define ACTION_REQ_OPTION               L"-actionreq"                          //!< 'action required' option name
-#define ACTION_REQ_OPTION_SHORT         L"-ar"                                 //!< 'action required' option short form
-#endif // OS_BUILD
+#define VERBOSE_OPTION_SHORT            L"-v"                                  //!< 'verbose' option short form
+#define VERBOSE_OPTION                  L"-verbose"                            //!< 'verbose' option name
+#define MASTER_OPTION                   L"-master"                             //!< 'master' option name
+#define DEFAULT_OPTION                  L"-default"                            //!< 'default' option name
+#define PBR_MODE_OPTION                 L"-mode"                               //!< 'mode' option name
+#define PROTOCOL_OPTION_DDRT            L"-ddrt"                               //!< 'ddrt' option name
+#define PROTOCOL_OPTION_SMBUS           L"-smbus"                              //!< 'smbus' option name
+#define LARGE_PAYLOAD_OPTION            L"-lpmb"                               //!< 'large payload mailbox' option name
+#define SMALL_PAYLOAD_OPTION            L"-spmb"                               //!< 'small payload mailbox' option name
 
 /** command targets **/
 #define DIMM_TARGET                          L"-dimm"                    //!< 'dimm' target name
@@ -107,7 +114,6 @@
 #define SMBIOS_TARGET                        L"-smbios"                  ///< 'smbios' target name
 #define SUPPORT_TARGET                       L"-support"                 //!< 'support' target name
 #define EVENT_TARGET                         L"-event"                   //!< 'event' target name
-#define RECOVERY_TARGET                      L"-recovery"                //!< 'recovery' target name
 #define CONTROLLER_TEMPERATURE_TARGET_VALUE  L"ControllerTemperature"    //!< 'sensor' target value
 #define MEDIA_TEMPERATURE_TARGET_VALUE       L"MediaTemperature"         //!< 'sensor' target value
 #define SPARE_CAPACITY_TARGET_VALUE          L"PercentageRemaining"      //!< 'sensor' target value
@@ -121,8 +127,7 @@
 #define FW_TEST_TARGET_VALUE                 L"FW"                       //!< 'diagnostic' target value
 #define ERROR_TARGET_THERMAL_VALUE           L"Thermal"                  //!< 'error' target value
 #define ERROR_TARGET_MEDIA_VALUE             L"Media"                    //!< 'error' target value
-#define ALL_DIAGNOSTICS_TARGETS \
-  L"Quick|Config|Security|FW"                                            //!< diagnostics targets combined
+#define ALL_DIAGNOSTICS_TARGETS              L"Quick|Config|Security|FW" //!< diagnostics targets combined
 #define PCD_CONFIG_TARGET_VALUE              L"Config"
 #define PCD_LSA_TARGET_VALUE                 L"LSA"
 #define NFIT_TARGET_VALUE                    L"NFIT"                     //!< 'system' target value
@@ -134,6 +139,12 @@
 #define FORMAT_TARGET                        L"-format"                  //!< 'format' target value
 #define PREFERENCES_TARGET                   L"-preferences"             //!< 'preferences' target value
 #define PERFORMANCE_TARGET                   L"-performance"             //!< 'performance' target value
+#define SESSION_TARGET                       L"-session"                 //!< 'session' target value
+#define PBR_MODE_TARGET                      L"-mode"                    //!< 'mode' target value
+#define PBR_RECORD_MODE_VAL                  L"record"                   //!< 'mode' target value
+#define PBR_PLAYBACK_MODE_VAL                L"playback"                 //!< 'mode' target value
+#define PBR_PLAYBACK_MANUAL_MODE_VAL         L"playback_manual"          //!< 'mode' target value
+#define PBR_MODE_TAG                         L"-tag"                     //!< 'tag' target value
 /** Persistent memory type **/
 #define PERSISTENT_MEM_TYPE_AD_STR        L"AppDirect"
 #define PERSISTENT_MEM_TYPE_AD_NI_STR     L"AppDirectNotInterleaved"
@@ -170,7 +181,7 @@
 #define PASSPHRASE_PROPERTY               L"Passphrase"               //!< 'Passphrase' property name
 #define NEWPASSPHRASE_PROPERTY            L"NewPassphrase"            //!< 'NewPassphrase' property name
 #define CONFIRMPASSPHRASE_PROPERTY        L"ConfirmPassphrase"        //!< 'ConfirmPassphrase' property name
-#define NON_CRIT_THRESHOLD_PROPERTY       L"NonCriticalThreshold"     //!< 'NonCriticalThreshold' property
+#define ALARM_THRESHOLD_PROPERTY          L"AlarmThreshold"           //!< 'AlarmThreshold' property
 #define ENABLED_STATE_PROPERTY            L"EnabledState"             //!< 'EnabledState' property
 #define MEMORY_MODE_PROPERTY              L"MemoryMode"               //!< 'MemoryMode' property name
 #define PERSISTENT_MEM_TYPE_PROPERTY      L"PersistentMemoryType"     //!< 'PersistentMemoryType' property name
@@ -209,7 +220,6 @@
 #define MODE_PROPERTY                     L"Mode"
 #define PROPERTY_VALUE_NONE               L"None"
 #define PROPERTY_VALUE_SECTOR             L"Sector"
-#define FIRST_FAST_REFRESH_PROPERTY       L"FirstFastRefresh"
 #define ACCESS_TYPE_PROPERTY              L"AccessType"
 #define ERASE_CAPABLE_PROPERTY            L"EraseCapable"
 #define ENCRYPTION_PROPERTY               L"Encryption"
@@ -233,7 +243,6 @@
 #define PROPERTY_VALUE_RECOMMENDED        L"RECOMMENDED"
 #define CATEGORY_PROPERTY                 L"Category"
 #define ACTION_REQ_PROPERTY               L"ActionRequired"
-#define ACTION_REQ_EVENTS_PROPERTY        L"ActionRequiredEvents"
 #define DBG_LOG_LEVEL                     L"DBG_LOG_LEVEL"
 #define CREATE_SUPP_NAME                  L"Name"
 #define PROPERTY_ERROR_UNKNOWN                      L"Reason for failure unknown"
@@ -248,12 +257,49 @@
 #define PROPERTY_ERROR_INVALID_OUT_OF_RANGE         L"Setting is invalid or out of range"
 #define PROPERTY_ERROR_SET_FAILED_UNKNOWN           L"Set operation failed"
 
+/** Performance Metric Messages **/
+#define DCPMM_PERFORMANCE_MEDIA_READS             L"MediaReads"
+#define DCPMM_PERFORMANCE_MEDIA_WRITES            L"MediaWrites"
+#define DCPMM_PERFORMANCE_READ_REQUESTS           L"ReadRequests"
+#define DCPMM_PERFORMANCE_WRITE_REQUESTS          L"WriteRequests"
+#define DCPMM_PERFORMANCE_TOTAL_MEDIA_READS       L"TotalMediaReads"
+#define DCPMM_PERFORMANCE_TOTAL_MEDIA_WRITES      L"TotalMediaWrites"
+#define DCPMM_PERFORMANCE_TOTAL_READ_REQUESTS     L"TotalReadRequests"
+#define DCPMM_PERFORMANCE_TOTAL_WRITE_REQUESTS    L"TotalWriteRequests"
+
+/** Sensor Detail Messages **/
+#define DIMM_HEALTH_STR_DETAIL                       L"Health -  The current DCPMM health as reported in the SMART log"
+#define MEDIA_TEMPERATURE_STR_DETAIL                 L"MediaTemperature-The current DCPMM media temperature in Celsius"
+#define CONTROLLER_TEMPERATURE_STR_DETAIL            L"ControllerTemperature - The current DCPMM controller temperature in Celsius"
+#define SPARE_CAPACITY_STR_DETAIL                    L"PercentageRemaining - Remaining DCPMMs life as a percentage value of factory expected\
+ life spa"
+#define LATCHED_DIRTY_SHUTDOWN_COUNT_STR_DETAIL      L"LatchedDirtyShutdownCount - The number of shutdowns without notification over the lifetime of\
+ the DCPMM"
+#define UNLATCHED_DIRTY_SHUTDOWN_COUNT_STR_DETAIL    L"UnlatchedDirtyShutdownCount - The number of shutdowns without notification over the lifetime of\
+ the DCPMM."
+#define POWER_ON_TIME_STR_DETAIL                     L"PowerOnTime - The total power-on time over the lifetime of the DCPMM"
+#define UPTIME_STR_DETAIL                            L"UpTime - The total power-on time since the last power cycle of the DCPMM"
+#define POWER_CYCLES_STR_DETAIL                      L"PowerCycles - The number of power cycles over the lifetime of the DCPMM"
+#define FW_ERROR_COUNT_STR_DETAIL                    L"FwErrorCount - The total number of firmware error log entries"
+
+
 /** common help messages **/
+#define HELP_OPTIONS_DETAILS_TEXT       L"Changes the output format."
+#define HELP_VERBOSE_DETAILS_TEXT       L"Change the Debug Level Message Display"
+#define HELP_ALL_DETAILS_TEXT           L"Shows all attributes."
+#define HELP_DISPLAY_DETAILS_TEXT       L"Shows attributes specified in a comma-separatedlist"
+#define HELP_FORCE_DETAILS_TEXT         L"Suppresses the confirmation from the User to use this operation"
+#define HELP_UNIT_DETAILS_TEXT          L"Desired Unit for display"
+#define HELP_DDRT_DETAILS_TEXT          L"Used to specify DDRT as the desired transport protocol"
+#define HELP_SMBUS_DETAILS_TEXT         L"Used to specify SMBUS as the desired transport protocol"
+#define HELP_LPAYLOAD_DETAILS_TEXT      L"Used to specify large transport payload size"
+#define HELP_SPAYLOAD_DETAILS_TEXT      L"Used to specify small transport payload size"
 #define HELP_TEXT_DIMM_IDS              L"DimmIDs"
 #define HELP_TEXT_DIMM_ID               L"DimmID"
 #define HELP_TEXT_ATTRIBUTES            L"Attributes"
 #define HELP_TEXT_REGION_ID             L"RegionID"
 #define HELP_TEXT_SOCKET_IDS            L"SocketIDs"
+#define HELP_TEXT_SENSORS               L"List of Sensors"
 #define HELP_TEXT_VALUE                 L"value"
 #define HELP_TEXT_COUNT                 L"count"
 #define HELP_TEXT_GiB                   L"GiB"
@@ -284,7 +330,31 @@
 #define HELP_EVENT_LOG_MAX                        L"num events"
 #define HELP_DBG_LOG_MAX                          L"num log entries"
 #define HELP_DBG_LOG_LEVEL                        L"log level"
+#define HELP_TEXT_PERFORMANCE_CAT         L"Performance Metrics"
 
+#define HELP_TEXT_PERFORMANCE_CAT_DETAILS  L"\n    "DCPMM_PERFORMANCE_MEDIA_READS \
+                                          L"\n    "DCPMM_PERFORMANCE_MEDIA_WRITES \
+                                          L"\n    "DCPMM_PERFORMANCE_READ_REQUESTS \
+                                          L"\n    "DCPMM_PERFORMANCE_WRITE_REQUESTS\
+                                          L"\n    "DCPMM_PERFORMANCE_TOTAL_MEDIA_READS \
+                                          L"\n    "DCPMM_PERFORMANCE_TOTAL_MEDIA_WRITES\
+                                          L"\n    "DCPMM_PERFORMANCE_TOTAL_READ_REQUESTS\
+                                          L"\n    "DCPMM_PERFORMANCE_TOTAL_WRITE_REQUESTS
+
+#define HELP_TEXT_SENSORS_SHORT  L"\n    "MEDIA_TEMPERATURE_STR_DETAIL \
+                                 L"\n    "CONTROLLER_TEMPERATURE_STR_DETAIL \
+                                 L"\n    "SPARE_CAPACITY_STR_DETAIL
+
+#define HELP_TEXT_SENSORS_ALL    L"\n    "DIMM_HEALTH_STR_DETAIL \
+                                 L"\n    "MEDIA_TEMPERATURE_STR_DETAIL \
+                                 L"\n    "CONTROLLER_TEMPERATURE_STR_DETAIL \
+                                 L"\n    "SPARE_CAPACITY_STR_DETAIL \
+                                 L"\n    "LATCHED_DIRTY_SHUTDOWN_COUNT_STR_DETAIL \
+                                 L"\n    "UNLATCHED_DIRTY_SHUTDOWN_COUNT_STR_DETAIL \
+                                 L"\n    "POWER_ON_TIME_STR_DETAIL \
+                                 L"\n    "UPTIME_STR_DETAIL \
+                                 L"\n    "POWER_CYCLES_STR_DETAIL \
+                                 L"\n    "FW_ERROR_COUNT_STR_DETAIL
 enum ValueRequirementType
 {
   ValueEmpty = 1,
@@ -299,8 +369,9 @@ struct option
 {
   CHAR16 OptionNameShort[OPTION_LEN];
   CHAR16 OptionName[OPTION_LEN];
-  CHAR16 OptionValue[OPTION_VALUE_LEN];
+  CHAR16 *pOptionValueStr;
   CONST CHAR16 *pHelp;
+  CONST CHAR16 *pHelpDetails;
   BOOLEAN Required;
   UINT8 ValueRequirement;
 };
@@ -340,6 +411,7 @@ enum DisplayType {
   DiagView      = 7
 };
 
+
 /**
   Defines the parts of a CLI command
 **/
@@ -352,14 +424,14 @@ struct Command
   struct property properties[MAX_PROPERTIES];
   CONST CHAR16 *pHelp;
   EFI_STATUS (*run)(struct Command *pCmd); //!< Execute the command
-  EFI_STATUS (*UpdateCmdCtx)(struct Command *pCmd);
-  EFI_STATUS (*RunCleanup)(struct Command *pCmd);
+  BOOLEAN PrinterCtrlSupported;
+  BOOLEAN ExcludeDriverBinding;
   BOOLEAN Hidden; //!< Never print
   BOOLEAN ShowHelp;
   UINT8 CommandId;
   UINT8 DispType;
   CHAR16 DispName[DISP_NAME_LEN];
-  SHOW_CMD_CONTEXT *pShowCtx;
+  PRINT_CONTEXT *pPrintCtx;
 } COMMAND;
 
 typedef
@@ -438,6 +510,13 @@ EFI_STATUS Parse(struct CommandInput *pInput, struct Command *pCommand);
 CHAR16 *getSyntaxError();
 
 /**
+ If parsing fails, set syntax error, but first free old one
+**/
+VOID SetSyntaxError(
+  IN      CHAR16 *pSyntaxError
+);
+
+/**
   Get the help for a command read from the user.
 
   @param[in] pCommand a pointer to the parsed struct Command.
@@ -457,6 +536,9 @@ CHAR16
   BOOLEAN SingleCommand
   );
 
+CHAR16
+*getOverallCommandHelp();
+
 /**
   Checks if the Unicode string contains the given character.
 
@@ -471,6 +553,20 @@ ContainsCharacter(
   IN     CHAR16 Character,
   IN     CONST CHAR16* pInputString
   );
+
+/**
+  Get the number of properties
+    @param[in] pCmd is a pointer to the struct Command that contains the user input.
+    @param[out] pPropertyCount represents the number of properties defined on the command line
+
+    @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL.
+    @retval EFI_SUCCESS
+**/
+EFI_STATUS
+GetPropertyCount(
+  IN     CONST struct Command *pCmd,
+  IN     UINT16 *pPropertyCount
+);
 
 /**
   Check if a specific property is found

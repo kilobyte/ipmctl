@@ -10,23 +10,39 @@ NAME
 ----
 ipmctl-dump-goal - Stores the current system configuration in a file
 
-DESCRIPTION
------------
-Store the currently configured memory allocation settings for all DCPMMs in the
-system to a file in order to replicate the configuration elsewhere. Apply the
-stored memory allocation settings using the command Section 2.2.8,
-“Load Memory Allocation Goal.”
-
 SYNOPSIS
 --------
 [verse]
 ipmctl dump [OPTIONS] -destination (path) -system -config
+
+DESCRIPTION
+-----------
+Store the currently configured memory allocation settings for all DCPMMs in the
+system to a file in order to replicate the configuration elsewhere. Apply the
+stored memory allocation settings using the command Section
+<<Load Memory Allocation Goal>>.
 
 OPTIONS
 -------
 -h::
 -help::
     Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
+
+-lpmb::
+  Used to specify large transport payload size for the current invocation of ipmctl.
+
+-spmb::
+  Used to specify small transport payload size for the current invocation of ipmctl.
+
+NOTE: The -lpmb and -spmb options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::

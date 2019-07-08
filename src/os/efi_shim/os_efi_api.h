@@ -11,6 +11,7 @@
 #include <Dimm.h>
 #include <UefiBaseType.h>
 #include <FwUtility.h>
+#include <SmbiosUtility.h>
 #include <time.h>
 
 typedef enum {
@@ -28,6 +29,7 @@ typedef struct _pass_thru_record_req
   UINT8 Opcode;
   UINT8 SubOpcode;
   UINT32 InputPayloadSize;
+  UINT32 InputLargePayloadSize;
   UINT8 Input[];
 }pass_thru_record_req;
 
@@ -38,6 +40,7 @@ typedef struct _pass_thru_record_resp
   EFI_STATUS PassthruReturnCode;
   UINT32 DimmId;
   UINT32 OutputPayloadSize;
+  UINT32 OutputLargePayloadSize;
   UINT8 Status;
   UINT8 Output[];
 }pass_thru_record_resp;
@@ -95,7 +98,8 @@ Obtains a copy of the NFIT table
 **/
 EFI_STATUS
 get_nfit_table(
-  OUT EFI_ACPI_DESCRIPTION_HEADER** pTable
+  OUT EFI_ACPI_DESCRIPTION_HEADER** pTable,
+  OUT UINT32 *tablesize
 );
 
 /**
@@ -109,7 +113,8 @@ Obtains a copy of the PCAT table
 **/
 EFI_STATUS
 get_pcat_table(
-  OUT EFI_ACPI_DESCRIPTION_HEADER ** table
+  OUT EFI_ACPI_DESCRIPTION_HEADER ** table,
+  OUT UINT32 *tablesize
 );
 
 /**
@@ -123,7 +128,8 @@ Obtains a copy of the PMTT table
 **/
 EFI_STATUS
 get_pmtt_table(
-  OUT EFI_ACPI_DESCRIPTION_HEADER ** table
+  OUT EFI_ACPI_DESCRIPTION_HEADER ** table,
+  OUT UINT32 *tablesize
 );
 
 /**
@@ -254,6 +260,32 @@ UnicodeSPrint(
   IN  UINTN         BufferSize,
   IN  CONST CHAR16  *FormatString,
   ...
+);
+
+/**
+  Function returns value of the first argument form the VA_LIST casted as 32bit
+  unsigned int
+
+  The funciton is used by the event logger to get the DO_NOT_PARSE_ARGS magic number
+
+  @param[in]  args    VA_LIST arguments
+**/
+UINT32
+get_first_arg_from_va_list(VA_LIST args);
+
+
+/**
+  Fill SmBios structures for first and bound entry
+
+  @param[out] pSmBiosStruct - pointer for first SmBios entry
+  @param[out] pBoundSmBiosStruct - pointer for nonexistent (one after last) SmBios entry
+  @param[out] pSmbiosVersion - pointer to the version of SMBIOS tables retrieved
+**/
+EFI_STATUS
+GetFirstAndBoundSmBiosStructPointer(
+  OUT SMBIOS_STRUCTURE_POINTER *pSmBiosStruct,
+  OUT SMBIOS_STRUCTURE_POINTER *pLastSmBiosStruct,
+  OUT SMBIOS_VERSION *pSmbiosVersion
 );
 
 #endif //OS_EFI_API_H_

@@ -43,12 +43,8 @@ EFI_SHELL_PARAMETERS_PROTOCOL *gEfiShellParametersProtocol = &gOsShellParameters
 
 int g_fast_path = 0;
 int g_file_io = 0;
-int g_record_mode = 0;
-int g_playback_mode = 0;
-char g_recordings_dir[PATH_MAX];
-char g_recording_filename[PATH_MAX];
-char g_recording_fullpath[PATH_MAX];
-CHAR16 g_recording_fullpath_u[PATH_MAX];
+
+static BOOLEAN g_verbose_debug_print_enabled = FALSE;
 
 typedef enum {
   DefaultMode,
@@ -65,13 +61,9 @@ RecordingDirMode g_rec_file_creation_mode = DefaultMode;
 #define STR_ESXXML              "esx"
 #define STR_ESXTABLE            "esxtable"
 #define STR_TEXT                "text"
-#define STR_VERBOSE             "verbose"
+#define STR_DASH_VERBOSE_LONG   "-verbose"
+#define STR_DASH_VERBOSE_SHORT  "-v"
 #define STR_DASH_FAST_LONG      "-fast"
-#ifdef PLAYBACK_RECORD_SUPPORTED
-#define STR_RECORD_MODE         "-record"
-#define STR_PLAYBACK_MODE       "-playback"
-#define STR_REC_DIR             "-recdir"
-#endif
 
 
 EFI_STATUS init_protocol_shell_parameters_protocol(int argc, char *argv[])
@@ -80,8 +72,6 @@ EFI_STATUS init_protocol_shell_parameters_protocol(int argc, char *argv[])
   char *p_tok_context = NULL;
   int new_argv_index = 1;
   int stripped_args = 0;
-  int x = 0;
-  UINTN length = 0;
   if (argc > MAX_INPUT_PARAMS) {
     return EFI_INVALID_PARAMETER;
   }
@@ -95,22 +85,7 @@ EFI_STATUS init_protocol_shell_parameters_protocol(int argc, char *argv[])
   gOsShellParametersProtocol.StdIn = stdin;
   gOsShellParametersProtocol.Argc = argc;
 
-#ifdef PLAYBACK_RECORD_SUPPORTED
-  os_get_cwd(g_recordings_dir, PATH_MAX);
-  strcat_s(g_recordings_dir, PATH_MAX, "/recordings/");
-#endif
-
   for (int Index = 1; Index < argc; Index++) {
-#ifdef PLAYBACK_RECORD_SUPPORTED
-    if (g_rec_file_creation_mode == DefaultMode || g_rec_file_creation_mode == UserSpecifiedDir)
-    {
-      if (0 != s_strncmpi(argv[Index], STR_RECORD_MODE, strlen(STR_RECORD_MODE) + 1) &&
-        0 != s_strncmpi(argv[Index], STR_PLAYBACK_MODE, strlen(STR_PLAYBACK_MODE) + 1))
-      {
-        strcat_s(g_recording_filename, PATH_MAX, argv[Index]);
-      }
-    }
-#endif
     stripped_args = 0;
     if ((0 == s_strncmpi(argv[Index], STR_DASH_OUTPUT_SHORT, strlen(STR_DASH_OUTPUT_SHORT) + 1) ||
       0 == s_strncmpi(argv[Index], STR_DASH_OUTPUT_LONG, strlen(STR_DASH_OUTPUT_LONG + 1))) &&
@@ -139,43 +114,15 @@ EFI_STATUS init_protocol_shell_parameters_protocol(int argc, char *argv[])
       g_fast_path = 1;
       stripped_args = 1;
     }
-#ifdef PLAYBACK_RECORD_SUPPORTED
-    else if (0 == s_strncmpi(argv[Index], STR_RECORD_MODE, strlen(STR_RECORD_MODE) + 1))
+    if (0 == s_strncmpi(argv[Index], STR_DASH_VERBOSE_LONG, strlen(STR_DASH_VERBOSE_LONG) + 1)
+      || 0 == s_strncmpi(argv[Index], STR_DASH_VERBOSE_SHORT, strlen(STR_DASH_VERBOSE_SHORT) + 1))
     {
-      --gOsShellParametersProtocol.Argc;
-      g_record_mode = 1;
-      stripped_args = 1;
+      g_verbose_debug_print_enabled = TRUE;
     }
-    else if (0 == s_strncmpi(argv[Index], STR_PLAYBACK_MODE, strlen(STR_PLAYBACK_MODE) + 1))
-    {
-      --gOsShellParametersProtocol.Argc;
-      g_playback_mode = 1;
-      stripped_args = 1;
-    }
-
-    //if pbr mode, check for optional arg (dir or filename)
-    if (g_record_mode || g_playback_mode)
-    {
-      if (Index + 1 != argc && argv[Index + 1][0] != '-' && strstr(argv[Index + 1], ".pbr"))
-      {
-        strcpy_s(g_recording_fullpath, PATH_MAX, argv[Index + 1]);
-        --gOsShellParametersProtocol.Argc;
-        ++Index;
-        g_rec_file_creation_mode = UserSpecifiedFile;
-      }
-      else if (Index + 1 != argc && argv[Index + 1][0] != '-' && (NULL == strstr(argv[Index + 1], ".pbr")))
-      {
-        strcpy_s(g_recordings_dir, PATH_MAX, argv[Index + 1]);
-        --gOsShellParametersProtocol.Argc;
-        ++Index;
-        g_rec_file_creation_mode = UserSpecifiedDir;
-      }
-    }
-#endif
 
     if (!stripped_args)
     {
-      int argvSize = strlen(argv[Index]);
+      int argvSize = (int)strlen(argv[Index]);
       VOID * ptr = AllocateZeroPool((argvSize + 1) * sizeof(wchar_t));
       if (NULL == ptr) {
         FreePool(gOsShellParametersProtocol.Argv);
@@ -186,68 +133,6 @@ EFI_STATUS init_protocol_shell_parameters_protocol(int argc, char *argv[])
     }
   }
 
-#ifdef PLAYBACK_RECORD_SUPPORTED
-  if (g_playback_mode || g_record_mode)
-  {
-    if (DefaultMode == g_rec_file_creation_mode || UserSpecifiedDir == g_rec_file_creation_mode)
-    {
-      length = strlen(g_recordings_dir);
-      if (g_recordings_dir[length - 1] != '/')
-      {
-        strcat_s(g_recordings_dir, PATH_MAX, "/");
-      }
-      os_mkdir(g_recordings_dir);
-      strcpy_s(g_recording_fullpath, PATH_MAX, g_recordings_dir);
-      strcat_s(g_recording_fullpath, PATH_MAX, g_recording_filename);
-      strcat_s(g_recording_fullpath, PATH_MAX, ".pbr");
-    }
-    else if (UserSpecifiedFile == g_rec_file_creation_mode)
-    {
-      os_mkdir(g_recording_fullpath);
-    }
-
-    length = strlen(g_recording_fullpath);
-    for (x = 0; x < length; x++)
-    {
-#ifdef _MSC_VER
-      if (g_recording_fullpath[x] == '/') g_recording_fullpath[x] = '\\';
-#else
-      if (g_recording_fullpath[x] == '\\') g_recording_fullpath[x] = '/';
-#endif
-    }
-
-    AsciiStrnToUnicodeStrS(g_recording_fullpath, PATH_MAX, g_recording_fullpath_u, PATH_MAX, &length);
-
-    if (g_record_mode)
-    {
-      EFI_STATUS rc;
-      //using smbios recording file path because currently all recordings
-      //are consolidated to the same file.
-      if (EFI_SUCCESS != (rc = init_record_file(g_recording_fullpath)))
-      {
-        wprintf(L"Failed to initialize the following recording file.\n" FORMAT_STR L"\n", g_recording_fullpath_u);
-        return EFI_LOAD_ERROR;
-      }
-      else
-      {
-        wprintf(L"Recording to file: " FORMAT_STR L"\n", g_recording_fullpath_u);
-      }
-    }
-
-    if (g_playback_mode)
-    {
-      if (-1 == access(g_recording_fullpath_u, F_OK))
-      {
-        wprintf(L"The following playback file does not exist.\n" FORMAT_STR L"\n", g_recording_fullpath_u);
-        return EFI_LOAD_ERROR;
-      }
-      else
-      {
-        wprintf(L"Playing back from file: " FORMAT_STR L"\n", g_recording_fullpath_u);
-      }
-    }
-  }
-#endif
   return 0;
 }
 
@@ -270,4 +155,9 @@ int uninit_protocol_shell_parameters_protocol()
     FreePool(gOsShellParametersProtocol.Argv);
   }
   return EFI_SUCCESS;
+}
+
+BOOLEAN is_verbose_debug_print_enabled()
+{
+  return g_verbose_debug_print_enabled;
 }

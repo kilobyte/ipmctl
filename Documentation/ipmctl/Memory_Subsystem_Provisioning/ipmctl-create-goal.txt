@@ -10,20 +10,23 @@ NAME
 ----
 ipmctl-create-goal - Creates a memory allocation goal on one or more DCPMM
 
+SYNOPSIS
+--------
+[verse]
+ipmctl create [OPTIONS] -goal [TARGETS] [PROPERTIES]
+
 DESCRIPTION
 -----------
 Creates a memory allocation goal on one or more for the BIOS to read on the next
 reboot in order to map the DCPMM capacity into the system address space.
 Persistent memory can then be utilized by creating a namespace.
 
-NOTE: Changing the memory configuration is a destructive operation which results
-in loss of data stored in the persistent memory region. Therefore, data should
-be backed up to other storage before executing this command.
+NOTE: The capacity values presented by this command are a target goal or
+request to platform firmware. The actual capacity values are subject to
+change due to rounding and alignment requirements. If the goal request is
+invalid or not possible it may be rejected by platform firmware.
 
-SYNOPSIS
---------
-[verse]
-ipmctl create [OPTIONS] -goal [TARGETS] [PROPERTIES]
+include::../ipmctl-change-goal-config-warning.txt[]
 
 OPTIONS
 -------
@@ -32,10 +35,19 @@ OPTIONS
 -force::
     Reconfiguring DCPMMs is a destructive operation which requires
     confirmation from the user. This option suppresses the confirmation.
+    This option can also be used to recover/override corrupted Platform Configuration Data (PCD).
 
 -h::
 -help::
     Displays help for the command.
+
+-ddrt::
+  Used to specify DDRT as the desired transport protocol for the current invocation of ipmctl.
+
+-smbus::
+  Used to specify SMBUS as the desired transport protocol for the current invocation of ipmctl.
+
+NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used together.
 
 ifdef::os_build[]
 -o (text|nvmxml)::
@@ -51,8 +63,8 @@ endif::os_build[]
 
 TARGETS
 -------
--dimm (DimmIDs)::
-    Creates a memory allocation goal on specific DCPMMs by supplying one or
+-dimm [(DimmIDs)]::
+    Creates a memory allocation goal on specific DCPMMs by optionally supplying one or
     more comma-separated DCPMM identifiers. This list must include all
     unconfigured DCPMMs on the affected socket(s). The default is to configure
     all manageable DCPMMs on all sockets.
@@ -82,10 +94,10 @@ NamespaceLabelVersion::
     - "1.1": Legacy 1.1 namespace label support
 
 Reserved::
-    Reserve a percentage [underline]#(0-100)# of the requested DCPMM capacity
+    Reserve a percentage [underline]#(0-100)# of the requested DCPMM App Direct capacity
     that will not be mapped into the system physical address space and will be
-    presented as Unconfigured Capacity with Show Device and Show Memory
-    Resources.
+    presented as Reserved Capacity with Show Device and Show Memory Resources
+    Commands.
 
 EXAMPLES
 --------
@@ -105,7 +117,7 @@ ipmctl create -goal MemoryMode=20 PersistentMemoryType=AppDirectNotInterleaved
 
 Configures the DCPMM capacity across the entire system with 25% of the
 capacity in Memory Mode, 25% reserved and the remaining 50% as App Direct.
-Configures the DCPMEM DIMM capacity across the entire system with 25% of the
+Configures the DCPMM capacity across the entire system with 25% of the
 capacity in Memory Mode and the remaining 75% as App Direct.
 [verse]
 ipmctl create -goal MemoryMode=25 PersistentMemoryType=AppDirect Reserved=25
@@ -127,11 +139,19 @@ In order to successfully execute this command:
   Changing the memory configuration is a destructive operation which results in loss of
   data stored in the persistent memory region. Therefore, data should be backed up to
   other storage before executing this command.
-  Targets may be limited to individual DCPMMs or sockets, but all DCPMEM
-  modules on affected sockets must be configured when the command finishes. If the
+  Targets may be limited to individual DCPMMs or sockets, but all DCPMMs
+  on affected sockets must be configured when the command finishes. If the
   selected targets make this impossible, the command will be rejected.
-  Refer to the command Section 2.1.5 [TODO], “Show System Capabilities.” for a list of BIOS
+  Refer to *_Show System Capabilities_* for a list of BIOS
   supported modes.
+
+- Some requests are dependent on BIOS and/or platform configuration. For details, refer
+  to the _Intel® Optane™ DC Persistent Memory Software Memory Allocation Rules_,
+  document number 564194. For example:
+ - Provisioning DCPMMs for Memory Mode while BIOS is configured for 1LM only
+   will result in unused capacity.
+ - Provisioning DCPMMs for Memory Mode while not all iMCs have at least one DCPMM
+   will result in unused capacity.
 
 RETURN DATA
 -----------
@@ -173,12 +193,12 @@ Mapped memory was limited based on the CPU SKU.
 
 Therefore, before making any changes to the configuration, a prompt is displayed
 showing the memory allocation goals that will be created on each DCPMM as
-documented in the command Section 2.2.6, ‚ “Show Memory Allocation Goal,” along
+documented in the command Section <<Show Memory Allocation Goal>>, along
 with any additional confirmation messages. The force option can be used to
 override this confirmation and proceed directly with creating the goals.
 [verse]
 The following configuration will be applied:
 SocketID DimmID MemorySize AppDirect1Size AppDirect2Size (Refer to
-the command Section 2.2.6, “Show Memory Allocation Goal”)
+the command Section <<Show Memory Allocation Goal>>)
 [Additional Confirmation Messages (see above)] Do you want to
 continue?

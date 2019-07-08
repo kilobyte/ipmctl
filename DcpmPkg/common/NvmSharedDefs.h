@@ -42,9 +42,10 @@ typedef enum _NvmStatusCode {
   NVM_ERR_UNABLE_TO_GET_SECURITY_STATE              = 39,   ///< Error: Unable to get security state
   NVM_ERR_INCONSISTENT_SECURITY_STATE               = 40,   ///< Error: Inconsistent security state
   NVM_ERR_INVALID_PASSPHRASE                        = 41,   ///< Error: Invalid passphrase
-  NVM_ERR_SECURITY_COUNT_EXPIRED                    = 42,   ///< Error: Security count expired
+  NVM_ERR_SECURITY_USER_PP_COUNT_EXPIRED            = 42,   ///< Error: Security count for user passphrase expired
   NVM_ERR_RECOVERY_ACCESS_NOT_ENABLED               = 43,   ///< Error: Recovery access not enabled
   NVM_ERR_SECURE_ERASE_NAMESPACE_EXISTS             = 44,   ///< Error: Namespace exists - cannot execute request
+  NVM_ERR_SECURITY_MASTER_PP_COUNT_EXPIRED          = 45,   ///< Error: Security count for master passphrase expired
 
   NVM_ERR_IMAGE_FILE_NOT_COMPATIBLE_TO_CTLR_STEPPING     = 59,   ///< Error: Image not compatible with this DCPMM
   NVM_ERR_FILENAME_NOT_PROVIDED                     = 60,   ///< Error: Filename not provided
@@ -93,6 +94,7 @@ typedef enum _NvmStatusCode {
   NVM_ERR_PERS_MEM_MUST_BE_APPLIED_TO_ALL_DIMMS     = 126,  ///< Error: Persistent memory must be applied to all DIMMs
   NVM_WARN_MAPPED_MEM_REDUCED_DUE_TO_CPU_SKU        = 127,  ///< Warning: Mapped memory reduced due to CPU SKU limit
   NVM_ERR_REGION_GOAL_AUTO_PROV_ENABLED             = 128,  ///< Error: Automatic provision enabled
+  NVM_ERR_CREATE_NAMESPACE_NOT_ALLOWED              = 129,  ///< Error: Create namespace not allowed
 
   NVM_ERR_OPEN_FILE_WITH_WRITE_MODE_FAILED          = 130,  ///< Error: Failed to open file with write mode
   NVM_ERR_DUMP_NO_CONFIGURED_DIMMS                  = 131,  ///< Error: No configured DIMMs
@@ -177,6 +179,18 @@ typedef enum _NvmStatusCode {
   NVM_ERR_SPD_NOT_ACCESSIBLE                        = 300,  ///< Error: SPD not accessible
   NVM_ERR_INCOMPATIBLE_HARDWARE_REVISION            = 301,  ///< Error: Incompatible hardware revision
 
+  NVM_SUCCESS_NO_EVENT_FOUND                        = 302,  ///< Error: No events found in the event log
+  NVM_ERR_FILE_NOT_FOUND                            = 303,  ///< Error: No events found in the event log
+  NVM_ERR_OVERWRITE_DIMM_IN_PROGRESS                = 304,  ///< Error: No events found in the event log
+  NVM_ERR_FWUPDATE_IN_PROGRESS                      = 305,  ///< Error: No events found in the event log
+  NVM_ERR_UNKNOWN_LONG_OP_IN_PROGRESS               = 306,  ///< Error: No events found in the event log
+  NVM_ERR_LONG_OP_ABORTED_OR_REVISION_FAILURE       = 307,  ///< Error: long op was aborted
+  NVM_ERR_FW_UPDATE_AUTH_FAILURE                    = 308,  ///< Error: fw image authentication failed
+  NVM_ERR_UNSUPPORTED_COMMAND                       = 309,  ///< Error: unsupported command
+  NVM_ERR_DEVICE_ERROR                              = 310,  ///< Error: device error
+  NVM_ERR_TRANSFER_ERROR                            = 311,  ///< Error: transfer error
+  NVM_ERR_UNABLE_TO_STAGE_NO_LONGOP                 = 312,  ///< Error: the FW was unable to stage and no long op code was recoverable
+  NVM_ERR_LONG_OP_UNKNOWN                           = 313,  ///< Error: a long operation code is unknown
   NVM_LAST_STATUS_VALUE
 } NvmStatusCode;
 
@@ -184,17 +198,17 @@ typedef struct _PMON_REGISTERS {
   /**
   This will specify whether or not to return the extra smart data along with the PMON
   Counter data.
-  0x0 - No Smart Data DDRT or Media
-  0x1 - DDRT Data only to be returned
-  0x2 - Media Data only to be returned
-  0x3 - DDRT & Media Data to be returned
-  All other values reserved
+  - 0x0 - No Smart Data DDRT or Media.
+  - 0x1 - DDRT Data only to be returned.
+  - 0x2 - Media Data only to be returned.
+  - 0x3 - DDRT & Media Data to be returned.
+  - All other values reserved.
   **/
   unsigned char       SmartDataMask;
   unsigned char       Reserved1[3];
   /**
   This will specify which group that is currently enabled. If no groups are enabled Group
-  F will be returned
+  F will be returned.
   **/
   unsigned char       GroupEnabled;
   unsigned char       Reserved2[19];

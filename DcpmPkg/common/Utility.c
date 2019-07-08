@@ -23,6 +23,7 @@
 #include <Convert.h>
 #ifdef OS_BUILD
 #include <os.h>
+#include <string.h>
 #endif
 
 #if defined(__LINUX__)
@@ -459,6 +460,7 @@ StrSplit(
   CHAR16 *pInputTmp = NULL;
   UINT32 Index = 0;
   UINT32 DelimiterCounter = 0;
+  CHAR16 *pBuff = NULL;
 
   if (pInput == NULL || pArraySize == NULL) {
     NVDIMM_DBG("At least one of parameters is NULL.");
@@ -499,13 +501,15 @@ StrSplit(
     goto Finish;
   }
 
+  pInputTmp = AllocateZeroPool((StrLen(pInput) + 1) * sizeof(CHAR16));
   /** Copy the input to a tmp var to avoid changing it **/
-  pInputTmp = CatSPrint(NULL, FORMAT_STR, pInput);
+  CopyMem(pInputTmp, pInput, (StrLen(pInput) * sizeof(CHAR16)));
   if (pInputTmp == NULL) {
     NVDIMM_ERR("Memory allocation failed.");
     goto FinishCleanMemory;
   }
-
+  /*Need to hold the address of pInputTmp to safe free. */
+  pBuff = pInputTmp;
   for (Index = 0; Index < *pArraySize; Index++) {
     ppArray[Index] = StrTok(&pInputTmp, Delimiter);
     if (ppArray[Index] == NULL) {
@@ -522,7 +526,7 @@ FinishCleanMemory:
   *pArraySize = 0;
 
 Finish:
-  FREE_POOL_SAFE(pInputTmp);
+  FREE_POOL_SAFE(pBuff);
   return ppArray;
 }
 
@@ -868,7 +872,7 @@ Finish:
 **/
 EFI_STATUS
 CheckConfigProtocolVersion(
-  IN     EFI_DCPMM_CONFIG_PROTOCOL *pConfigProtocol
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pConfigProtocol
   )
 {
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
@@ -963,7 +967,7 @@ OpenNvmDimmProtocol(
   }
 
   if (CompareGuid(&Guid, &gNvmDimmConfigProtocolGuid)) {
-    ReturnCode = CheckConfigProtocolVersion((EFI_DCPMM_CONFIG_PROTOCOL *) *ppProtocol);
+    ReturnCode = CheckConfigProtocolVersion((EFI_DCPMM_CONFIG2_PROTOCOL *) *ppProtocol);
     if (EFI_ERROR(ReturnCode)) {
       NVDIMM_DBG("Failed to get the proper config protocol.");
       ppProtocol = NULL;
@@ -997,6 +1001,63 @@ OpenFile(
   IN     CONST CHAR16 *pCurrentDirectory OPTIONAL,
   IN     BOOLEAN CreateFileFlag
   )
+{
+  return OpenFileWithFlag(pArgFilePath, pFileHandle, pCurrentDirectory, CreateFileFlag, FALSE);
+}
+
+/**
+  Open file or create new file in binary mode.
+
+  @param[in] pArgFilePath path to a file that will be opened
+  @param[out] pFileHandle output handler
+  @param[in, optional] pCurrentDirectory is the current directory path to where
+    we should start to search for the file.
+  @param[in] CreateFileFlag TRUE to create new file or FALSE to open
+    existing file
+
+  @retval EFI_SUCCESS
+  @retval EFI_INVALID_PARAMETER pFilePath is NULL or empty or pFileHandle is NULL
+  @retval EFI_PROTOCOL_ERROR if there is no EFI_SIMPLE_FILE_SYSTEM_PROTOCOL
+**/
+EFI_STATUS
+OpenFileBinary(
+  IN     CHAR16 *pArgFilePath,
+  OUT EFI_FILE_HANDLE *pFileHandle,
+  IN     CONST CHAR16 *pCurrentDirectory OPTIONAL,
+  IN     BOOLEAN CreateFileFlag
+)
+{
+#ifdef OS_BUILD
+#ifdef _MSC_VER
+  return OpenFileWithFlag(pArgFilePath, pFileHandle, pCurrentDirectory, CreateFileFlag, TRUE);
+#endif
+#endif
+  return OpenFileWithFlag(pArgFilePath, pFileHandle, pCurrentDirectory, CreateFileFlag, FALSE);
+}
+
+/**
+  Open file or create new file with the proper flags.
+
+  @param[in] pArgFilePath path to a file that will be opened
+  @param[out] pFileHandle output handler
+  @param[in, optional] pCurrentDirectory is the current directory path to where
+    we should start to search for the file.
+  @param[in] CreateFileFlag - TRUE to create new file or FALSE to open
+    existing file
+  @param[in] binary - use binary open
+
+  @retval EFI_SUCCESS
+  @retval EFI_INVALID_PARAMETER pFilePath is NULL or empty or pFileHandle is NULL
+  @retval EFI_PROTOCOL_ERROR if there is no EFI_SIMPLE_FILE_SYSTEM_PROTOCOL
+**/
+EFI_STATUS
+OpenFileWithFlag(
+  IN     CHAR16 *pArgFilePath,
+  OUT EFI_FILE_HANDLE *pFileHandle,
+  IN     CONST CHAR16 *pCurrentDirectory OPTIONAL,
+  IN     BOOLEAN CreateFileFlag,
+  BOOLEAN binary
+)
 {
   EFI_STATUS Rc = EFI_SUCCESS;
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *pVolume = NULL;
@@ -1057,13 +1118,13 @@ OpenFile(
       Get the file system protocol
     **/
     Rc = gBS->OpenProtocol(
-        pHandles[Index],
-        &gEfiSimpleFileSystemProtocolGuid,
-        (VOID *) &pVolume,
-        NULL,
-        NULL,
-        EFI_OPEN_PROTOCOL_GET_PROTOCOL
-        );
+      pHandles[Index],
+      &gEfiSimpleFileSystemProtocolGuid,
+      (VOID *) &pVolume,
+      NULL,
+      NULL,
+      EFI_OPEN_PROTOCOL_GET_PROTOCOL
+    );
     if (EFI_ERROR(Rc)) {
       goto AfterHandles;
     }
@@ -1078,11 +1139,19 @@ OpenFile(
 
     if (CreateFileFlag) {
       // if EFI_FILE_MODE_CREATE then also EFI_FILE_MODE_READ and EFI_FILE_MODE_WRITE are needed.
-      Rc = RootDirHandle->Open(RootDirHandle, pFileHandle, pFilePath,
-        EFI_FILE_MODE_CREATE|EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE,
-        0);
+      if (binary) {
+        Rc = RootDirHandle->Open(RootDirHandle, pFileHandle, pFilePath,
+          EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_BINARY, 0);
+      } else {
+        Rc = RootDirHandle->Open(RootDirHandle, pFileHandle, pFilePath,
+          EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+      }
     } else {
-       Rc = RootDirHandle->Open(RootDirHandle, pFileHandle, pFilePath, EFI_FILE_MODE_READ, 0);
+      if (binary) {
+        Rc = RootDirHandle->Open(RootDirHandle, pFileHandle, pFilePath, EFI_FILE_MODE_READ | EFI_FILE_MODE_BINARY, 0);
+      } else {
+        Rc = RootDirHandle->Open(RootDirHandle, pFileHandle, pFilePath, EFI_FILE_MODE_READ, 0);
+      }
     }
 
     RootDirHandle->Close(RootDirHandle);
@@ -1409,7 +1478,7 @@ CatSPrintClean(
   )
 {
   CHAR16 *pResult = NULL;
-  VA_LIST ArgList = {0};
+  VA_LIST ArgList;
 
   VA_START(ArgList, pFormatString);
   pResult = CatVSPrint(pString, pFormatString, ArgList);
@@ -1510,7 +1579,7 @@ MatchCurrentARSStatus(
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
-  EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
   UINT8 CurrentARSStatus = ARS_STATUS_UNKNOWN;
 
   NVDIMM_ENTRY();
@@ -1748,6 +1817,8 @@ Pow(
   UINT64 Result = Base;
   UINT32 Index = 0;
 
+  NVDIMM_ENTRY();
+
   if (Exponent == 0) {
     return 1;
   }
@@ -1756,6 +1827,7 @@ Pow(
     Result *= Base;
   }
 
+  NVDIMM_EXIT();
   return Result;
 }
 
@@ -1776,7 +1848,7 @@ Pow(
   @retval EFI_OUT_OF_RESOURCES if memory allocation fails.
 **/
 EFI_STATUS
-ReadFile(
+FileRead(
   IN      CHAR16 *pFilePath,
   IN      EFI_DEVICE_PATH_PROTOCOL *pDevicePath,
   IN      CONST UINT64  MaxFileSize,
@@ -2140,11 +2212,11 @@ Finish:
 }
 
 /**
-  Convert Last Shutdown Status to string
+  Convert Latched Last Shutdown Status to string
 
-  @param[in] LastShutdownStatus structure
+  @param[in] LatchedLastShutdownStatus structure
 
-  @retval CLI string representation of last shudown status
+  @retval CLI string representation of latched last shudown status
 **/
 CHAR16*
 LastShutdownStatusToStr(
@@ -2218,7 +2290,6 @@ LastShutdownStatusToStr(
   NVDIMM_EXIT();
   return pStatusStr;
 }
-
 
 /**
   Converts the dimm health state reason to its  HII string equivalent
@@ -2476,13 +2547,18 @@ SecurityToString(
     pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR, pTempStr);
     FREE_POOL_SAFE(pTempStr);
     break;
-  case SECURITY_FROZEN:
-    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_FROZEN), NULL);
+  case SECURITY_PW_MAX:
+    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_PW_MAX), NULL);
     pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR, pTempStr);
     FREE_POOL_SAFE(pTempStr);
     break;
-  case SECURITY_PW_MAX:
-    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_PW_MAX), NULL);
+  case SECURITY_MASTER_PW_MAX:
+    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_MASTER_PW_MAX), NULL);
+    pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR, pTempStr);
+    FREE_POOL_SAFE(pTempStr);
+    break;
+  case SECURITY_FROZEN:
+    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_FROZEN), NULL);
     pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR, pTempStr);
     FREE_POOL_SAFE(pTempStr);
     break;
@@ -2498,6 +2574,67 @@ SecurityToString(
     break;
   }
 
+  return pSecurityString;
+}
+
+/**
+  Convert dimm's security state bitmask to its respective string
+
+  @param[in] HiiHandle handle to the HII database that contains i18n strings
+  @param[in] SecurityStateBitmask, bits define dimm's security state
+
+  @retval String representation of Dimm's security state
+**/
+CHAR16*
+SecurityStateBitmaskToString(
+  IN     EFI_HANDLE HiiHandle,
+  IN     UINT32 SecurityStateBitmask
+)
+{
+  CHAR16 *pSecurityString = NULL;
+  CHAR16 *pTempStr = NULL;
+
+  if (SecurityStateBitmask & SECURITY_MASK_NOT_SUPPORTED) {
+    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_NOT_SUPPORTED), NULL);
+    pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR, pTempStr);
+    FREE_POOL_SAFE(pTempStr);
+    goto Finish;
+  }
+
+  if (SecurityStateBitmask & SECURITY_MASK_ENABLED) {
+    if (SecurityStateBitmask & SECURITY_MASK_LOCKED) { // Security State = Locked
+      pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_LOCKED), NULL);
+      pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR, pTempStr);
+      FREE_POOL_SAFE(pTempStr);
+    }
+    else { // Security State = Unlocked
+      pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_UNLOCKED), NULL);
+      pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR, pTempStr);
+      FREE_POOL_SAFE(pTempStr);
+    }
+  } else { // Security State = Disabled
+    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_DISABLED), NULL);
+    pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR, pTempStr);
+    FREE_POOL_SAFE(pTempStr);
+  }
+
+  if (SecurityStateBitmask & SECURITY_MASK_COUNTEXPIRED) {
+    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_PW_MAX), NULL);
+    pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR FORMAT_STR, L", ", pTempStr);
+    FREE_POOL_SAFE(pTempStr);
+  }
+  if (SecurityStateBitmask & SECURITY_MASK_MASTER_COUNTEXPIRED) {
+    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_MASTER_PW_MAX), NULL);
+    pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR FORMAT_STR, L", ", pTempStr);
+    FREE_POOL_SAFE(pTempStr);
+  }
+  if (SecurityStateBitmask & SECURITY_MASK_FROZEN) {
+    pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SECSTATE_FROZEN), NULL);
+    pSecurityString = CatSPrintClean(pSecurityString, FORMAT_STR FORMAT_STR, L", ", pTempStr);
+    FREE_POOL_SAFE(pTempStr);
+  }
+
+Finish:
   return pSecurityString;
 }
 
@@ -2931,47 +3068,69 @@ Finish:
 }
 
 /**
-  Convert from units type to a string
+  Populates the units string based on the particular capacity unit
+  @param[in] pData A pointer to the main HII data structure
+  @param[in] Units The input unit to be converted into its HII string
+  @param[out] ppUnitsStr A pointer to the HII units string. Dynamically allocated memory and must be released by calling function.
 
-  @param[in] UnitsToDisplay The type of units to be used
-
-  @retval String representation of the units type
+  @retval EFI_OUT_OF_RESOURCES if there is no space available to allocate memory for units string
+  @retval EFI_INVALID_PARAMETER if one or more input parameters are invalid
+  @retval EFI_SUCCESS The conversion was successful
 **/
-CHAR16*
-UnitsToStr(
-  IN     UINT16 UnitsToDisplay
+EFI_STATUS
+UnitsToStr (
+  IN     EFI_HII_HANDLE HiiHandle,
+  IN     UINT16 Units,
+     OUT CHAR16 **ppUnitsStr
   )
 {
-  CHAR16 *pTempStr = NULL;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
 
-  switch (UnitsToDisplay) {
+  NVDIMM_ENTRY();
+
+  if ((ppUnitsStr == NULL)) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  switch (Units) {
     case DISPLAY_SIZE_UNIT_B:
-      pTempStr =  CatSPrint(NULL, FORMAT_STR, UNITS_B_STR);
+      *ppUnitsStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_CAPACITY_UNIT_B), NULL);
       break;
     case DISPLAY_SIZE_UNIT_MB:
-      pTempStr =  CatSPrint(NULL, FORMAT_STR, UNITS_MB_STR);
+      *ppUnitsStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_CAPACITY_UNIT_MB), NULL);
       break;
     case DISPLAY_SIZE_UNIT_MIB:
-      pTempStr =  CatSPrint(NULL, FORMAT_STR, UNITS_MIB_STR);
+      *ppUnitsStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_CAPACITY_UNIT_MIB), NULL);
       break;
     case DISPLAY_SIZE_UNIT_GB:
-      pTempStr =  CatSPrint(NULL, FORMAT_STR, UNITS_GB_STR);
+      *ppUnitsStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_CAPACITY_UNIT_GB), NULL);
       break;
     case DISPLAY_SIZE_UNIT_GIB:
-      pTempStr =  CatSPrint(NULL, FORMAT_STR, UNITS_GIB_STR);
+      *ppUnitsStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_CAPACITY_UNIT_GIB), NULL);
       break;
     case DISPLAY_SIZE_UNIT_TB:
-      pTempStr =  CatSPrint(NULL, FORMAT_STR, UNITS_TB_STR);
+      *ppUnitsStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_CAPACITY_UNIT_TB), NULL);
       break;
     case DISPLAY_SIZE_UNIT_TIB:
-      pTempStr =  CatSPrint(NULL, FORMAT_STR, UNITS_TIB_STR);
+      *ppUnitsStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_CAPACITY_UNIT_TIB), NULL);
       break;
     default:
+      ReturnCode = EFI_INVALID_PARAMETER;
       NVDIMM_DBG("Invalid units type!");
-      break;
+      goto Finish;
   }
-  return pTempStr;
+
+  if (*ppUnitsStr == NULL) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    goto Finish;
+  }
+
+Finish:
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
+
 
 /**
   Convert last firmware update status to string.
@@ -3101,7 +3260,7 @@ EndianSwapUint16(
 
   @retval Human readable time string
 **/
-CHAR16 *GetTimeFormatString (UINT64 TimeInSeconds)
+CHAR16 *GetTimeFormatString (UINT64 TimeInSeconds, BOOLEAN verbose )
 {
   int TimeSeconds = 0,
       TimeMinutes = 0,
@@ -3172,17 +3331,31 @@ CHAR16 *GetTimeFormatString (UINT64 TimeInSeconds)
 
   TimeMonthday = NumberOfFullDays + 1;
 
-  pTimeFormatString = CatSPrintClean(pTimeFormatString,
-    FORMAT_STR_SPACE FORMAT_STR L" %02d %02d:%02d:%02d UTC %d",
-    DayOfWeek[TimeWeekday],
-    Month[TimeMonth],
-    TimeMonthday,
-    TimeHours,
-    TimeMinutes,
-    TimeSeconds,
-    TimeYear + CENTURY_MARKER
-    );
-
+  switch (verbose) {
+  case TRUE:
+    pTimeFormatString = CatSPrintClean(pTimeFormatString,
+      FORMAT_STR_SPACE FORMAT_STR L" %02d %02d:%02d:%02d UTC %d",
+      DayOfWeek[TimeWeekday],
+      Month[TimeMonth],
+      TimeMonthday,
+      TimeHours,
+      TimeMinutes,
+      TimeSeconds,
+      TimeYear + CENTURY_MARKER
+    );    // With verbose TRUE, timestamp looks like "Thu Jan 01 00:03:30 UTC 1998"
+    break;
+  default:
+    pTimeFormatString = CatSPrintClean(pTimeFormatString,
+      L"%02d/%02d/%d %02d:%02d:%02d",
+      ++TimeMonth,
+      TimeMonthday,
+      TimeYear + CENTURY_MARKER,
+      TimeHours,
+      TimeMinutes,
+      TimeSeconds
+    ); // With Default verbose, timestamp looks like "12/03/2018 14:55:21"
+    break;
+  }
 return pTimeFormatString;
 }
 
@@ -3259,7 +3432,7 @@ GoalStatusToString(
 
   Polls the status of the background operation on the dimm.
 
-  @param [in] pNvmDimmConfigProtocol Pointer to the EFI_DCPMM_CONFIG_PROTOCOL instance
+  @param [in] pNvmDimmConfigProtocol Pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance
   @param [in] DimmId Dimm ID of the dimm to poll status
   @param [in] OpcodeToPoll Specify an opcode to poll, 0 to poll regardless of opcode
   @param [in] SubOpcodeToPoll Specify an opcode to poll
@@ -3267,7 +3440,7 @@ GoalStatusToString(
 **/
 EFI_STATUS
 PollLongOpStatus(
-  IN     EFI_DCPMM_CONFIG_PROTOCOL *pNvmDimmConfigProtocol,
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
   IN     UINT16 DimmId,
   IN     UINT8 OpcodeToPoll OPTIONAL,
   IN     UINT8 SubOpcodeToPoll OPTIONAL,
@@ -3605,7 +3778,7 @@ IsSubsystemDeviceIdSupportedByValues(
 {
   BOOLEAN Supported = FALSE;
 
-  if ((SubsystemDeviceId >= SPD_DEVICE_ID_05) &&
+  if ((SubsystemDeviceId >= SPD_DEVICE_ID_10) &&
     (SubsystemDeviceId <= SPD_DEVICE_ID_15)) {
     Supported = TRUE;
   }
@@ -3684,3 +3857,208 @@ ControllerRidToStr(
   NVDIMM_EXIT();
   return pSteppingStr;
 }
+
+/**
+Set object status for DIMM_INFO
+
+@param[out] pCommandStatus Pointer to command status structure
+@param[in] pDimm DIMM_INFO for which the object status is being set
+@param[in] Status Object status to set
+**/
+VOID
+SetObjStatusForDimmInfo(
+  OUT COMMAND_STATUS *pCommandStatus,
+  IN     DIMM_INFO *pDimm,
+  IN     NVM_STATUS Status
+)
+{
+  SetObjStatusForDimmInfoWithErase(pCommandStatus, pDimm, Status, FALSE);
+}
+
+/**
+Set object status for DIMM_INFO
+
+@param[out] pCommandStatus Pointer to command status structure
+@param[in] pDimm DIMM_INFO for which the object status is being set
+@param[in] Status Object status to set
+@param[in] If TRUE - clear all other status before setting this one
+**/
+VOID
+SetObjStatusForDimmInfoWithErase(
+  OUT COMMAND_STATUS *pCommandStatus,
+  IN     DIMM_INFO *pDimm,
+  IN     NVM_STATUS Status,
+  IN     BOOLEAN EraseFirst
+)
+{
+  UINT32 idx = 0;
+  CHAR16 DimmUid[MAX_DIMM_UID_LENGTH];
+  CHAR16 *TmpDimmUid = NULL;
+
+  if (pDimm == NULL || pCommandStatus == NULL) {
+    return;
+  }
+
+  for (idx = 0; idx < MAX_DIMM_UID_LENGTH; idx++) {
+    DimmUid[idx] = 0;
+  }
+
+
+  if (pDimm->VendorId != 0 && pDimm->ManufacturingInfoValid != FALSE && pDimm->SerialNumber != 0) {
+    TmpDimmUid = CatSPrint(NULL, L"%04x", EndianSwapUint16(pDimm->VendorId));
+    if (pDimm->ManufacturingInfoValid == TRUE) {
+      TmpDimmUid = CatSPrintClean(TmpDimmUid, L"-%02x-%04x", pDimm->ManufacturingLocation, EndianSwapUint16(pDimm->ManufacturingDate));
+    }
+    TmpDimmUid = CatSPrintClean(TmpDimmUid, L"-%08x", EndianSwapUint32(pDimm->SerialNumber));
+  }
+  else {
+    TmpDimmUid = CatSPrint(NULL, L"");
+  }
+
+  if (TmpDimmUid != NULL) {
+    StrnCpyS(DimmUid, MAX_DIMM_UID_LENGTH, TmpDimmUid, MAX_DIMM_UID_LENGTH - 1);
+    FREE_POOL_SAFE(TmpDimmUid);
+  } 
+
+  if (EraseFirst) {
+    EraseObjStatus(pCommandStatus, pDimm->DimmHandle, DimmUid, MAX_DIMM_UID_LENGTH);
+  }
+
+  SetObjStatus(pCommandStatus, pDimm->DimmHandle, DimmUid, MAX_DIMM_UID_LENGTH, Status);
+}
+
+
+//Its ok to keep these routines here, but they should be calling abstracted serialize/deserialize data APIs in the future.
+extern EFI_GUID gIntelDimmPbrTagIdVariableguid;
+
+#ifndef OS_BUILD
+EFI_STATUS PbrDcpmmSerializeTagId(
+  UINT32 Id
+)
+{
+  UINTN VariableSize;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+
+  VariableSize = sizeof(UINT32);
+  ReturnCode = SET_VARIABLE(
+    PBR_TAG_ID_VAR,
+    gIntelDimmPbrTagIdVariableguid,
+    VariableSize,
+    (VOID*)&Id);
+  return ReturnCode;
+}
+
+EFI_STATUS PbrDcpmmDeserializeTagId(
+  UINT32 *pId,
+  UINT32 DefaultId
+)
+{
+  UINTN VariableSize;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  UINT32 Id = 0;
+
+  VariableSize = sizeof(UINT32);
+  ReturnCode = GET_VARIABLE(
+    PBR_TAG_ID_VAR,
+    gIntelDimmPbrTagIdVariableguid,
+    &VariableSize,
+    &Id);
+
+  if (ReturnCode == EFI_NOT_FOUND) {
+    *pId = DefaultId;
+    ReturnCode = EFI_SUCCESS;
+    goto Finish;
+  }
+  else if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Failed to retrieve PBR TAG ID value");
+    goto Finish;
+  }
+  *pId = Id;
+Finish:
+  return ReturnCode;
+}
+#else
+#include <PbrDcpmm.h>
+#ifdef _MSC_VER
+extern int registry_volatile_write(const char *key, unsigned int dword_val);
+extern int registry_read(const char *key, unsigned int *dword_val, unsigned int default_val);
+#else
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#endif
+/**
+  Helper that serializes pbr id to a volatile store.  We should not be maintaining
+  sessions across system reboots
+**/
+EFI_STATUS PbrDcpmmSerializeTagId(
+  UINT32 id
+)
+{
+  EFI_STATUS ReturnCode = EFI_LOAD_ERROR;
+#if _MSC_VER
+  registry_volatile_write("pbr_id", id);
+#else
+  UINT32 ShmId;
+  key_t Key;
+  UINT32 *pPbrId = NULL;
+  Key = ftok(PBR_TMP_DIR, 'i');
+  ShmId = shmget(Key, sizeof(*pPbrId), IPC_CREAT | 0666);
+  if (-1 == ShmId) {
+    NVDIMM_DBG("Failed to shmget\n");
+    return ReturnCode;
+  }
+  pPbrId = (UINT32*)shmat(ShmId, NULL, 0);
+  if ((VOID*)pPbrId == (VOID*)-1) {
+    NVDIMM_DBG("Failed to shmat\n");
+    return ReturnCode;
+  }
+  else
+  {
+    *pPbrId = id;
+    NVDIMM_DBG("Writing to shared memory: %d\n", *pPbrId);
+    shmdt(pPbrId);
+    ReturnCode = EFI_SUCCESS;
+  }
+#endif
+  return ReturnCode;
+}
+
+/**
+  Helper that deserializes pbr tag id from a volatile store.  We should not be maintaining
+  sessions across system reboots
+**/
+EFI_STATUS PbrDcpmmDeserializeTagId(
+  UINT32 *id,
+  UINT32 defaultId
+)
+{
+  EFI_STATUS ReturnCode = EFI_LOAD_ERROR;
+#if _MSC_VER
+  registry_read("pbr_id", id, defaultId);
+#else
+  UINT32 ShmId;
+  key_t Key;
+  UINT32 *pPbrId = NULL;
+  Key = ftok(PBR_TMP_DIR, 'i');
+  ShmId = shmget(Key, sizeof(*pPbrId), IPC_CREAT | 0666);
+  if (-1 == ShmId) {
+    NVDIMM_DBG("Failed to shmget\n");
+    return ReturnCode;
+  }
+  ReturnCode = EFI_SUCCESS;
+  pPbrId = (UINT32*)shmat(ShmId, NULL, 0);
+  if ((VOID*)pPbrId == (VOID*)-1) {
+    NVDIMM_DBG("Failed to shmat\n");
+    *id = defaultId;
+  }
+  else
+  {
+    *id = *pPbrId;
+    shmdt(pPbrId);
+  }
+#endif
+  return ReturnCode;
+}
+
+#endif

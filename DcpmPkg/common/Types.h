@@ -22,8 +22,10 @@
 
 #define COUNT_OF(x) ((sizeof(x)/sizeof(0[x])) / ((size_t)(!(sizeof(x) % sizeof(0[x])))))
 
-#define PMEM_MODULE_NAME L"Intel(R) DCPM "  //short version for drivers list
-#define PMEM_MODULE_NAME_SEARCH L"Intel(R),DCPM" //comma separated search string
+#define PMEM_MODULE_NAME L"Intel(R) DCPMM "  //short version for drivers list
+#define PMEM_MODULE_NAME_SEARCH L"Intel(R),DCPMM" //comma separated search string
+
+#define PMEM_DIMM_NAME  L"Intel Persistent Memory DIMM %d Controller"
 
 /*This should match the error_type definition in nvm_management.h*/
 #define ERROR_INJ_POISON                0X01
@@ -33,6 +35,9 @@
 #define ERROR_INJ_FATAL_MEDIA_ERR       0X05
 #define ERROR_INJ_DIRTY_SHUTDOWN        0X06
 #define ERROR_INJ_TYPE_INVALID          0x08
+
+#define MAX_FIS_SUPPORTED_BY_THIS_SW_MAJOR    2
+#define MAX_FIS_SUPPORTED_BY_THIS_SW_MINOR    0
 
 /**
   The device path type for our driver and HII driver.
@@ -59,10 +64,6 @@ typedef struct {
 #define DIMM_BSR_MEDIA_ERROR 0x2
 #define DIMM_BSR_MEDIA_DISABLED 0x1
 
-// @todo Remove FIS 1.4 backwards compatibility workaround
-// FIS <= 1.4
-#define DIMM_BSR_AIT_DRAM_READY 0x1
-
 // FIS >= 1.5
 #define DIMM_BSR_AIT_DRAM_NOTTRAINED 0x0
 #define DIMM_BSR_AIT_DRAM_TRAINED_NOTLOADED 0x1
@@ -70,35 +71,14 @@ typedef struct {
 #define DIMM_BSR_AIT_DRAM_TRAINED_LOADED_READY 0x3
 
 #define DIMM_BSR_OIE_ENABLED 0x1
-#define DIMM_BSR_FW_ASSERT 0x1
 #define DIMM_BSR_REBOOT_REQUIRED 0x1
 #define DIMM_BSR_MEDIA_INTERFACE_ENGINE_STALLED 0x01
 
 #define REGISTER_BSR_STR  L"BSR"
 #define REGISTER_OS_STR   L"OS"
 
-// @todo Remove FIS 1.4 backwards compatibility workaround
 typedef union {
   UINT64 AsUint64;
-  struct {
-    UINT64 Major : 8;
-    UINT64 Minor : 8;
-    UINT64 MR : 2;
-    UINT64 DT : 1;
-    UINT64 PCR : 1;
-    UINT64 MBR : 1;
-    UINT64 WTS : 1;
-    UINT64 FRCF : 1;
-    UINT64 CR : 1;
-    UINT64 MD: 1;
-    UINT64 OIE: 1;
-    UINT64 OIWE: 1;
-    UINT64 Rsvd : 5;
-    UINT64 Assertion : 1;
-    UINT64 MI_Stalled: 1;
-    UINT64 DR: 1;
-    UINT64 Rsvd1 : 29;
-  } Separated_FIS_1_4;
   struct {
     UINT64 Major : 8;       //7:0
     UINT64 Minor : 8;       //15:8
@@ -115,6 +95,27 @@ typedef union {
     UINT64 DR: 2;           //28:27
     UINT64 RR: 1;           //29
     UINT64 Rsvd: 34;        //63:30
+  } Separated_FIS_1_13;
+  struct {
+    UINT64 Major : 8;       //7:0
+    UINT64 Minor : 8;       //15:8
+    UINT64 MR : 2;          //17:16
+    UINT64 DT : 1;          //18
+    UINT64 PCR : 1;         //19
+    UINT64 MBR : 1;         //20
+    UINT64 WTS : 1;         //21
+    UINT64 FRCF : 1;        //22
+    UINT64 CR : 1;          //23
+    UINT64 MD : 1;           //24
+    UINT64 OIE : 1;          //25
+    UINT64 OIWE : 1;         //26
+    UINT64 DR : 2;           //28:27
+    UINT64 RR : 1;           //29
+    UINT64 LFOPB : 1;        //30
+    UINT64 SVNWC : 1;        //31
+    UINT64 Rsvd : 2;         //33:32
+    UINT64 DTS : 2;          //35:34
+    UINT64 Rsvd1 : 28;        //63:36
   } Separated_Current_FIS;
 } DIMM_BSR;
 
@@ -131,12 +132,13 @@ typedef struct _SENSOR_INFO {
   INT16 MediaTemperature;               ///< Current Media Temperature in C
   INT16 ControllerTemperature;          ///< Current Controller Temperature in C
   UINT8 PercentageRemaining;            ///< Remaining module's life as a percentage value of factory expected life span (0-100)
-  UINT32 DirtyShutdowns;                ///< Dirty Shutdowns count
-  UINT8 LastShutdownStatus;             ///< Last Shutdown Status. See FIS field LSS for additional details
+  UINT32 LatchedDirtyShutdownCount;     ///< Latched Dirty Shutdowns count
+  UINT8 LatchedLastShutdownStatus;      ///< Latched Last Shutdown Status. See FIS field LSS for additional details
+  UINT8 UnlatchedLastShutdownStatus;
   UINT32 PowerOnTime;                   ///< Lifetime DIMM has been powered on in seconds. See FIS field POT for additional details
   UINT32 UpTime;                        ///< DIMM uptime in seconds since last AC cycle. See FIS field UT for additional details
   UINT64 PowerCycles;                   ///< Number of DIMM power cycles. See FIS field PC for additional details
-  UINT8 HealthStatus;                   ///< Overall health summary as specified by @ref HEALTH_STATUS. See FIS field HS for additional details.
+  UINT8 HealthStatus;                  ///< Overall health summary as specified by @ref HEALTH_STATUS. See FIS field HS for additional details.
   UINT16 HealthStatusReason;            ///< Indicates why the module is in the current HealthStatus as specified by @ref HEALTH_STATUS_REASONS. See FIS field HSR for additional details.
   UINT32 MediaErrorCount;               ///< Total count of media errors found in Error Log
   UINT32 ThermalErrorCount;             ///< Total count of thermal errors found in Error Log
@@ -146,7 +148,7 @@ typedef struct _SENSOR_INFO {
   INT16 MediaThrottlingStopThresh;      ///< Media throttling stop temperature threshold in C
   INT16 ControllerThrottlingStartThresh;///< Controller throttling stop temperature threshold in C
   INT16 ControllerThrottlingStopThresh; ///< Controller throttling stop temperature threshold in C
-  UINT32 UnlatchedDirtyShutdowns;       ///< Unlatched Dirty Shutdowns count
+  UINT32 UnlatchedDirtyShutdownCount;   ///< Unlatched Dirty Shutdowns count
 } SENSOR_INFO;
 
 /**
@@ -154,15 +156,15 @@ typedef struct _SENSOR_INFO {
 **/
 typedef struct {
   UINT8 Type;
-  UINT8 State;
+  UINT8 State;      //!< DEPRECATED; current state of a given dimm sensor
   UINT8 Enabled;
   INT64 Value;
   UINT8 SettableThresholds;
   UINT8 SupportedThresholds;
-  INT64 NonCriticalThreshold;
-  INT64 CriticalLowerThreshold;
-  INT64 CriticalUpperThreshold;
-  INT64 FatalThreshold;
+  INT64 AlarmThreshold;
+  INT64 ThrottlingStopThreshold;
+  INT64 ThrottlingStartThreshold;
+  INT64 ShutdownThreshold;
 } DIMM_SENSOR;
 
 /**

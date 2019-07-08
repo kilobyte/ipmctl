@@ -12,13 +12,18 @@ get_filename_component(ROOT ./ ABSOLUTE)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake/Find")
 
 set(LIBIPMCTL_VERSION_MAJOR 3)
-set(LIBIPMCTL_VERSION_MINOR 0)
+set(LIBIPMCTL_VERSION_MINOR 1)
 set(LIBIPMCTL_VERSION_PATCH 0)
 set(LIBIPMCTL_VERSION_STRING ${LIBIPMCTL_VERSION_MAJOR}.${LIBIPMCTL_VERSION_MINOR}.${LIBIPMCTL_VERSION_PATCH})
 
 set(IPMCTL_VERSION_MAJOR 01)
 set(IPMCTL_VERSION_MINOR 00)
 set(IPMCTL_VERSION_PATCH 00)
+
+set(IPMCTL_SPEC_VERSION_MAJOR 2)
+set(IPMCTL_SPEC_VERSION_MINOR 0)
+set(IPMCTL_DRAFT "-draft")
+set(IPMCTL_SPEC_VERSION_STRING ${IPMCTL_SPEC_VERSION_MAJOR}.${IPMCTL_SPEC_VERSION_MINOR}${IPMCTL_DRAFT})
 
 if(BUILDNUM)
 	set(IPMCTL_VERSION_STRING ${BUILDNUM})
@@ -30,8 +35,7 @@ else()
 			RESULT_VARIABLE GIT_RETURN_CODE
 			)
 		# strip leading string in git tag
-		string(REGEX REPLACE "CR_MGMT_" "" IPMCTL_VERSION_STRING "${IPMCTL_VERSION_STRING}")
-		string(REGEX REPLACE "v" "" IPMCTL_VERSION_STRING "${IPMCTL_VERSION_STRING}")
+		string(REGEX MATCH "([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)" IPMCTL_VERSION_STRING "${IPMCTL_VERSION_STRING}")
 		# strip ending newline
 		string(REGEX REPLACE "\n" "" IPMCTL_VERSION_STRING "${IPMCTL_VERSION_STRING}")
 	endif()
@@ -66,6 +70,7 @@ endif()
 if(ESX_BUILD)
 	set(OS_TYPE esx)
 	set(FILE_PREFIX esx)
+	find_package(PythonInterp REQUIRED)
 elseif(UNIX)
 	set(LNX_BUILD 1)
 	set(OS_TYPE linux)
@@ -73,14 +78,19 @@ elseif(UNIX)
 
 	find_package(Threads REQUIRED)
 	find_package(PkgConfig REQUIRED)
+	find_package(PythonInterp REQUIRED)
 	find_package(asciidoctor)
+	find_package(asciidoc)
 	pkg_check_modules(NDCTL REQUIRED libndctl>=58.2)
 	pkg_check_modules(SYSTEMD systemd)
+if(NOT SAFECLIB_SRC_DOWNLOAD_AND_STATIC_LINK)
 	pkg_check_modules(LIBSAFEC REQUIRED libsafec>=03032018.0-g570fa5)
+endif()
 elseif(MSVC)
 	set(WIN_BUILD 1)
 	set(OS_TYPE win)
 	set(FILE_PREFIX win)
+	find_package(PythonInterp REQUIRED)
 endif()
 
 message(BUILD_TYPE: ${CMAKE_BUILD_TYPE})
@@ -102,10 +112,6 @@ if(INTERNAL_MFG)
         include(CMake/mfg.cmake)
 endif()
 
-if(EXISTS "${ROOT}/CMake/internal.cmake")
-        include("${ROOT}/CMake/internal.cmake")
-endif()
-
 #----------------------------------------------------------------------------------------------------
 # Project wide defines and flags
 #----------------------------------------------------------------------------------------------------
@@ -116,14 +122,20 @@ add_definitions(
 	-DPLAYBACK_RECORD_SUPPORTED
 	)
 
+# Promote warnings to errors only for release builds
 if(MSVC)
-	set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2")
-	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
+	set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2 /WX")
+	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /WX")
 	set(CMAKE_C_FLAGS_DEBUG_ "${CMAKE_C_FLAGS_DEBUG} /Od")
 	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od")
 else()
 	set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2 -fno-strict-aliasing -D_FORTIFY_SOURCE=2")
 	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2 -fno-strict-aliasing -D_FORTIFY_SOURCE=2")
+	if(LNX_BUILD)
+		#A few warnings yet to resolve under esx
+		set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -Werror")
+		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Werror")
+	endif()
 	set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -ggdb")
 	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -ggdb")
 endif()
@@ -152,6 +164,28 @@ if(LNX_BUILD)
 	endif()
 endif()
 
+if(MSVC)
+	if(VCREDIST_STATIC)
+		# Force vcredist to be linked static
+		# Keep this after all other compiler flag setup
+		set(CompilerFlags
+				CMAKE_CXX_FLAGS
+				CMAKE_CXX_FLAGS_DEBUG
+				CMAKE_CXX_FLAGS_RELEASE
+				CMAKE_CXX_FLAGS_RELWITHDEBINFO
+				CMAKE_C_FLAGS
+				CMAKE_C_FLAGS_DEBUG
+				CMAKE_C_FLAGS_RELEASE
+				CMAKE_C_FLAGS_RELWITHDEBINFO
+				)
+		foreach(CompilerFlag ${CompilerFlags})
+		  string(REPLACE "/MD" "/MT" ${CompilerFlag} "${${CompilerFlag}}")
+		endforeach()
+		message("VCREDIST: STATIC")
+	else()
+		message("VCREDIST: SHARED")
+	endif()
+endif()
 #----------------------------------------------------------------------------------------------------
 # OS driver interface library
 #----------------------------------------------------------------------------------------------------
@@ -187,7 +221,7 @@ target_link_libraries(ipmctl_os_interface
 	${CMAKE_THREAD_LIBS_INIT}
 	)
 
-if(LNX_BUILD)
+if(LNX_BUILD AND (NOT SAFECLIB_SRC_DOWNLOAD_AND_STATIC_LINK))
 	target_link_libraries(ipmctl_os_interface
 		${LIBSAFEC_LIBRARIES}
 		)
@@ -260,7 +294,6 @@ file(GLOB LIBIPMCTL_SOURCE_FILES
 	DcpmPkg/cli/LoadCommand.c
 	DcpmPkg/cli/DeleteDimmCommand.c
 	src/os/cli_cmds/DumpSupportCommand.c
-	DcpmPkg/cli/LoadRecoverCommand.c
 	DcpmPkg/cli/ShowRegisterCommand.c
 	DcpmPkg/cli/StartFormatCommand.c
 	DcpmPkg/cli/ShowEventCommand.c
@@ -268,6 +301,11 @@ file(GLOB LIBIPMCTL_SOURCE_FILES
 	DcpmPkg/cli/ShowPerformanceCommand.c
 	DcpmPkg/cli/ShowHostServerCommand.c
 	DcpmPkg/cli/ShowCmdAccessPolicyCommand.c
+	DcpmPkg/cli/StartSessionCommand.c
+	DcpmPkg/cli/StopSessionCommand.c
+	DcpmPkg/cli/LoadSessionCommand.c
+	DcpmPkg/cli/ShowSessionCommand.c
+	DcpmPkg/cli/DumpSessionCommand.c
 	DcpmPkg/common/FwUtility.c
 	DcpmPkg/common/Utility.c
 	DcpmPkg/common/NvmTables.c
@@ -279,9 +317,10 @@ file(GLOB LIBIPMCTL_SOURCE_FILES
 	DcpmPkg/common/PcdCommon.c
 	DcpmPkg/common/OsCommon.c
 	DcpmPkg/common/DataSet.c
-	DcpmPkg/common/Show.c
+	DcpmPkg/common/Printer.c
 	DcpmPkg/common/Strings.c
 	DcpmPkg/common/Nlog.c
+	DcpmPkg/common/ReadRunTimePreferences.c
 	DcpmPkg/driver/Protocol/Driver/NvmDimmConfig.c
 	DcpmPkg/driver/NvmDimmDriver.c
 	DcpmPkg/driver/Core/Dimm.c
@@ -296,13 +335,16 @@ file(GLOB LIBIPMCTL_SOURCE_FILES
 	DcpmPkg/driver/Core/Diagnostics/QuickDiagnostic.c
 	DcpmPkg/driver/Core/Diagnostics/SecurityDiagnostic.c
 	DcpmPkg/driver/Protocol/Device/NvmFirmwareManagement.c
-	DcpmPkg/driver/Protocol/Device/StorageSecurityCommand.c
 	DcpmPkg/driver/Protocol/Namespace/NvmDimmBlockIo.c
 	DcpmPkg/driver/Utils/PlatformConfigData.c
 	DcpmPkg/driver/Utils/AcpiParsing.c
+	DcpmPkg/driver/Utils/ProcessorAndTopologyInfo.c
 	DcpmPkg/driver/Utils/Interleave.c
 	DcpmPkg/driver/Utils/SmbiosUtility.c
-	DcpmPkg/driver/Utils/DumpLoadPools.c
+	DcpmPkg/driver/Utils/DumpLoadRegions.c
+	DcpmPkg/common/Pbr.c
+	DcpmPkg/common/PbrDcpmm.c
+	DcpmPkg/common/PbrOs.c
 	MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.c
 	MdePkg/Library/UefiDevicePathLib/DevicePathUtilities.c
 	MdePkg/Library/UefiDevicePathLib/DevicePathToText.c
@@ -325,7 +367,9 @@ file(GLOB LIBIPMCTL_SOURCE_FILES
 	MdePkg/Library/BaseLib/DivU64x32.c
 	${LIBIPMCTL_MFG_FILES}
 	)
-
+if(EXISTS "${ROOT}/CMake/internal.cmake")
+        include("${ROOT}/CMake/internal.cmake")
+endif()
 # OS Files
 list(APPEND LIBIPMCTL_SOURCE_FILES
 	src/os/efi_shim/${FILE_PREFIX}_efi_api.c
@@ -436,7 +480,7 @@ set_target_properties(ipmctl-bin
 	PROPERTIES OUTPUT_NAME ipmctl
 	)
 
-if (ASCIIDOCTOR_FOUND)
+if (ASCIIDOCTOR_FOUND OR A2X_FOUND)
 	add_dependencies(ipmctl-bin
 		manpage
 		)
@@ -446,6 +490,7 @@ if(MSVC)
 	set_target_properties(ipmctl-bin PROPERTIES LINK_FLAGS "/STACK:3000000")
 else()
 	target_compile_options(ipmctl-bin PRIVATE "-fPIE")
+    set_target_properties(ipmctl-bin PROPERTIES LINK_FLAGS "-pie")
 endif()
 
 #---------------------------------------------------------------------------------------------------
@@ -472,10 +517,17 @@ if (NOT ESX_BUILD)
 
 	add_executable(ipmctl-monitor ${IPMCTL_MONITOR_SOURCE_FILES})
 
+if(NOT SAFECLIB_SRC_DOWNLOAD_AND_STATIC_LINK)
 	target_link_libraries(ipmctl-monitor
 		ipmctl
 		${LIBSAFEC_LIBRARIES}
 		)
+else()
+	target_link_libraries(ipmctl-monitor
+		ipmctl
+		)
+endif()
+
 
 	target_include_directories(ipmctl-monitor PUBLIC
 		src/os
@@ -487,6 +539,7 @@ if (NOT ESX_BUILD)
 
 if(UNIX)
         target_compile_options(ipmctl-monitor PRIVATE "-fPIE")
+        set_target_properties(ipmctl-monitor PROPERTIES LINK_FLAGS "-pie")
 endif()
 
 endif()
@@ -509,7 +562,7 @@ add_custom_target(stringdefs ALL
 	DEPENDS ${STRING_DEFS_OUTPUT_FILES} ${STRING_DEFS_INPUT_FILES})
 
 add_custom_command(OUTPUT ${STRING_DEFS_OUTPUT_FILES}
-	COMMAND python ${ROOT}/src/os/efi_shim/os_efi_hii_auto_gen_strings.py
+	COMMAND ${PYTHON_EXECUTABLE} ${ROOT}/src/os/efi_shim/os_efi_hii_auto_gen_strings.py
 	COMMENT "Generating String Definitions"
 	DEPENDS ${STRING_DEFS_INPUT_FILES}
 	)
@@ -530,7 +583,7 @@ endif()
 
 add_custom_command(OUTPUT ${OUTPUT_DIR}/ipmctl_default.conf
 	COMMAND ${CMAKE_C_COMPILER} ${MY_CMAKE_SYSROOT} ${PRECOMPILER_FLAG} ${ROOT}/src/os/ini/ipmctl_default.c > ${ROOT}/src/os/ini/ipmctl_default.i
-	COMMAND python ${ROOT}/src/os/ini/ini_auto_gen_default_config.py ${ROOT}/src/os/ini/ipmctl_default.i ${OUTPUT_DIR}/ipmctl_default.conf
+	COMMAND ${PYTHON_EXECUTABLE} ${ROOT}/src/os/ini/ini_auto_gen_default_config.py ${ROOT}/src/os/ini/ipmctl_default.i ${OUTPUT_DIR}/ipmctl_default.conf
 	COMMAND ${CMAKE_COMMAND} -E remove -f ${ROOT}/src/os/ini/ipmctl_default.i
 	COMMENT "Generating INI Default Config File"
 	)
@@ -547,6 +600,9 @@ FILE(GLOB NVM_HEADERS
 
 FILE(COPY ${NVM_HEADERS}
        DESTINATION ${OUTPUT_DIR})
+
+FILE(COPY install/linux/logrotate/ipmctl.conf
+	DESTINATION ${OUTPUT_DIR})
 
 if(LNX_BUILD)
 	include(GNUInstallDirs)
@@ -584,7 +640,7 @@ if(LNX_BUILD)
 		)
 
 	install(FILES ${OUTPUT_DIR}/ipmctl_default.conf
-		DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}
+		DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/ipmctl
 		RENAME ipmctl.conf
 		)
 
@@ -598,6 +654,10 @@ if(LNX_BUILD)
 		DESTINATION ${CMAKE_INSTALL_LOCALSTATEDIR}/log
 		)
 
+	install(FILES ${OUTPUT_DIR}/ipmctl.conf
+		DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/logrotate.d
+		)
+
 	if(DEFINED INSTALL_SYSTEMDSYSTEMUNITDIR)
 		install (FILES src/os/monitor/ipmctl-monitor.service
 			DESTINATION ${INSTALL_SYSTEMDSYSTEMUNITDIR}
@@ -608,7 +668,7 @@ if(LNX_BUILD)
 		DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
 		)
 
-	if(ASCIIDOCTOR_FOUND)
+	if(ASCIIDOCTOR_FOUND OR A2X_FOUND)
 		install(DIRECTORY ${OUTPUT_DIR}/manpage/
 			DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
 			)
@@ -627,12 +687,13 @@ if(DOXYGEN_FOUND)
 #----------------------------------------------------------------------------------------------------
 # Generate NVM C API documentation with Doxygen
 #----------------------------------------------------------------------------------------------------
-	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/os/docs/Doxyfile_api.in ${ROOT}/output/${BUILD_TYPE}/Doxyfile @ONLY)
+	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/os/docs/Doxyfile_api.in ${CMAKE_BINARY_DIR}/docs/nvm_api/Doxyfile_nvm_api @ONLY)
 	add_custom_target(doc-api
-		mkdir -p ${ROOT}/output/${BUILD_TYPE}/docs
-		COMMAND ${DOXYGEN_EXECUTABLE} ${ROOT}/output/${BUILD_TYPE}/Doxyfile
+		mkdir -p ${ROOT}/output/${BUILD_TYPE}/docs/nvm_api
+		COMMAND cp ${CMAKE_CURRENT_SOURCE_DIR}/Documentation/nvm_management_api/nvm_management_api_latex_header.tex ${CMAKE_BINARY_DIR}/docs/nvm_api/
+		COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_BINARY_DIR}/docs/nvm_api/Doxyfile_nvm_api
 		COMMAND make -C ${ROOT}/output/${BUILD_TYPE}/docs/nvm_api/latex pdf
-		WORKING_DIRECTORY ${ROOT}/output/${BUILD_TYPE}
+		WORKING_DIRECTORY ${ROOT}/output/${BUILD_TYPE}/docs/nvm_api
 		COMMENT "Generating API documentation with Doxygen" VERBATIM
 		)
 endif()
@@ -640,7 +701,7 @@ endif()
 #----------------------------------------------------------------------------------------------------
 # Generate man pages with asciidoctor
 #----------------------------------------------------------------------------------------------------
-if(ASCIIDOCTOR_FOUND)
+if(ASCIIDOCTOR_FOUND OR A2X_FOUND)
 	file(MAKE_DIRECTORY ${OUTPUT_DIR}/manpage)
 	file(MAKE_DIRECTORY ${OUTPUT_DIR}/docs)
 
@@ -665,14 +726,13 @@ if(ASCIIDOCTOR_FOUND)
 		${ROOT}/Documentation/ipmctl/Instrumentation/ipmctl-show-performance.txt
 		${ROOT}/Documentation/ipmctl/Instrumentation/ipmctl-show-sensor.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-acknowledge-event.txt
-		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-change-perferences.txt
+		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-change-preferences.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-dump-support-data.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-help.txt
-		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-modify-device.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-show-events.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-show-firmware.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-show-host.txt
-		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-show-perferences.txt
+		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-show-preferences.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-update-firmware.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-version.txt
 		${ROOT}/Documentation/ipmctl/Debug/ipmctl-dump-debug-log.txt
@@ -687,7 +747,7 @@ if(ASCIIDOCTOR_FOUND)
 		${OUTPUT_DIR}/manpage/ipmctl-show-device.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-memory-resources.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-socket.1.gz
-		${OUTPUT_DIR}/manpage/ipmctl-show-system-capabilites.1.gz
+		${OUTPUT_DIR}/manpage/ipmctl-show-system-capabilities.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-topology.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-change-device-passphrase.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-change-device-security.1.gz
@@ -703,14 +763,14 @@ if(ASCIIDOCTOR_FOUND)
 		${OUTPUT_DIR}/manpage/ipmctl-show-performance.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-sensor.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-acknowledge-event.1.gz
-		${OUTPUT_DIR}/manpage/ipmctl-change-perferences.1.gz
+		${OUTPUT_DIR}/manpage/ipmctl-change-preferences.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-dump-support-data.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-help.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-modify-device.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-events.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-firmware.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-host.1.gz
-		${OUTPUT_DIR}/manpage/ipmctl-show-perferences.1.gz
+		${OUTPUT_DIR}/manpage/ipmctl-show-preferences.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-update-firmware.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-version.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-dump-debug-log.1.gz
@@ -723,13 +783,28 @@ if(ASCIIDOCTOR_FOUND)
 	add_custom_target(manpage ALL
 		DEPENDS ${MANPAGE_OUTPUT_FILES} ${DOCUMENTATION_INPUT_FILES}
 		)
-
-	add_custom_command(OUTPUT ${MANPAGE_OUTPUT_FILES}
-		COMMAND ${ASCIIDOCTOR_BINARIES} -b manpage -a mansource=ipmctl -a manmanual="ipmctl" -a ipmctl_version=${IPMCTL_VERSION_STRING} -a os_build=1 -a manpage=1 -D ${OUTPUT_DIR}/manpage ${DOCUMENTATION_INPUT_FILES}
-		COMMAND gzip -f ${OUTPUT_DIR}/manpage/*.1
-		COMMENT "Generating man pages"
-		DEPENDS ${DOCUMENTATION_INPUT_FILES}
-		)
+	if(ASCIIDOCTOR_FOUND)
+		add_custom_command(OUTPUT ${MANPAGE_OUTPUT_FILES}
+			COMMAND ${ASCIIDOCTOR_BINARIES} -b manpage -a mansource=ipmctl -a manmanual="ipmctl" -a ipmctl_version=${IPMCTL_VERSION_STRING} -a os_build=1 -a manpage=1 -D ${OUTPUT_DIR}/manpage ${DOCUMENTATION_INPUT_FILES}
+			COMMAND gzip -f ${OUTPUT_DIR}/manpage/*.1
+			COMMENT "Generating man pages"
+			DEPENDS ${DOCUMENTATION_INPUT_FILES}
+			)
+	else()
+		list(LENGTH DOCUMENTATION_INPUT_FILES LEN)
+		math(EXPR INPUT_LENGTH "${LEN} -1")
+		foreach(INDEX RANGE ${INPUT_LENGTH})
+			list(GET DOCUMENTATION_INPUT_FILES ${INDEX} MAN_INPUT)
+			list(GET MANPAGE_OUTPUT_FILES ${INDEX} MAN_OUTPUT)
+			string(REGEX REPLACE "\\.[^.]*$" "" MAN_GZ_INPUT ${MAN_OUTPUT})
+			add_custom_command(OUTPUT ${MAN_OUTPUT}
+				COMMAND ${A2X_BINARIES} -f manpage -a mansource=ipmctl -a manmanual="ipmctl" -a ipmctl_version=${IPMCTL_VERSION_STRING} -a os_build=1 -a manpage=1 -D ${OUTPUT_DIR}/manpage ${MAN_INPUT} 
+				COMMAND gzip -f ${MAN_GZ_INPUT}
+				COMMENT "Generating man pages"
+				DEPENDS ${MAN_INPUT}
+				)
+		endforeach()
+	endif()
 endif()
 
 # --------------------------------------------------------------------------------------------------
@@ -741,4 +816,6 @@ endif()
 
 if(ESX_BUILD)
 	include(CMake/esx.cmake)
+elseif(UNIX AND SAFECLIB_SRC_DOWNLOAD_AND_STATIC_LINK)
+	include(CMake/safeclib.cmake)
 endif()
