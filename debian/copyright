@@ -1,3 +1,6 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Files-Excluded: BaseTools
+
 All files in this package, except for MIT-licensed Brotli, are licensed
 under the BSD license, either the 2-clause or 3-clause variant, with an
 unholy mix between individual files, sometimes within a single file, or

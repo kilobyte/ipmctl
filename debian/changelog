@@ -1,4 +1,4 @@
-ipmctl (02.00.00.3474-1) unstable; urgency=low
+ipmctl (02.00.00.3474+ds-1) unstable; urgency=low
 
   * Initial release (closes: #931643)
 
