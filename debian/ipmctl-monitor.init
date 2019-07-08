@@ -8,5 +8,5 @@
 # Short-Description: Intel Persistent Memory monitoring
 # Description: Intel Persistent Memory monitoring service
 ### END INIT INFO
-DAEMON=/usr/bin/ipmctl-monitor
+DAEMON=/usr/sbin/ipmctl-monitor
 DAEMON_ARGS=-d
