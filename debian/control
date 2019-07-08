@@ -11,8 +11,8 @@ Build-Depends: debhelper-compat (= 12),
                asciidoctor
 Standards-Version: 4.1.2
 Homepage: https://github.com/intel/ipmctl
-#Vcs-Git: https://anonscm.debian.org/git/collab-maint/ipmctl.git
-#Vcs-Browser: https://anonscm.debian.org/cgit/collab-maint/ipmctl.git
+Vcs-Browser: https://github.com/kilobyte/ipmctl/tree/debian
+Vcs-Git: https://github.com/kilobyte/ipmctl -b debian
 
 Package: ipmctl
 Architecture: amd64
