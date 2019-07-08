@@ -1,5 +1,5 @@
-ipmctl (01.00.00.3279-1) unstable; urgency=low
+ipmctl (02.00.00.3474-1) unstable; urgency=low
 
   * Initial release (closes: #931643)
 
- -- Adam Borowski <kilobyte@angband.pl>  Mon, 08 Jul 2019 18:39:15 +0200
+ -- Adam Borowski <kilobyte@angband.pl>  Mon, 08 Jul 2019 18:52:44 +0200
