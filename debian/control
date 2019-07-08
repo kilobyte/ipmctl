@@ -1,7 +1,7 @@
 Source: ipmctl
 Section: admin
 Priority: optional
-Maintainer: Juston Li <juston.li@intel.com>
+Maintainer: Adam Borowski <kilobyte@angband.pl>
 Build-Depends: debhelper (>= 10),
                cmake (>=2.8.12),
                libndctl-dev(>=58.2),
