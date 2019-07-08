@@ -1,0 +1,7 @@
+ipmctl (01.00.00.3279-2) bionic; urgency=low
+
+  * Release v01.00.00.3279
+  * Remove memory corruption patch, in upstream
+  * Add asciidoctor dependency  
+
+ -- Juston Li <juston.li@intel.com>  Tue, 02 Oct 2018 09:04:56 -0700
