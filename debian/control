@@ -1,5 +1,5 @@
 Source: ipmctl
-Section: libs
+Section: admin
 Priority: optional
 Maintainer: Juston Li <juston.li@intel.com>
 Build-Depends: debhelper (>= 10),
@@ -15,7 +15,6 @@ Homepage: https://github.com/intel/ipmctl
 #Vcs-Browser: https://anonscm.debian.org/cgit/collab-maint/ipmctl.git
 
 Package: ipmctl
-Section: misc
 Architecture: amd64
 Depends: ${shlibs:Depends},
          ${misc:Depends}
@@ -52,7 +51,6 @@ Description: Development files for libipmctl
  with the libipmctl library and manage PMMs.
 
 Package: ipmctl-monitor
-Section: misc
 Architecture: amd64
 Depends: ${shlibs:Depends},
          ${misc:Depends}
