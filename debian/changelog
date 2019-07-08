@@ -1,7 +1,5 @@
-ipmctl (01.00.00.3279-2) bionic; urgency=low
+ipmctl (01.00.00.3279-1) unstable; urgency=low
 
-  * Release v01.00.00.3279
-  * Remove memory corruption patch, in upstream
-  * Add asciidoctor dependency  
+  * Initial release (closes: #931643)
 
- -- Juston Li <juston.li@intel.com>  Tue, 02 Oct 2018 09:04:56 -0700
+ -- Adam Borowski <kilobyte@angband.pl>  Mon, 08 Jul 2019 18:39:15 +0200
