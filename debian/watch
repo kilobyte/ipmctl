@@ -1,2 +1,4 @@
-# You must remove unused comment lines for the released package.
-version=3
+version=4
+opts="filenamemangle=s%(?:.*?)?v?(\d[\d.]*)\.tar\.gz%ipmctl-$1.tar.gz%" \
+   https://github.com/intel/ipmctl/tags \
+   (?:.*?/)?v?(\d[\d.]*)\.tar\.gz debian uupdate
