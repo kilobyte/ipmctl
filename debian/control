@@ -2,7 +2,7 @@ Source: ipmctl
 Section: admin
 Priority: optional
 Maintainer: Adam Borowski <kilobyte@angband.pl>
-Build-Depends: debhelper (>= 10),
+Build-Depends: debhelper-compat (= 12),
                cmake (>=2.8.12),
                libndctl-dev(>=58.2),
                pkg-config,
