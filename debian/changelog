@@ -2,4 +2,4 @@ ipmctl (02.00.00.3474+ds-1) unstable; urgency=low
 
   * Initial release (closes: #931643)
 
- -- Adam Borowski <kilobyte@angband.pl>  Mon, 08 Jul 2019 18:52:44 +0200
+ -- Adam Borowski <kilobyte@angband.pl>  Mon, 08 Jul 2019 19:52:35 +0200
