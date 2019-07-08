@@ -6,7 +6,7 @@ Build-Depends: debhelper-compat (= 12),
                cmake,
                libndctl-dev,
                pkg-config,
-               python,
+               python3,
                libsafec-dev,
                asciidoctor
 Standards-Version: 4.1.2
