@@ -1,14 +1,8 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Files-Excluded: BaseTools
 
-All files in this package, except for MIT-licensed Brotli, are licensed
-under the BSD license, either the 2-clause or 3-clause variant, with an
-unholy mix between individual files, sometimes within a single file, or
-often just "the BSD License which accompanies this distribution" without
-specifying _which_ BSD license.  Yet despite this tangle, there is no
-suspiction anything remains unlicensed.
-
-Copyright holders include:
+Files: *
+Copyright:
  2007-2018 Intel Corporation
  2012-2016 Hewlett Packard Enterprise Development LP
  2010-2016 Linaro Ltd
@@ -23,9 +17,12 @@ Copyright holders include:
  2016 Silicon Graphics, Inc
  2015, The Linux Foundation
  1996-1998 John D. Polstra
-
-License: BSD-2
-Redistribution and use in source and binary forms, with or without
+Comment: There's an unholy mix of versions of BSD, with often no real way
+ to tell which version applies to which file.
+License: BSD-2-or-BSD-3
+ ====== BSD 2 ======
+ .
+ Redistribution and use in source and binary forms, with or without
  modification, are permitted provided that the following conditions
   are met:
  .
@@ -48,8 +45,9 @@ Redistribution and use in source and binary forms, with or without
  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  POSSIBILITY OF SUCH DAMAGE.
-
-License: BSD-3
+ .
+ ====== BSD 3 ======
+ .
  Redistribution and use in source and binary forms, with or without
  modification, are permitted provided that the following conditions are met:
  .
