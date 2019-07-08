@@ -17,8 +17,7 @@ Homepage: https://github.com/intel/ipmctl
 Package: ipmctl
 Section: misc
 Architecture: amd64
-Depends: libipmctl2 (=${binary:Version}),
-         ${shlibs:Depends},
+Depends: ${shlibs:Depends},
          ${misc:Depends}
 Description: Utility for configuring and managing Intel Optane DC persistent memory modules (PMM).  
  This package provides a CLI with the following functionality:
@@ -32,9 +31,7 @@ Description: Utility for configuring and managing Intel Optane DC persistent mem
 Package: libipmctl2
 Section: libs
 Architecture: amd64
-Depends: libndctl6 (>= 58.2),
-         libsafec3,
-         ${shlibs:Depends},
+Depends: ${shlibs:Depends},
          ${misc:Depends}
 Description: Library for managing Intel Optance DC persistent memory modules (PMM).
  This package provides an API for the following functionality:
@@ -57,7 +54,6 @@ Description: Development files for libipmctl
 Package: ipmctl-monitor
 Section: misc
 Architecture: amd64
-Depends: libipmctl2 (=${binary:Version}),
-         ${shlibs:Depends},
+Depends: ${shlibs:Depends},
          ${misc:Depends}
 Description: A monitor daemon/system service for monitoring the health and status of PMMs
