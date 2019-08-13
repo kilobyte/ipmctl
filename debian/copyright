@@ -19,7 +19,7 @@ Copyright:
  1996-1998 John D. Polstra
 Comment: There's an unholy mix of versions of BSD, with often no real way
  to tell which version applies to which file.
-License: BSD-2-or-BSD-3
+License: BSD-2-clause and BSD-3-clause
  ====== BSD 2 ======
  .
  Redistribution and use in source and binary forms, with or without
