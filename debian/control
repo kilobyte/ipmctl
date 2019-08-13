@@ -42,7 +42,9 @@ Description: library for managing Intel Optane DC persistent memory modules
   * Configure data-at-rest security on PMMs.
   * Monitor PMM health.
   * Track performance of PMMs.
-  * Debug and troubleshoot PMMs.
+  * Debug and troubleshoot PMMs
+ .
+ This package contains runtime library and common conf files.
 
 Package: libipmctl-dev
 Section: libdevel
