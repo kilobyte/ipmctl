@@ -1,0 +1,75 @@
+Source: ipmctl
+Section: admin
+Priority: optional
+Maintainer: Adam Borowski <kilobyte@angband.pl>
+Build-Depends: debhelper-compat (= 12),
+               cmake,
+               libndctl-dev,
+               pkg-config,
+               python3,
+               libsafec-dev,
+               asciidoctor
+Standards-Version: 4.4.0
+Homepage: https://github.com/intel/ipmctl
+Vcs-Browser: https://github.com/kilobyte/ipmctl/tree/debian
+Vcs-Git: https://github.com/kilobyte/ipmctl -b debian
+
+Package: ipmctl
+Architecture: amd64
+Depends: ${shlibs:Depends},
+         ${misc:Depends}
+Description: utility for configuring and managing Intel Optane DC persistent memory modules
+ This package provides a CLI with the following functionality:
+  * Discover PMMs on the platform.
+  * Provision the platform memory configuration.
+  * View and update the firmware on PMMs.
+  * Configure data-at-rest security on PMMs.
+  * Monitor PMM health.
+  * Track performance of PMMs.
+  * Debug and troubleshoot PMMs.
+
+Package: libipmctl3
+Section: libs
+Architecture: amd64
+Multi-Arch: same
+Depends: ${shlibs:Depends},
+         ${misc:Depends}
+Description: library for managing Intel Optane DC persistent memory modules
+ This package provides an API for the following functionality:
+  * Discover PMMs on the platform.
+  * Provision the platform memory configuration.
+  * View and update the firmware on PMMs.
+  * Configure data-at-rest security on PMMs.
+  * Monitor PMM health.
+  * Track performance of PMMs.
+  * Debug and troubleshoot PMMs
+ .
+ This package contains runtime library and common conf files.
+
+Package: libipmctl-dev
+Section: libdevel
+Architecture: amd64
+Multi-Arch: same
+Depends: libipmctl3 (=${binary:Version}),
+         ${misc:Depends}
+Description: library for managing Intel Optane DC persistent memory modules - devel
+ This package provides an API for the following functionality:
+  * Discover PMMs on the platform.
+  * Provision the platform memory configuration.
+  * View and update the firmware on PMMs.
+  * Configure data-at-rest security on PMMs.
+  * Monitor PMM health.
+  * Track performance of PMMs.
+  * Debug and troubleshoot PMMs.
+ .
+ This package contains C development headers.
+
+Package: ipmctl-monitor
+Architecture: amd64
+Pre-Depends: ${misc:Pre-Depends}
+Depends: ${shlibs:Depends},
+         ${misc:Depends}
+Description: daemon for monitoring health and status of Intel Optane DC modules
+ This is a daemon which watches and logs events related to Optane DC
+ NVDIMMs, such as media errors, thermal issues, losing or regaining contact
+ with the memory controller, etc.
