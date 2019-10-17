@@ -9,7 +9,7 @@ Build-Depends: debhelper-compat (= 12),
                python3,
                libsafec-dev,
                asciidoctor
-Standards-Version: 4.4.0
+Standards-Version: 4.4.1
 Homepage: https://github.com/intel/ipmctl
 Vcs-Browser: https://github.com/kilobyte/ipmctl/tree/debian_1_0
 Vcs-Git: https://github.com/kilobyte/ipmctl -b debian_1_0
