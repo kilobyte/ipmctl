@@ -1,3 +1,9 @@
+ipmctl (02.00.00.3474+really01.00.00.3481-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Fri, 18 Oct 2019 01:54:09 +0200
+
 ipmctl (02.00.00.3474+really01.00.00.3469-1) unstable; urgency=medium
 
   * Downgrade to the stable branch (v2 releases are still alpha).
