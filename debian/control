@@ -62,13 +62,3 @@ Description: library for managing Intel Optane DC persistent memory modules - de
   * Debug and troubleshoot PMMs.
  .
  This package contains C development headers.
-
-Package: ipmctl-monitor
-Architecture: amd64
-Pre-Depends: ${misc:Pre-Depends}
-Depends: ${shlibs:Depends},
-         ${misc:Depends}
-Description: daemon for monitoring health and status of Intel Optane DC modules
- This is a daemon which watches and logs events related to Optane DC
- NVDIMMs, such as media errors, thermal issues, losing or regaining contact
- with the memory controller, etc.

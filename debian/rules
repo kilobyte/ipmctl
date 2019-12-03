@@ -11,11 +11,6 @@ override_dh_auto_configure:
 	dh_auto_configure -- \
 	      -DBUILDNUM=`dpkg-parsechangelog -SVersion|cut -d+ -f1`
 
-override_dh_install:
-	mkdir -p debian/tmp/usr/sbin
-	mv debian/tmp/usr/bin/ipmctl-monitor debian/tmp/usr/sbin/ipmctl-monitor
-	dh_install
-
 overide_dh_clean:
 	dh_clean
 	rm -rf output
