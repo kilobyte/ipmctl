@@ -211,7 +211,7 @@ UninstallNamespaceProtocols(
 
   @retval EFI_SUCCESS if the IO operation was performed without errors.
   @retval Other return codes from functions:
-    NamespaceIoGetDpaFromNamespace, DimmRead, DimmWrite, AppDirectIo
+    DimmRead, DimmWrite, AppDirectIo
 **/
 EFI_STATUS
 IoNamespaceBlock(
@@ -220,28 +220,6 @@ IoNamespaceBlock(
      OUT CHAR8 *pBuffer,
   IN     CONST UINT32 BlockLength,
   IN     CONST BOOLEAN ReadOperation
-  );
-
-/**
-  Performs a read or write to the Storage Namespace.
-  The data is read/written from/to Dimm thru block window aperture.
-
-  @param[in] pNamespace Intel NVM Dimm Namespace to perform the IO operation.
-  @param[in] Dpa DIMM DPA where the requested block resides
-  @param[in, out] pBuffer Destination/source buffer where or from the data will be copied.
-  @param[in] Nbytes Number of bytes to read/write
-  @param[in] ReadOperation boolean value indicating what type of IO is requested.
-
-  @retval EFI_SUCCESS If the IO operation was performed without errors.
-  @retval EFI_INVALID_PARAMETER Input parameter is NULL
-**/
-EFI_STATUS
-StorageIo(
-  IN     NAMESPACE *pNamespace,
-  IN     UINT64 Dpa,
-  IN OUT CHAR8 *pBuffer,
-  IN     UINT64 Nbytes,
-  IN     BOOLEAN ReadOperation
   );
 
 /**
@@ -282,7 +260,7 @@ AppDirectIo(
   @retval EFI_INVALID_PARAMETER if pNamespace and/or pBuffer equals NULL.
   @retval EFI_BAD_BUFFER_SIZE if Offset and/or BufferLength are not aligned to the cache line size.
   @retval Other return codes from functions:
-    NamespaceIoGetDpaFromNamespaceForByteIo, DimmRead, DimmWrite, AppDirectIo
+    DimmRead, DimmWrite, AppDirectIo
 **/
 EFI_STATUS
 IoNamespaceBytes(
@@ -531,7 +509,14 @@ determines whether App Direct Type or not
 BOOLEAN
 IsNameSpaceTypeAppDirect(IN NAMESPACE_LABEL *pNamespaceLabel, IN BOOLEAN Is_Namespace1_1
 );
+/*
+  Checks if Lsa status of Dimms is not initalized
+  for all manageable dimms
 
+  @retval TRUE - if all manageable dimms have
+                 lsaStatus set to LSA_NOT_INIT
+*/
+BOOLEAN IsLSANotInitializedOnDimms();
 /**
   Initializes Namespaces inventory
 
@@ -623,34 +608,10 @@ InitializeLabelStorageArea(
 EFI_STATUS
 InitializeAllLabelStorageAreas(
   IN     DIMM **ppDimms,
-  IN	 UINT32 DimmsNum,
+  IN     UINT32 DimmsNum,
   IN     UINT16 LabelVersionMajor,
   IN     UINT16 LabelVersionMinor,
      OUT COMMAND_STATUS *pCommandStatus
-  );
-
-/**
-  The function sums up the available block capacity on a DIMM and returns it.
-
-  The function takes the block size under consideration (returning lower values if non-aligned block size is used).
-
-  @param[in] pDimm pointer to the target DIMM that the size should be returned for.
-  @param[in] BlockSize the block size that will be used for the returned size.
-  @param[in] PersistentMemType Persistent memory type of pool, that region will be used to create Namespace
-  @param[out] AvailableCapacity pointer to a 64-bit value, where the result capacity will be stored.
-
-  @retval EFI_SUCCESS everything went fine
-  @retval EFI_OUT_OF_RESOURCES when memory allocation fails
-  Other return codes from functions:
-    GetDimmFreemap
-    GetRealRawSizeAndRealBlockSize
-**/
-EFI_STATUS
-GetMaximumBlockNamespaceSize(
-  IN     DIMM *pDimm,
-  IN     UINT32 BlockSize,
-  IN     UINT8 PersistentMemType,
-     OUT UINT64 *pAvailableCapacity
   );
 
 /**
@@ -996,41 +957,6 @@ CalculateISetCookieVer1_1(
 EFI_STATUS
 FindAndAssignISForNamespace(
   IN OUT NAMESPACE *pNamespace
-  );
-
-/**
-  Validate data for Create Namespace
-
-  @param[in] RegionId the ID of the pool that the Namespace is supposed to be created.
-  @param[in] NamespaceType Type of the namespace to be created (Storage or AppDirect).
-  @param[in] PersistentMemType Persistent memory type of pool, that region will be used to create Namespace
-  @param[in] DimmId the PID of the Dimm that the Block Namespace is supposed to be created.
-  @param[in] BlockSize the size of each of the block in the device.
-  @param[in] BlockCount the amount of block that this namespace should consist
-  @param[in] EraseCapable Target DIMM SKU must allow for Secure Erase
-  @param[in] Encryption Target DIMM must have Security enabled
-  @param[out] ppSpecifiedRegion Output variable for Region
-  @param[out] pDimms Output variable for Dimms
-  @param[out] pDimmsNum Output variable for number of Dimms
-  @param[out] pCommandStatus Structure containing detailed NVM error codes
-
-  @retval EFI_SUCCESS           Success
-  @retval EFI_INVALID_PARAMETER Input parameter is NULL
-  @retval EFI_UNSUPPORTED       Requested mode is not supported by platform
-  @retval EFI_LOAD_ERROR        Couldn't retrieve platform PCAT (ACPI) tables
-  @retval EFI_ACCESS_DENIED     Invalid security state
-  @retval EFI_ABORTED           Namespace name is used already
-  @retval EFI_NOT_FOUND         Target with specified criteria has not been found
-**/
-EFI_STATUS
-CreateNamespaceValidateData(
-  IN     UINT16 RegionId,
-  IN     UINT16 DimmPid,
-  IN     UINT32 BlockSize,
-  IN     UINT64 BlockCount,
-     OUT NVM_REGION **ppSpecifiedRegion,
-     OUT DIMM *pDimms[MAX_DIMMS_PER_SOCKET],
-     OUT COMMAND_STATUS *pCommandStatus
   );
 
 /**

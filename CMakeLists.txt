@@ -11,8 +11,8 @@ get_filename_component(ROOT ./ ABSOLUTE)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake/Find")
 
-set(LIBIPMCTL_VERSION_MAJOR 3)
-set(LIBIPMCTL_VERSION_MINOR 1)
+set(LIBIPMCTL_VERSION_MAJOR 4)
+set(LIBIPMCTL_VERSION_MINOR 0)
 set(LIBIPMCTL_VERSION_PATCH 0)
 set(LIBIPMCTL_VERSION_STRING ${LIBIPMCTL_VERSION_MAJOR}.${LIBIPMCTL_VERSION_MINOR}.${LIBIPMCTL_VERSION_PATCH})
 
@@ -21,7 +21,7 @@ set(IPMCTL_VERSION_MINOR 00)
 set(IPMCTL_VERSION_PATCH 00)
 
 set(IPMCTL_SPEC_VERSION_MAJOR 2)
-set(IPMCTL_SPEC_VERSION_MINOR 0)
+set(IPMCTL_SPEC_VERSION_MINOR 02)
 set(IPMCTL_DRAFT "-draft")
 set(IPMCTL_SPEC_VERSION_STRING ${IPMCTL_SPEC_VERSION_MAJOR}.${IPMCTL_SPEC_VERSION_MINOR}${IPMCTL_DRAFT})
 
@@ -30,7 +30,7 @@ if(BUILDNUM)
 else()
 	find_package(Git)
 	if(GIT_FOUND)
-		execute_process(COMMAND ${GIT_EXECUTABLE} describe --dirty
+		execute_process(COMMAND ${GIT_EXECUTABLE} describe --tag --dirty
 			OUTPUT_VARIABLE IPMCTL_VERSION_STRING
 			RESULT_VARIABLE GIT_RETURN_CODE
 			)
@@ -83,14 +83,13 @@ elseif(UNIX)
 	find_package(asciidoc)
 	pkg_check_modules(NDCTL REQUIRED libndctl>=58.2)
 	pkg_check_modules(SYSTEMD systemd)
-if(NOT SAFECLIB_SRC_DOWNLOAD_AND_STATIC_LINK)
-	pkg_check_modules(LIBSAFEC REQUIRED libsafec>=03032018.0-g570fa5)
-endif()
 elseif(MSVC)
 	set(WIN_BUILD 1)
 	set(OS_TYPE win)
 	set(FILE_PREFIX win)
 	find_package(PythonInterp REQUIRED)
+	find_package(asciidoctor)
+	find_package(asciidoc)
 endif()
 
 message(BUILD_TYPE: ${CMAKE_BUILD_TYPE})
@@ -151,10 +150,28 @@ elseif(MSVC)
 endif()
 
 if(LNX_BUILD)
+	if("${CMAKE_INSTALL_DATAROOTDIR}" STREQUAL "/usr/share")
+		# Workaround for the RPM build cause the %{_datarootdir} is already prefixed
+		set(INI_INSTALL_FILEPATH "${CMAKE_INSTALL_DATAROOTDIR}")
+	else()
+		if("${CMAKE_INSTALL_PREFIX}" STREQUAL "/")
+			# In case the CMAKE_INSTALL_PREFIX equals "/" for <dir> other than the SYSCONFDIR and LOCALSTATEDIR,
+			# the value of CMAKE_INSTALL_<dir> is prefixed with usr/ if it is not user-specified as an absolute path.
+			set(CMAKE_INSTALL_PREFIX "/usr")
+			message("CMAKE_INSTALL_PREFIX value changed to: ${CMAKE_INSTALL_PREFIX}")
+		endif()
+		if(NOT DEFINED CMAKE_INSTALL_DATAROOTDIR)
+			set(CMAKE_INSTALL_DATAROOTDIR "share")
+			message("CMAKE_INSTALL_DATAROOTDIR not defined. Creating a new definition with value: ${CMAKE_INSTALL_DATAROOTDIR}")
+		endif()
+		set(INI_INSTALL_FILEPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATAROOTDIR}")
+	endif()
+	message("INI_INSTALL_FILEPATH definition create with value: ${INI_INSTALL_FILEPATH}")
 	add_definitions(
 		-D_GNU_SOURCE
 		-D__LINUX__
 		-DHAVE_C99
+		-DINI_INSTALL_FILEPATH="${INI_INSTALL_FILEPATH}/ipmctl/"
 		)
 	if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER 4.9)
 		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong")
@@ -192,25 +209,25 @@ endif()
 
 if(MSVC)
 	FILE(GLOB OS_INTERFACE_SOURCE_FILES
+		src/os/os_str.c
 		src/os/os_common.c
 		src/os/win/win_scm2_ioctl.c
 		src/os/win/win_scm2_passthrough.c
 		src/os/win/win_scm2_ioctl_passthrough.c
 		src/os/win/win_common.c
 		src/os/win/win_api.c
-		src/os/win/win_adapter_acpi_events.c
 		src/os/win/win_scm2_adapter.c
 		src/os/win/win_system.c
 		)
 elseif(UNIX)
 	FILE(GLOB OS_INTERFACE_SOURCE_FILES
+		src/os/os_str.c
 		src/os/os_common.c
 		src/os/${OS_TYPE}/${FILE_PREFIX}_adapter_passthrough.c
 		src/os/${OS_TYPE}/${FILE_PREFIX}_acpi.c
 		src/os/${OS_TYPE}/${FILE_PREFIX}_common.c
 		src/os/${OS_TYPE}/${FILE_PREFIX}_api.c
 		src/os/${OS_TYPE}/${FILE_PREFIX}_adapter.c
-		src/os/${OS_TYPE}/${FILE_PREFIX}_adapter_acpi_events.c
 		src/os/${OS_TYPE}/${FILE_PREFIX}_system.c
 		)
 endif()
@@ -221,19 +238,12 @@ target_link_libraries(ipmctl_os_interface
 	${CMAKE_THREAD_LIBS_INIT}
 	)
 
-if(LNX_BUILD AND (NOT SAFECLIB_SRC_DOWNLOAD_AND_STATIC_LINK))
-	target_link_libraries(ipmctl_os_interface
-		${LIBSAFEC_LIBRARIES}
-		)
-endif()
-
 target_include_directories(ipmctl_os_interface PUBLIC
 	src/os
 	src/os/${OS_TYPE}
 	DcpmPkg/common
 	src/os/nvm_api
 	src/os/s_string
-	${LIBSAFEC_INCLUDE_DIRS}
 	)
 # TODO: Remove the backup winioctl.h file when the 17650+ Windows SDK is publicly released
 if (MSVC)
@@ -282,6 +292,7 @@ file(GLOB LIBIPMCTL_SOURCE_FILES
 	DcpmPkg/cli/ShowGoalCommand.c
 	DcpmPkg/cli/DeleteGoalCommand.c
 	DcpmPkg/cli/ShowErrorCommand.c
+	DcpmPkg/cli/ShowCelCommand.c
 	DcpmPkg/cli/DumpDebugCommand.c
 	DcpmPkg/cli/StartDiagnosticCommand.c
 	DcpmPkg/cli/ShowPreferencesCommand.c
@@ -296,8 +307,6 @@ file(GLOB LIBIPMCTL_SOURCE_FILES
 	src/os/cli_cmds/DumpSupportCommand.c
 	DcpmPkg/cli/ShowRegisterCommand.c
 	DcpmPkg/cli/StartFormatCommand.c
-	DcpmPkg/cli/ShowEventCommand.c
-	DcpmPkg/cli/SetEventCommand.c
 	DcpmPkg/cli/ShowPerformanceCommand.c
 	DcpmPkg/cli/ShowHostServerCommand.c
 	DcpmPkg/cli/ShowCmdAccessPolicyCommand.c
@@ -375,12 +384,6 @@ list(APPEND LIBIPMCTL_SOURCE_FILES
 	src/os/efi_shim/${FILE_PREFIX}_efi_api.c
 	)
 
-if(NOT MSVC)
-	list(APPEND LIBIPMCTL_SOURCE_FILES
-	MdePkg/Library/UefiMemoryAllocationLib/AllocTracer.c
-	)
-endif()
-
 add_library(ipmctl ${LIB_TYPE} ${LIBIPMCTL_SOURCE_FILES})
 
 target_include_directories(ipmctl PUBLIC
@@ -413,8 +416,7 @@ target_include_directories(ipmctl PUBLIC
 	MdeModulePkg
 	MdeModulePkg/Include
 	MdeModulePkg/Include/Library
-	${LIBSAFEC_INCLUDE_DIRS}
-        )
+	)
 
 if(MSVC)
 	set_target_properties(ipmctl PROPERTIES PREFIX "lib")
@@ -432,7 +434,7 @@ if(MSVC)
 else()
 	target_compile_options(ipmctl PRIVATE
 		-include AutoGen.h
-		)
+	)
 endif()
 
 add_dependencies(ipmctl
@@ -473,14 +475,13 @@ target_include_directories(ipmctl-bin PUBLIC
 	src/os
 	src/os/nvm_api
 	src/os/ini
-	${LIBSAFEC_INCLUDE_DIRS}
 	)
 
 set_target_properties(ipmctl-bin
 	PROPERTIES OUTPUT_NAME ipmctl
 	)
 
-if (ASCIIDOCTOR_FOUND OR A2X_FOUND)
+if ((ASCIIDOCTOR_FOUND OR A2X_FOUND) AND LNX_BUILD)
 	add_dependencies(ipmctl-bin
 		manpage
 		)
@@ -491,57 +492,6 @@ if(MSVC)
 else()
 	target_compile_options(ipmctl-bin PRIVATE "-fPIE")
     set_target_properties(ipmctl-bin PROPERTIES LINK_FLAGS "-pie")
-endif()
-
-#---------------------------------------------------------------------------------------------------
-# Monitor service executable
-#---------------------------------------------------------------------------------------------------
-if (NOT ESX_BUILD)
-	FILE(GLOB IPMCTL_MONITOR_SOURCE_FILES
-		src/os/monitor/NvmMonitorBase.cpp
-		src/os/monitor/PerformanceMonitor.cpp
-		src/os/monitor/EventMonitor.cpp
-		src/os/monitor/AcpiEventMonitor.cpp
-		)
-
-	if(MSVC)
-		list(APPEND IPMCTL_MONITOR_SOURCE_FILES
-			src/os/monitor/win_main.cpp
-			src/os/monitor/win_service.cpp
-			)
-	else()
-		list(APPEND IPMCTL_MONITOR_SOURCE_FILES
-			src/os/monitor/lnx_main.cpp
-			)
-	endif()
-
-	add_executable(ipmctl-monitor ${IPMCTL_MONITOR_SOURCE_FILES})
-
-if(NOT SAFECLIB_SRC_DOWNLOAD_AND_STATIC_LINK)
-	target_link_libraries(ipmctl-monitor
-		ipmctl
-		${LIBSAFEC_LIBRARIES}
-		)
-else()
-	target_link_libraries(ipmctl-monitor
-		ipmctl
-		)
-endif()
-
-
-	target_include_directories(ipmctl-monitor PUBLIC
-		src/os
-		src/os/nvm_api
-		src/os/ini
-		DcpmPkg/common
-		${LIBSAFEC_INCLUDE_DIRS}
-		)
-
-if(UNIX)
-        target_compile_options(ipmctl-monitor PRIVATE "-fPIE")
-        set_target_properties(ipmctl-monitor PROPERTIES LINK_FLAGS "-pie")
-endif()
-
 endif()
 
 #----------------------------------------------------------------------------------------------------
@@ -599,9 +549,9 @@ FILE(GLOB NVM_HEADERS
 	)
 
 FILE(COPY ${NVM_HEADERS}
-       DESTINATION ${OUTPUT_DIR})
+	DESTINATION ${OUTPUT_DIR})
 
-FILE(COPY install/linux/logrotate/ipmctl.conf
+FILE(COPY install/linux/logrotate/ipmctl.logrotate.conf
 	DESTINATION ${OUTPUT_DIR})
 
 if(LNX_BUILD)
@@ -612,24 +562,12 @@ if(LNX_BUILD)
 
 	configure_file(${ROOT}/install/linux/libipmctl.pc.in ${OUTPUT_DIR}/libipmctl.pc @ONLY)
 
-	if(DEFINED INSTALL_UNITDIR)
-		set(INSTALL_SYSTEMDSYSTEMUNITDIR ${INSTALL_UNITDIR})
-	else()
-		if(SYSTEMD_FOUND)
-			if(CMAKE_VERSION VERSION_LESS 3.4.3)
-				set(INSTALL_SYSTEMDSYSTEMUNITDIR "/usr/lib/systemd/system")
-			else()
-				pkg_get_variable(INSTALL_SYSTEMDSYSTEMUNITDIR systemd systemdsystemunitdir)
-			endif()
-		endif()
-	endif()
-
 	if(BUILD_STATIC)
-		install(TARGETS ipmctl-bin ipmctl-monitor
+		install(TARGETS ipmctl-bin
 			RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 			)
 	else()
-		install(TARGETS ipmctl-bin ipmctl ipmctl-monitor
+		install(TARGETS ipmctl-bin ipmctl
 			RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 			LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 			)
@@ -654,15 +592,10 @@ if(LNX_BUILD)
 		DESTINATION ${CMAKE_INSTALL_LOCALSTATEDIR}/log
 		)
 
-	install(FILES ${OUTPUT_DIR}/ipmctl.conf
+	install(FILES ${OUTPUT_DIR}/ipmctl.logrotate.conf
 		DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/logrotate.d
+		RENAME ipmctl
 		)
-
-	if(DEFINED INSTALL_SYSTEMDSYSTEMUNITDIR)
-		install (FILES src/os/monitor/ipmctl-monitor.service
-			DESTINATION ${INSTALL_SYSTEMDSYSTEMUNITDIR}
-			)
-	endif()
 
 	install(FILES ${OUTPUT_DIR}/libipmctl.pc
 		DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
@@ -678,9 +611,7 @@ endif()
 #----------------------------------------------------------------------------------------------------
 # Documentation
 #----------------------------------------------------------------------------------------------------
-# add a target to generate API documentation with Doxygen
 find_package(Doxygen)
-
 
 if(DOXYGEN_FOUND)
 
@@ -701,7 +632,7 @@ endif()
 #----------------------------------------------------------------------------------------------------
 # Generate man pages with asciidoctor
 #----------------------------------------------------------------------------------------------------
-if(ASCIIDOCTOR_FOUND OR A2X_FOUND)
+if((ASCIIDOCTOR_FOUND OR A2X_FOUND) AND LNX_BUILD)
 	file(MAKE_DIRECTORY ${OUTPUT_DIR}/manpage)
 	file(MAKE_DIRECTORY ${OUTPUT_DIR}/docs)
 
@@ -725,19 +656,21 @@ if(ASCIIDOCTOR_FOUND OR A2X_FOUND)
 		${ROOT}/Documentation/ipmctl/Instrumentation/ipmctl-change-sensor.txt
 		${ROOT}/Documentation/ipmctl/Instrumentation/ipmctl-show-performance.txt
 		${ROOT}/Documentation/ipmctl/Instrumentation/ipmctl-show-sensor.txt
-		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-acknowledge-event.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-change-preferences.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-dump-support-data.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-help.txt
-		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-show-events.txt
+		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-modify-device.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-show-firmware.txt
-		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-show-host.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-show-preferences.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-update-firmware.txt
 		${ROOT}/Documentation/ipmctl/Support_and_Maintenance/ipmctl-version.txt
+		${ROOT}/Documentation/ipmctl/Debug/ipmctl-delete-pcd.txt
 		${ROOT}/Documentation/ipmctl/Debug/ipmctl-dump-debug-log.txt
 		${ROOT}/Documentation/ipmctl/Debug/ipmctl-inject-error.txt
-		${ROOT}/Documentation/ipmctl/Debug/ipmctl-run-diagnostic.txt
+		${ROOT}/Documentation/ipmctl/Debug/ipmctl-show-cap.txt
+		${ROOT}/Documentation/ipmctl/Debug/ipmctl-show-cel.txt
+		${ROOT}/Documentation/ipmctl/Debug/ipmctl-start-diagnostic.txt
+#		${ROOT}/Documentation/ipmctl/Debug/ipmctl-diagnostic-events.txt
 		${ROOT}/Documentation/ipmctl/Debug/ipmctl-show-acpi.txt
 		${ROOT}/Documentation/ipmctl/Debug/ipmctl-show-error-log.txt
 		)
@@ -762,20 +695,21 @@ if(ASCIIDOCTOR_FOUND OR A2X_FOUND)
 		${OUTPUT_DIR}/manpage/ipmctl-change-sensor.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-performance.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-sensor.1.gz
-		${OUTPUT_DIR}/manpage/ipmctl-acknowledge-event.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-change-preferences.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-dump-support-data.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-help.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-modify-device.1.gz
-		${OUTPUT_DIR}/manpage/ipmctl-show-events.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-firmware.1.gz
-		${OUTPUT_DIR}/manpage/ipmctl-show-host.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-preferences.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-update-firmware.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-version.1.gz
+		${OUTPUT_DIR}/manpage/ipmctl-delete-pcd.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-dump-debug-log.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-inject-error.1.gz
-		${OUTPUT_DIR}/manpage/ipmctl-run-diagnostic.1.gz
+		${OUTPUT_DIR}/manpage/ipmctl-show-cap.1.gz
+		${OUTPUT_DIR}/manpage/ipmctl-show-cel.1.gz
+		${OUTPUT_DIR}/manpage/ipmctl-start-diagnostic.1.gz
+#		${OUTPUT_DIR}/manpage/ipmctl-diagnostic-events.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-acpi.1.gz
 		${OUTPUT_DIR}/manpage/ipmctl-show-error-log.1.gz
 		)
@@ -797,8 +731,10 @@ if(ASCIIDOCTOR_FOUND OR A2X_FOUND)
 			list(GET DOCUMENTATION_INPUT_FILES ${INDEX} MAN_INPUT)
 			list(GET MANPAGE_OUTPUT_FILES ${INDEX} MAN_OUTPUT)
 			string(REGEX REPLACE "\\.[^.]*$" "" MAN_GZ_INPUT ${MAN_OUTPUT})
+			string(REGEX REPLACE "1.gz$" "tmp.txt" MAN_TMP_INPUT ${MAN_OUTPUT})
 			add_custom_command(OUTPUT ${MAN_OUTPUT}
-				COMMAND ${A2X_BINARIES} -f manpage -a mansource=ipmctl -a manmanual="ipmctl" -a ipmctl_version=${IPMCTL_VERSION_STRING} -a os_build=1 -a manpage=1 -D ${OUTPUT_DIR}/manpage ${MAN_INPUT} 
+				COMMAND sed -e 's/<</\\[/g' -e 's/>>/]/g' ${MAN_INPUT} > ${MAN_TMP_INPUT}
+				COMMAND ${A2X_BINARIES} -f manpage -a mansource=ipmctl -a manmanual="ipmctl" -a ipmctl_version=${IPMCTL_VERSION_STRING} -a os_build=1 -a manpage=1 -D ${OUTPUT_DIR}/manpage ${MAN_TMP_INPUT} 
 				COMMAND gzip -f ${MAN_GZ_INPUT}
 				COMMENT "Generating man pages"
 				DEPENDS ${MAN_INPUT}
@@ -816,6 +752,6 @@ endif()
 
 if(ESX_BUILD)
 	include(CMake/esx.cmake)
-elseif(UNIX AND SAFECLIB_SRC_DOWNLOAD_AND_STATIC_LINK)
-	include(CMake/safeclib.cmake)
 endif()
+
+add_subdirectory(src/os/nvm_api_sample)

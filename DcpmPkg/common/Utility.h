@@ -13,9 +13,10 @@
 #include <Protocol/SimpleFileSystem.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include "NvmHealth.h"
-
+#include <Library/SerialPortLib.h>
 #ifdef OS_BUILD
 #include <os_efi_preferences.h>
+#include <os_str.h>
 #endif
 
 #ifdef _MSC_VER
@@ -41,8 +42,8 @@ typedef union {
 } CONFIG_PROTOCOL_VERSION;
 
 /** Minimum supported version of FW API: 1.2 **/
-#define DEV_FW_API_VERSION_MAJOR_MIN   1
-#define DEV_FW_API_VERSION_MINOR_MIN   2
+#define MIN_FIS_SUPPORTED_BY_THIS_SW_MAJOR   1
+#define MIN_FIS_SUPPORTED_BY_THIS_SW_MINOR   2
 
 #define SPD_INTEL_VENDOR_ID 0x8980
 #define SPD_DEVICE_ID 0x0000
@@ -64,20 +65,21 @@ typedef union {
 
 #define CONTROLLER_STEPPING_UNKNOWN_STR L"Unknown stepping"
 
-#define MAX_CONFIG_DUMP_FILE_SIZE MIB_TO_BYTES(1)
+#define MAX_CONFIG_DUMP_FILE_SIZE OUT_MB_SIZE
 
 #define MAX_LINE_CHAR_LENGTH 400
 #define MAX_LINE_BYTE_LENGTH (MAX_LINE_CHAR_LENGTH * sizeof(CHAR8))
 
 #define COUNT_TO_INDEX_OFFSET 1
 #define FIRST_CHAR_INDEX 0
+#define TWOLM_NMFM_RATIO_LOWER 4
+#define TWOLM_NMFM_RATIO_UPPER 16
 
 #define UTF_16_BOM L'\xFEFF'
 
 #define SKU_MEMORY_MODE_FLAG      (BIT0)
-#define SKU_STORAGE_MODE_FLAG     (BIT1)
 #define SKU_APP_DIRECT_MODE_FLAG  (BIT2)
-#define SKU_MODES_MASK  (SKU_MEMORY_MODE_FLAG | SKU_STORAGE_MODE_FLAG | SKU_APP_DIRECT_MODE_FLAG)
+#define SKU_MODES_MASK  (SKU_MEMORY_MODE_FLAG | SKU_APP_DIRECT_MODE_FLAG)
 
 #define SKU_ENCRYPTION_MASK                  (BIT17)
 
@@ -111,6 +113,7 @@ typedef union {
 #define LAST_SHUTDOWN_STATUS_S4_POWER_STATE_STR                  L"PM S4 Received"
 #define LAST_SHUTDOWN_STATUS_PM_IDLE_STR                         L"PM Idle Received"
 #define LAST_SHUTDOWN_STATUS_SURPRISE_RESET_STR                  L"DDRT Surprise Reset Received"
+#define LAST_SHUTDOWN_STATUS_ENHANCED_ADR_FLUSH_COMPLETE_STR     L"Extended Flush Complete"
 
 // Memory modes supported string values
 #define MODES_SUPPORTED_MEMORY_MODE_STR      L"Memory Mode"
@@ -175,7 +178,6 @@ typedef union {
 
 // Interface Format Code
 #define FORMAT_CODE_APP_DIRECT_STR  L"(Non-Energy Backed Byte Addressable)"
-#define FORMAT_CODE_STORAGE_STR     L"(Non-Energy Backed Block Addressable)"
 
 
 
@@ -324,6 +326,11 @@ typedef union {
 #define LIST_FOR_UNTIL_INDEX(Entry, ListHead, Index, Iterator) \
   for (Entry = (ListHead)->ForwardLink, Iterator = 0; Entry != (ListHead) && Iterator < Index; Entry = Entry->ForwardLink, Iterator++)
 /**
+  Iterates over list entries in forward direction and counts the no of elements in list
+**/
+#define LIST_COUNT(Entry, ListHead, Count) \
+  for (Entry = (ListHead)->ForwardLink, Count = 0;Entry != (ListHead); Entry = Entry->ForwardLink, Count++)
+/**
   The maximum buffer size for the Print function.
   This value depends on the UDK, it may change with a new version.
 **/
@@ -337,6 +344,15 @@ typedef union {
 
 // Helper macros to streamline the reading of code
 // NVDIMM_ERR will print out the line number, so no need to be specific
+#define CHECK_RETURN_CODE(ReturnCode, Label)                  \
+  do {                                                        \
+    if (EFI_ERROR(ReturnCode)) {                              \
+      NVDIMM_ERR("Failure on function: %d", ReturnCode);   \
+      goto Label;                                             \
+    }                                                         \
+  } while (0)
+
+// Return if failure
 #define CHECK_RESULT(Call, Label)                             \
   do {                                                        \
     ReturnCode = Call;                                        \
@@ -346,11 +362,21 @@ typedef union {
     }                                                         \
   } while (0)
 
+// Return if success
+#define CHECK_RESULT_SUCCESS(Call, Label)                                 \
+  do {                                                                    \
+    ReturnCode = Call;                                                    \
+    if (ReturnCode == EFI_SUCCESS) {                                      \
+      goto Label;                                                         \
+    }                                                                     \
+  } while (0)
+
+// Ignore error code, but print it out
 #define CHECK_RESULT_CONTINUE(Call)                           \
   do {                                                        \
     ReturnCode = Call;                                        \
     if (EFI_ERROR(ReturnCode)) {                              \
-      NVDIMM_ERR("Failure on function: %d", ReturnCode);   \
+      NVDIMM_ERR("Failure on function: %d", ReturnCode);      \
     }                                                         \
   } while (0)
 
@@ -364,6 +390,24 @@ typedef union {
     }                                                         \
   } while (0)
 
+#define CHECK_RESULT_FILE(Call, Label)                                    \
+  do {                                                                    \
+    ReturnCode = Call;                                                    \
+    if (EFI_ERROR(ReturnCode)) {                                          \
+      NVDIMM_ERR("Error in file operation");                              \
+      ResetCmdStatus(pCommandStatus, NVM_ERR_DUMP_FILE_OPERATION_FAILED); \
+      goto Label;                                                         \
+    }                                                                     \
+  } while (0)
+
+// Go to Label if not true
+#define CHECK_NOT_TRUE(Call, Label)                                        \
+  do {                                                                    \
+    if (TRUE != Call) {                                                   \
+      NVDIMM_ERR("Statement is not true");                                \
+      goto Label;                                                         \
+    }                                                                     \
+  } while (0)
 /**
   Get a variable from UEFI RunTime services.
 
@@ -439,6 +483,13 @@ typedef union {
 #define SET_STR_VARIABLE(VarName,VendorGuid,VarVal) preferences_set_var_string_wide(VarName,VendorGuid, VarVal)
 #endif
 
+/**
+  Removes all whitespace from before, after, and inside a passed string
+
+  @param[IN, OUT]  buffer - The string to remove whitespace from
+**/
+VOID RemoveAllWhiteSpace(
+  CHAR16* buffer);
 
 /**
   Returns the value of the environment variable with the given name.
@@ -452,6 +503,29 @@ CHAR16 *
 GetEnvVariable(
   IN     CHAR16 *pVarName
   );
+
+/**
+  Examines the system topology for the system DDR capacity and compares
+  it to the 2LM capacity to check for ratio violations
+
+  @param[IN]  pNvmDimmConfigProtocol the protocol
+  @param[IN]  pRegionConfigsInfo a pointer to the region list to examine
+  @param[IN]  RegionConfigsCount the number of REGION_GOAL_PER_DIMM_INFO elements in the list
+  @param[OUT] pIsAboveLimit the 2LM vs DDR value is above the upper recommended limit
+  @param[OUT] pIsBelowLimit the 2LM vs DDR value is below the lower recommended limit
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_INVALID_PARAMETER input parameter null
+  @retval EFI_DEVICE_ERROR failed to get the system topology
+**/
+EFI_STATUS
+CheckNmFmLimits(
+  IN    EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
+  IN    REGION_GOAL_PER_DIMM_INFO *pRegionConfigsInfo,
+  IN    UINT32  RegionConfigsCount,
+  OUT   BOOLEAN *pIsAboveLimit,
+  OUT   BOOLEAN *pIsBelowLimit
+);
 
 /**
   Checks if the Config Protocol version is right.
@@ -479,6 +553,17 @@ NamespaceTypeToString(
   IN     UINT8 Type
   );
 
+/**
+  Generates string from diagnostic output to print and frees the diagnostic structure
+
+  @param[in] Type, pointer to type structure
+
+  @retval Pointer to type string
+**/
+CHAR16 *
+DiagnosticResultToStr(
+  IN    DIAG_INFO *pResult
+);
 /**
   Generates pointer to string with value corresponding to health state
   Caller is responsible for FreePool on this pointer
@@ -771,8 +856,30 @@ ConvertHealthStateReasonToHiiStr(
 );
 
 /**
-  Converts the dimm Id to its  HII string equivalent
+  Get Dimm Info by device handle
+  Scan the dimm list for a DimmInfo identified by device handle
+
+  @param[in] DeviceHandle Device Handle of the dimm
+  @param[in] pDimmInfo Array of DimmInfo
+  @param[in] DimmCount Size of DimmInfo array
+  @param[out] ppRequestedDimmInfo Pointer to the request DimmInfo struct
+
+  @retval EFI_INVALID_PARAMETER pDimmInfo or pRequestedDimmInfo is NULL
+  @retval EFI_SUCCESS Success
+**/
+EFI_STATUS
+GetDimmInfoByHandle(
+  IN     UINT32 DeviceHandle,
+  IN     DIMM_INFO *pDimmInfo,
+  IN     UINT32 DimmCount,
+  OUT DIMM_INFO **ppRequestedDimmInfo
+  );
+
+/**
+  Converts the Dimm IDs within a region to its  HII string equivalent
   @param[in] pRegionInfo The Region info with DimmID and Dimmcount its HII string
+  @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance
+  @param[in] DimmIdentifier Dimm identifier preference
   @param[out] ppDimmIdStr A pointer to the HII DimmId string. Dynamically allocated memory and must be released by calling function.
 
   @retval EFI_OUT_OF_RESOURCES if there is no space available to allocate memory for string
@@ -780,11 +887,12 @@ ConvertHealthStateReasonToHiiStr(
   @retval EFI_SUCCESS The conversion was successful
 **/
 EFI_STATUS
-  ConvertDimmIdToDimmListStr(
-    IN     REGION_INFO *pRegionInfo,
-    OUT CHAR16 **ppDimmIdStr
+ConvertRegionDimmIdsToDimmListStr(
+  IN     REGION_INFO *pRegionInfo,
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
+  IN     UINT8 DimmIdentifier,
+  OUT CHAR16 **ppDimmIdStr
   );
-
 
 /**
   Open file handle of root directory from given path
@@ -1262,6 +1370,29 @@ SecurityToString(
   );
 
 /**
+  Retrieve the number of bits set in a number
+  Based on Brian Kernighan's Algorithm
+
+  @param[in] Number Number in which number of bits set is to be counted
+  @param[out] pNumOfBitsSet Number of bits set
+**/
+EFI_STATUS CountNumOfBitsSet(
+  IN  UINT64 Number,
+  OUT UINT8  *pNumOfBitsSet
+);
+
+/**
+  Retrieve the bitmap for NumOfChannelWays
+
+  @param[in] NumOfChannelWays Number of ChannelWays or Number of Dimms used in an Interleave Set
+  @param[out] pBitField Bitmap based on PCAT 2.0 Type 1 Table for ChannelWays
+**/
+EFI_STATUS GetBitFieldForNumOfChannelWays(
+  IN  UINT64 NumOfChannelWays,
+  OUT UINT16  *pBitField
+);
+
+/**
   Convert dimm's security state bitmask to its respective string
 
   @param[in] HiiHandle handle to the HII database that contains i18n strings
@@ -1273,6 +1404,20 @@ CHAR16*
 SecurityStateBitmaskToString(
   IN     EFI_HANDLE HiiHandle,
   IN     UINT32 SecurityStateBitmask
+);
+
+/**
+  Convert dimm's S3 Resume Opt-In to its respective string
+
+  @param[in] HiiHandle handle to the HII database that contains i18n strings
+  @param[in] SecurityOptIn, bits define dimm's security opt-in value
+
+  @retval String representation of Dimm's S3 Resume opt-in
+**/
+CHAR16*
+S3ResumeOptInToString(
+  IN     EFI_HANDLE HiiHandle,
+  IN     UINT32 OptInValue
 );
 
 /**
@@ -1705,5 +1850,28 @@ EFI_STATUS PbrDcpmmDeserializeTagId(
   UINT32 defaultId
 );
 
+/**
+Converts a DIMM_INFO_ATTRIB_X attribute to a string
+
+@param[in] pAttrib - a DIMM_INFO_ATTRIB_X attribute to convert
+@param[in] pFormatStr - optional format string to use for conversion
+**/
+CHAR16 * ConvertDimmInfoAttribToString(
+  VOID *pAttrib,
+  CHAR16* pFormatStr OPTIONAL
+);
+
+#ifndef OS_BUILD
+/**
+  Find serial attributes from SerialProtocol and set on
+  serial driver
+
+  @retval - Status of operation
+**/
+EFI_STATUS
+SetSerialAttributes(
+  VOID
+);
+#endif
 #endif /** _UTILITY_H_ **/
 

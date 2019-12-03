@@ -13,7 +13,7 @@ ipmctl-update-firmware - Updates the firmware on one or more DCPMMs
 SYNOPSIS
 --------
 [verse]
-ipmctl load [OPTIONS] -source (path) -dimm (DimmIds) [TARGETS]
+ipmctl load [OPTIONS] -source (path) -dimm [TARGETS]
 
 DESCRIPTION
 -----------
@@ -23,7 +23,7 @@ firmware will become active.
 NOTE: If Address Range Scrub (ARS) is in progress on any target DIMM,
 an attempt will be made to abort ARS and the proceed with the firmware update.
 
-NOTE: A reboot is required to activate the updated firmware image and is
+NOTE: A power cycle reboot is required to activate the updated firmware image and is
 recommended to ensure ARS runs to completion.
 
 OPTIONS
@@ -56,7 +56,8 @@ ifndef::os_build[]
 -recover::
   The recover option forces the firmware update to attempt using SMBus instead
   of DDRT. This is necessary in case the DDRT link is not trained. This update
-  method will be much slower than using the DDRT interface.
+  method will be much slower than using the DDRT interface. If this option is used
+  to downgrade the firmware then force option must be specified.
 
 -recover FlashSPI::
   The FlashSPI option is a modifier that forces an update of the entire SPI
@@ -73,7 +74,7 @@ endif::os_build[]
 
 TARGETS
 -------
--dimm (DimmIDs)::
+-dimm [DimmIDs]::
   Updates the firmware on specific DCPMMs by supplying one or more
   comma-separated DCPMM identifiers. However, this is not recommended as it may
   put the system in an undesirable state. The default is to update all
@@ -93,7 +94,11 @@ ipmctl load -examine -source sourcefile.pkg -dimm
 
 LIMITATIONS
 -----------
-The specified DCPMM(s) must be manageable by the host software.
+In order to successfully execute this command:
+
+- The caller must have the appropriate privileges.
+
+- The specified DCPMM(s) must be manageable by the host software.
 
 Firmware version (PN.RN.SV.bbbb) updates are supported as follows:
 
@@ -131,7 +136,6 @@ the CLI will indicate the status of the operation.
 [verse]
 Downgrade firmware on DIMM (DimmID)? (y or [n]) Downgrade firmware
 on DIMM (DimmID)? (y or [n])
-...
 
 If a failure occurs when updating multiple DCPMMs, the process will continue
 attempting to update the remaining DCPMMs requested. The firmware will not
@@ -142,7 +146,6 @@ and staged firmware.
 [verse]
 Load FW on DIMM (DimmID): Success, a power cycle is required to
 activate the FW.
-Load FW on DIMM (DimmID): Success, a power cycle is required to
-activate the FW.
-...
+
+[verse]
 Load FW on DIMM (DimmID): Error (Code) - (Description)

@@ -5,7 +5,6 @@
 
 #include <Library/ShellLib.h>
 #include <Library/BaseMemoryLib.h>
-#include "CommandParser.h"
 #include "Common.h"
 #include "NvmDimmCli.h"
 #include <Library/UefiShellLib/UefiShellLib.h>
@@ -40,6 +39,27 @@ CONST CHAR16 *mpChannelSize[] = {
   L"1GB"
 };
 
+typedef enum {
+  Unknown,
+  Interleave_64B,
+  Interleave_128B,
+  Interleave_256B,
+  Interleave_4KB,
+  Interleave_1GB
+} InterleaveSizeIndex;
+
+typedef enum {
+  ChannelWays_X1 = 1,
+  ChannelWays_X2 = 2,
+  ChannelWays_X3 = 3,
+  ChannelWays_X4 = 4,
+  ChannelWays_X6 = 6,
+  ChannelWays_X8 = 8,
+  ChannelWays_X12 = 12,
+  ChannelWays_X16 = 16,
+  ChannelWays_X24 = 24
+} ChannelWaysNumber;
+
 CONST CHAR16 *mpDefaultSizeStrs[DISPLAY_SIZE_MAX_SIZE] = {
   PROPERTY_VALUE_AUTO,
   PROPERTY_VALUE_AUTO10,
@@ -56,9 +76,6 @@ CONST CHAR16 *mpDefaultDimmIds[DISPLAY_DIMM_ID_MAX_SIZE] = {
   PROPERTY_VALUE_HANDLE,
   PROPERTY_VALUE_UID,
 };
-
-#define ERROR_CHECKING_MIXED_SKU    L"Error: Could not check if SKU is mixed."
-#define WARNING_DIMMS_SKU_MIXED     L"Warning: Mixed SKU detected. Driver functionalities limited.\n"
 
 /**
   Compare DimmID field in DIMM_INFO Struct
@@ -161,6 +178,13 @@ GetDimmList(
     NVDIMM_DBG("Failed to retrieve the DIMM inventory");
     goto FinishError;
   }
+
+  ReturnCode = BubbleSort((VOID*)*ppDimms, *pDimmCount, sizeof(**ppDimms), CompareDimmIdInDimmInfo);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Dimms list may not be sorted");
+    goto FinishError;
+  }
+
   goto Finish;
 
 FinishError:
@@ -172,7 +196,7 @@ Finish:
 
 
 /**
-  Retrieve a populated array and count of all DCPMMs (initialized and uninitialized)
+  Retrieve a populated array and count of all DCPMMs (functional and non-functional)
   in the system. The caller is responsible for freeing the returned array
 
   @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance.
@@ -210,7 +234,7 @@ GetAllDimmList(
   NVDIMM_ENTRY();
 
   if (pNvmDimmConfigProtocol == NULL || ppDimms == NULL || pDimmCount == NULL || pCmd == NULL ||
-      pInitializedDimmCount == NULL || pUninitializedDimmCount == NULL) {
+    pInitializedDimmCount == NULL || pUninitializedDimmCount == NULL) {
     NVDIMM_CRIT("NULL input parameter.\n");
     ReturnCode = EFI_INVALID_PARAMETER;
     goto Finish;
@@ -257,7 +281,7 @@ GetAllDimmList(
 
   if (EFI_ERROR(ReturnCode)) {
     PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
-    NVDIMM_WARN("Failed to retrieve the DIMM inventory found thru SMBUS");
+    NVDIMM_WARN("Failed to retrieve the DIMM inventory found through SMBUS");
     goto FinishError;
   }
 
@@ -657,9 +681,11 @@ Finish:
 }
 
 /**
-  Gets number of Manageable Dimms and their IDs
+  Gets number of Manageable and supported Dimms and their IDs
 
   @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance.
+  @param[in] CheckSupportedConfigDimm If true, include dimms in unmapped set of dimms (non-POR) in
+                                      returned dimm list. If false, skip these dimms from returned list.
   @param[out] DimmIdsCount  is the pointer to variable, where number of dimms will be stored.
   @param[out] ppDimmIds is the pointer to variable, where IDs of dimms will be stored.
 
@@ -671,6 +697,7 @@ Finish:
 EFI_STATUS
 GetManageableDimmsNumberAndId(
   IN  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
+  IN  BOOLEAN CheckSupportedConfigDimm,
   OUT UINT32 *pDimmIdsCount,
   OUT UINT16 **ppDimmIds
 )
@@ -690,7 +717,7 @@ GetManageableDimmsNumberAndId(
 
   ReturnCode = pNvmDimmConfigProtocol->GetDimmCount(pNvmDimmConfigProtocol, pDimmIdsCount);
   if (EFI_ERROR(ReturnCode)) {
-      NVDIMM_ERR("Error: Communication with the device driver failed.");
+    NVDIMM_ERR("Error: Communication with the device driver failed.");
     goto Finish;
   }
 
@@ -709,7 +736,9 @@ GetManageableDimmsNumberAndId(
   }
 
   for (Index = 0; Index < *pDimmIdsCount; Index++) {
-    if (pDimms[Index].ManageabilityState == MANAGEMENT_VALID_CONFIG) {
+    if ((!CheckSupportedConfigDimm && (pDimms[Index].ManageabilityState == MANAGEMENT_VALID_CONFIG))
+        ||((CheckSupportedConfigDimm && !pDimms[Index].IsInPopulationViolation)
+           && pDimms[Index].ManageabilityState == MANAGEMENT_VALID_CONFIG)){
       (*ppDimmIds)[NewListIndex] = pDimms[Index].DimmID;
       NewListIndex++;
     }
@@ -1055,8 +1084,8 @@ GetDeviceAndFilePath(
     goto Finish;
   }
 
-  // Add " .\ "(current dir) to the file path if no path is specified
-  if (!ContainsCharacter(L'\\', pUserFilePath)) {
+  // Add " .\ "(current dir) to the file path if relative path is specified
+  if (!ContainsCharacter(L':', pUserFilePath)) {
     pCurDirPath = CatSPrint(NULL, L".\\" FORMAT_STR, pUserFilePath);
   }
   else {
@@ -1154,6 +1183,9 @@ MatchCliReturnCode(
   case NVM_WARN_BLOCK_MODE_DISABLED:
   case NVM_WARN_2LM_MODE_OFF:
   case NVM_WARN_MAPPED_MEM_REDUCED_DUE_TO_CPU_SKU:
+  case NVM_WARN_REGION_MAX_PM_INTERLEAVE_SETS_EXCEEDED:
+  case NVM_WARN_REGION_AD_NI_PM_INTERLEAVE_SETS_REDUCED:
+  case NVM_WARN_GOAL_CREATION_SECURITY_UNLOCKED:
     ReturnCode = EFI_SUCCESS;
     break;
 
@@ -1171,7 +1203,6 @@ MatchCliReturnCode(
   case NVM_ERR_NONE_DIMM_FULFILLS_CRITERIA:
   case NVM_ERR_INVALID_NAMESPACE_CAPACITY:
   case NVM_ERR_NAMESPACE_TOO_SMALL_FOR_BTT:
-  case NVM_ERR_REGION_NOT_ENOUGH_SPACE_FOR_BLOCK_NAMESPACE:
   case NVM_ERR_REGION_NOT_ENOUGH_SPACE_FOR_PM_NAMESPACE:
   case NVM_ERR_RESERVE_DIMM_REQUIRES_AT_LEAST_TWO_DIMMS:
   case NVM_ERR_PERS_MEM_MUST_BE_APPLIED_TO_ALL_DIMMS:
@@ -1186,6 +1217,7 @@ MatchCliReturnCode(
 
   case NVM_ERR_DIMM_NOT_FOUND:
   case NVM_ERR_MANAGEABLE_DIMM_NOT_FOUND:
+  case NVM_ERR_NO_USABLE_DIMMS:
   case NVM_ERR_SOCKET_ID_NOT_VALID:
   case NVM_ERR_REGION_NOT_FOUND:
   case NVM_ERR_NAMESPACE_DOES_NOT_EXIST:
@@ -1205,6 +1237,7 @@ MatchCliReturnCode(
   case NVM_ERR_FORCE_REQUIRED:
   case NVM_ERR_OPERATION_FAILED:
   case NVM_ERR_DIMM_ID_DUPLICATED:
+  case NVM_ERR_SOCKET_ID_INCOMPATIBLE_W_DIMM_ID:
   case NVM_ERR_SOCKET_ID_DUPLICATED:
   case NVM_ERR_UNABLE_TO_GET_SECURITY_STATE:
   case NVM_ERR_INCONSISTENT_SECURITY_STATE:
@@ -1246,6 +1279,7 @@ MatchCliReturnCode(
     break;
 
   case NVM_ERR_OPERATION_NOT_SUPPORTED:
+  case NVM_ERR_ERROR_INJECTION_BIOS_KNOB_NOT_ENABLED:
     ReturnCode = EFI_UNSUPPORTED;
     break;
 
@@ -1559,8 +1593,9 @@ Finish:
 /**
   Prints supported or recommended appdirect settings
 
-  @param[in] pFormatList pointer to variable length interleave formats array
+  @param[in] pInterleaveFormatList pointer to variable length interleave formats array
   @param[in] FormatNum number of the appdirect settings formats
+  @param[in] pInterleaveSize pointer to Channel & iMc interleave size, if NULL refer to older revision pInterleaveFormatList
   @param[in] PrintRecommended if TRUE Recommended settings will be printed
              if FALSE Supported settings will be printed
   @param[in] Mode Set mode to print different format
@@ -1568,65 +1603,99 @@ Finish:
 **/
 CHAR16*
 PrintAppDirectSettings(
-  IN    INTERLEAVE_FORMAT *pFormatList,
+  IN    VOID *pInterleaveFormatList,
   IN    UINT16 FormatNum,
+  IN    INTERLEAVE_SIZE *pInterleaveSize,
   IN    BOOLEAN PrintRecommended,
   IN    UINT8 Mode
-)
+  )
 {
   UINT32 Index = 0;
   UINT32 Index2 = 0;
   UINT32 InterleaveWay = 0;
-  UINT32 WayNumber = 0;
-  UINT32 ImcStringIndex = 0;
-  UINT32 ChannelStringIndex = 0;
+  ChannelWaysNumber WayNumber = Unknown;
+  InterleaveSizeIndex ImcStringIndex = Unknown;
+  InterleaveSizeIndex ChannelStringIndex = Unknown;
+  UINT8 NumOfBitsSet = 0;
+  UINT8 PrevNumOfBitsSet = 0;
   BOOLEAN First = TRUE;
   CHAR16 *pTempBuffer = NULL;
+  UINT32 ChannelInterleaveSize = 0;
+  UINT32 ImcInterleaveSize = 0;
+  UINT16 NumberOfChannelWays = 0;
+  UINT32 Recommended = 0;
 
-  if (pFormatList == NULL) {
+  if (pInterleaveFormatList == NULL) {
     NVDIMM_CRIT("NULL input parameter.\n");
     return NULL;
   }
 
   for (Index = 0; Index < FormatNum; Index++) {
-    if (PrintRecommended && !pFormatList[Index].InterleaveFormatSplit.Recommended) {
+    if (pInterleaveSize == NULL) {
+      INTERLEAVE_FORMAT *pFormatList = (INTERLEAVE_FORMAT *)pInterleaveFormatList;
+      ChannelInterleaveSize = pFormatList[Index].InterleaveFormatSplit.ChannelInterleaveSize;
+      ImcInterleaveSize = pFormatList[Index].InterleaveFormatSplit.iMCInterleaveSize;
+      NumberOfChannelWays = pFormatList[Index].InterleaveFormatSplit.NumberOfChannelWays & MAX_UINT16;
+      Recommended = pFormatList[Index].InterleaveFormatSplit.Recommended;
+    }
+    else {
+      INTERLEAVE_FORMAT3 *pFormatList = (INTERLEAVE_FORMAT3 *)pInterleaveFormatList;
+      ChannelInterleaveSize = pInterleaveSize->InterleaveSizeSplit.ChannelInterleaveSize;
+      ImcInterleaveSize = pInterleaveSize->InterleaveSizeSplit.iMCInterleaveSize;
+      Recommended = pFormatList[Index].InterleaveFormatSplit.Recommended;
+      CountNumOfBitsSet(pFormatList[Index].InterleaveFormatSplit.InterleaveMap, &NumOfBitsSet);
+      if (NumOfBitsSet == PrevNumOfBitsSet) {
+        continue;
+      }
+
+      GetBitFieldForNumOfChannelWays(NumOfBitsSet, &NumberOfChannelWays);
+      WayNumber = NumOfBitsSet;
+      PrevNumOfBitsSet = NumOfBitsSet;
+
+      if (WayNumber == 0) {
+        continue;
+      }
+    }
+
+    if (PrintRecommended && !Recommended) {
       continue;
     }
 
     for (Index2 = 0; Index2 < NUMBER_OF_CHANNEL_WAYS_BITS_NUM; Index2++) {
+
       /** Check each bit **/
-      InterleaveWay = pFormatList[Index].InterleaveFormatSplit.NumberOfChannelWays & (1 << Index2);
+      InterleaveWay = NumberOfChannelWays & (1 << Index2);
 
       switch (InterleaveWay) {
       case INTERLEAVE_SET_1_WAY:
-        WayNumber = 1;
+        WayNumber = ChannelWays_X1;
         break;
       case INTERLEAVE_SET_2_WAY:
-        WayNumber = 2;
+        WayNumber = ChannelWays_X2;
         break;
       case INTERLEAVE_SET_3_WAY:
-        WayNumber = 3;
+        WayNumber = ChannelWays_X3;
         break;
       case INTERLEAVE_SET_4_WAY:
-        WayNumber = 4;
+        WayNumber = ChannelWays_X4;
         break;
       case INTERLEAVE_SET_6_WAY:
-        WayNumber = 6;
+        WayNumber = ChannelWays_X6;
         break;
       case INTERLEAVE_SET_8_WAY:
-        WayNumber = 8;
+        WayNumber = ChannelWays_X8;
         break;
       case INTERLEAVE_SET_12_WAY:
-        WayNumber = 12;
+        WayNumber = ChannelWays_X12;
         break;
       case INTERLEAVE_SET_16_WAY:
-        WayNumber = 16;
+        WayNumber = ChannelWays_X16;
         break;
       case INTERLEAVE_SET_24_WAY:
-        WayNumber = 24;
+        WayNumber = ChannelWays_X24;
         break;
       default:
-        WayNumber = 0;
+        WayNumber = Unknown;
         break;
       }
 
@@ -1634,45 +1703,45 @@ PrintAppDirectSettings(
         continue;
       }
 
-      switch (pFormatList[Index].InterleaveFormatSplit.iMCInterleaveSize) {
+      switch (ImcInterleaveSize) {
       case IMC_INTERLEAVE_SIZE_64B:
-        ImcStringIndex = 1;
+        ImcStringIndex = Interleave_64B;
         break;
       case IMC_INTERLEAVE_SIZE_128B:
-        ImcStringIndex = 2;
+        ImcStringIndex = Interleave_128B;
         break;
       case IMC_INTERLEAVE_SIZE_256B:
-        ImcStringIndex = 3;
+        ImcStringIndex = Interleave_256B;
         break;
       case IMC_INTERLEAVE_SIZE_4KB:
-        ImcStringIndex = 4;
+        ImcStringIndex = Interleave_4KB;
         break;
       case IMC_INTERLEAVE_SIZE_1GB:
-        ImcStringIndex = 5;
+        ImcStringIndex = Interleave_1GB;
         break;
       default:
-        ImcStringIndex = 0;
+        ImcStringIndex = Unknown;
         break;
       }
 
-      switch (pFormatList[Index].InterleaveFormatSplit.ChannelInterleaveSize) {
+      switch (ChannelInterleaveSize) {
       case CHANNEL_INTERLEAVE_SIZE_64B:
-        ChannelStringIndex = 1;
+        ChannelStringIndex = Interleave_64B;
         break;
       case CHANNEL_INTERLEAVE_SIZE_128B:
-        ChannelStringIndex = 2;
+        ChannelStringIndex = Interleave_128B;
         break;
       case CHANNEL_INTERLEAVE_SIZE_256B:
-        ChannelStringIndex = 3;
+        ChannelStringIndex = Interleave_256B;
         break;
       case CHANNEL_INTERLEAVE_SIZE_4KB:
-        ChannelStringIndex = 4;
+        ChannelStringIndex = Interleave_4KB;
         break;
       case CHANNEL_INTERLEAVE_SIZE_1GB:
-        ChannelStringIndex = 5;
+        ChannelStringIndex = Interleave_1GB;
         break;
       default:
-        ChannelStringIndex = 0;
+        ChannelStringIndex = Unknown;
         break;
       }
 
@@ -1711,6 +1780,7 @@ PrintAppDirectSettings(
       }
     }
   }
+
   return pTempBuffer;
 }
 
@@ -1746,13 +1816,14 @@ ParseSourcePassFile(
   UINT64 FileBufferSize = 0;
   UINT64 StringLength = 0;
   CHAR16 **ppLinesBuffer = NULL;
+  CHAR16 *pCurrentLine = NULL;
   VOID *pFileBuffer = NULL;
   CHAR16 *pPassFromFile = NULL;
   CHAR16 *pFileString = NULL;
   UINT32 NumberOfChars = 0;
   BOOLEAN PassphraseProvided = FALSE;
   BOOLEAN NewPassphraseProvided = FALSE;
-
+  BOOLEAN TextFallThrough = TRUE;
   NVDIMM_ENTRY();
 #ifndef OS_BUILD
   if (pDevicePath == NULL || pCmd == NULL) {
@@ -1778,7 +1849,7 @@ ParseSourcePassFile(
   //If it is not a Unicode File Convert the File String
   if (*((CHAR16 *)pFileBuffer) != UTF_16_BOM) {
     pFileString = AllocateZeroPool((FileBufferSize * sizeof(CHAR16)) + sizeof(L'\0'));
-    if (pFileString == NULL) {      
+    if (pFileString == NULL) {
       ReturnCode = EFI_OUT_OF_RESOURCES;
       PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OUT_OF_MEMORY);
       goto Finish;
@@ -1810,10 +1881,19 @@ ParseSourcePassFile(
   }
 
   for (Index = 0; Index < NumberOfLines; ++Index) {
-    // Ignore comment line that starts with '#'
-    if (StrStr(ppLinesBuffer[Index], L"#") != NULL) {
+    pCurrentLine = ppLinesBuffer[Index];
+    StringLength = StrLen(pCurrentLine);
+    // Ignore comment line that starts with '#' or
+    // If the only content in line is new line chars
+    if ((NULL != StrStr(ppLinesBuffer[Index], L"#"))
+      || (1 == StringLength && (L'\n' == pCurrentLine[0] || L'\r' == pCurrentLine[0]))
+      || (2 == StringLength && L'\r' == pCurrentLine[0] && L'\n' == pCurrentLine[1])) {
       continue;
     }
+    else {
+      TextFallThrough = FALSE;
+    }
+
     pPassFromFile = (CHAR16*)StrStr(ppLinesBuffer[Index], L"=");
     if (pPassFromFile == NULL) {
       ReturnCode = EFI_INVALID_PARAMETER;
@@ -1830,15 +1910,11 @@ ParseSourcePassFile(
       goto Finish;
     }
 
-    // Cut off carriage return
-    if (pPassFromFile[StringLength - 1] == L'\r') {
+    // Cut off new line chars present at the end
+    while ((1 <= StringLength)
+      && (L'\r' == pPassFromFile[StringLength - 1] || L'\n' == pPassFromFile[StringLength - 1])) {
+      pPassFromFile[StringLength - 1] = L'\0';
       StringLength--;
-      if (StringLength == 0) {
-        ReturnCode = EFI_INVALID_PARAMETER;
-        PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INVALID_PASSPHRASE_FROM_FILE);
-        goto Finish;
-      }
-      pPassFromFile[StringLength] = L'\0';
     }
 
     NewPassphraseProvided =
@@ -1858,7 +1934,11 @@ ParseSourcePassFile(
       goto Finish;
     }
   }
-
+  //In case the file has only comments and new line
+  if (TRUE == TextFallThrough) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_WRONG_FILE_DATA);
+  }
 Finish:
   for (Index = 0; ppLinesBuffer != NULL && Index < NumberOfLines; ++Index) {
     FREE_POOL_SAFE(ppLinesBuffer[Index]);
@@ -2036,8 +2116,8 @@ ConsoleInput(
       if (!OnlyAlphanumeric || IsUnicodeAlnumCharacter(Key.UnicodeChar)) {
         StrnCatGrow(&pBuffer, &SizeInBytes, &Key.UnicodeChar, 1);
         if (NULL == pBuffer) {
-           Print(L"Failure inputing characters.\n");
-           break;
+          Print(L"Failure inputing characters.\n");
+          break;
         }
         if (ShowInput) {
           Print(L"%c", Key.UnicodeChar);
@@ -2259,9 +2339,49 @@ AllDimmsInListAreManageable(
   NVDIMM_EXIT();
   return Manageable;
 }
+/**
+  Check if all dimms in the specified pDimmIds list are in supported
+  config. This helper method assumes all the dimms in the list exist.
+  This helper method also assumes the parameters are non-null.
+
+  @param[in] pDimmInfo The dimm list found in NFIT.
+  @param[in] DimmCount Size of the pDimmInfo array.
+  @param[in] pDimmIds Pointer to the array of DimmIDs to check.
+  @param[in] pDimmIdsCount Size of the pDimmIds array.
+
+  @retval TRUE if all Dimms in pDimmIds list are manageable
+  @retval FALSE if at least one DIMM is not manageable
+**/
+BOOLEAN
+AllDimmsInListInSupportedConfig(
+  IN     DIMM_INFO *pAllDimms,
+  IN     UINT32 AllDimmCount,
+  IN     UINT16 *pDimmsListToCheck,
+  IN     UINT32 DimmsToCheckCount
+)
+{
+  BOOLEAN InSupportedConfig = TRUE;
+  UINT32 AllDimmListIndex = 0;
+  UINT32 DimmsToCheckIndex = 0;
+  NVDIMM_ENTRY();
+
+  for (DimmsToCheckIndex = 0; DimmsToCheckIndex < DimmsToCheckCount; DimmsToCheckIndex++) {
+    for (AllDimmListIndex = 0; AllDimmListIndex < AllDimmCount; AllDimmListIndex++) {
+      if (pAllDimms[AllDimmListIndex].DimmID == pDimmsListToCheck[DimmsToCheckIndex]) {
+        if (pAllDimms[AllDimmListIndex].IsInPopulationViolation == TRUE) {
+          InSupportedConfig = FALSE;
+          break;
+        }
+      }
+    }
+  }
+
+  NVDIMM_EXIT();
+  return InSupportedConfig;
+}
 
 /**
-Retrieve the User Cli Display Preferences CMD line arguements.
+Retrieve the User Cli Display Preferences CMD line arguments.
 
 @param[out] pDisplayPreferences pointer to the current driver preferences.
 
@@ -2332,7 +2452,9 @@ ReadCmdLinePrintOptions(
     }
   }
 
+  FREE_POOL_SAFE(OutputOptions);
   FreeStringArray(Toks, NumToks);
+  FREE_POOL_SAFE(OutputOptions);
   return ReturnCode;
 }
 
@@ -2637,8 +2759,8 @@ EFI_STATUS UefiToOsReturnCode(EFI_STATUS UefiReturnCode)
     ReturnCode = 201;
     break;
   case (EFI_ALREADY_STARTED):
-    //this number is arbitrary, but should be distinct. 
-    //In the case of FW udpate, it indicates that all DIMMs 
+    //this number is arbitrary, but should be distinct.
+    //In the case of FW udpate, it indicates that all DIMMs
     //have a staged FW binary
     ReturnCode = 20;
     break;
@@ -2670,6 +2792,8 @@ CheckMasterAndDefaultOptions(
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   PRINT_CONTEXT *pPrinterCtx = NULL;
+
+  NVDIMM_ENTRY();
 
   if (pCmd == NULL) {
     ReturnCode = EFI_INVALID_PARAMETER;
@@ -2706,7 +2830,161 @@ CheckMasterAndDefaultOptions(
   }
 
 Finish:
-  PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
+}
+
+/**
+  Retrieves a list of Dimms that have at least one NS.
+
+  @param[in,out] pDimmIds the dimm IDs which have NS
+  @param[in,out] pDimmIdCount count of dimm IDs
+  @param[in]     maxElements the maximum size of the dimm ID list
+
+  @retval EFI_ABORTED Operation Aborted
+  @retval EFI_OUT_OF_RESOURCES unable to allocate memory
+  @retval EFI_SUCCESS All Ok
+**/
+EFI_STATUS
+GetDimmIdsWithNamespaces(
+  IN OUT UINT16 *pDimmIds,
+  IN OUT UINT32 *pDimmIdCount,
+  IN UINT32 maxElements)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol = NULL;
+  COMMAND_STATUS *pCommandStatus = NULL;
+  UINT32 NamespacesCount = 0;
+  LIST_ENTRY NamespaceListHead;
+  NAMESPACE_INFO *pNamespaceInfo = NULL;
+  LIST_ENTRY *pCurNamespace = NULL;
+  UINT32 RegionIndex = 0;
+  UINT32 Index = 0;
+  UINT32 RegionCount = 0;
+  REGION_INFO *pRegions = NULL;
+  LIST_ENTRY *pTmpListNode = NULL;
+  LIST_ENTRY *pTmpListNextNode = NULL;
+  NVDIMM_ENTRY();
+
+  ZeroMem(&NamespaceListHead, sizeof(NamespaceListHead));
+  InitializeListHead(&NamespaceListHead);
+
+  ReturnCode = InitializeCommandStatus(&pCommandStatus);
+  if (EFI_ERROR(ReturnCode)) {
+    ReturnCode = EFI_ABORTED;
+    NVDIMM_DBG("Failed on InitializeCommandStatus");
+    goto Finish;
+  }
+
+  ReturnCode = OpenNvmDimmProtocol(gNvmDimmConfigProtocolGuid, (VOID**)&pNvmDimmConfigProtocol, NULL);
+  if (EFI_ERROR(ReturnCode)) {
+    goto Finish;
+  }
+
+  /* Load Regions */
+  ReturnCode = pNvmDimmConfigProtocol->GetRegionCount(pNvmDimmConfigProtocol, FALSE, &RegionCount);
+  if (EFI_ERROR(ReturnCode)) {
+    if (EFI_NO_RESPONSE == ReturnCode) {
+      ResetCmdStatus(pCommandStatus, NVM_ERR_BUSY_DEVICE);
+    }
+    ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
+    goto Finish;
+  }
+
+  pRegions = AllocateZeroPool(sizeof(REGION_INFO) * RegionCount);
+  if (pRegions == NULL) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetRegions(pNvmDimmConfigProtocol, RegionCount, FALSE, pRegions, pCommandStatus);
+
+  if (EFI_ERROR(ReturnCode)) {
+    if (pCommandStatus->GeneralStatus != NVM_SUCCESS) {
+      ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
+    }
+    else {
+      ReturnCode = EFI_ABORTED;
+    }
+    NVDIMM_WARN("Failed to retrieve the REGION list");
+    goto Finish;
+  }
+
+  /*Load Namespaces*/
+  ReturnCode = pNvmDimmConfigProtocol->GetNamespaces(pNvmDimmConfigProtocol, &NamespaceListHead, &NamespacesCount, pCommandStatus);
+  if (EFI_ERROR(ReturnCode)) {
+    if (pCommandStatus->GeneralStatus != NVM_SUCCESS) {
+      ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
+    }
+    NVDIMM_WARN("Failed to retrieve Namespaces list");
+    goto Finish;
+  }
+
+  for (RegionIndex = 0; RegionIndex < RegionCount; RegionIndex++) {
+    LIST_FOR_EACH(pCurNamespace, &NamespaceListHead) {
+      pNamespaceInfo = NAMESPACE_INFO_FROM_NODE(pCurNamespace);
+      if (pNamespaceInfo->RegionId == pRegions[RegionIndex].RegionId) {
+        //add the DIMM id to the main return list
+        for (Index = 0; Index < pRegions[RegionIndex].DimmIdCount; Index++) {
+          ReturnCode = AddElement(pDimmIds, pDimmIdCount, pRegions[RegionIndex].DimmId[Index], maxElements);
+          if (EFI_ERROR(ReturnCode)) {
+            NVDIMM_WARN("Failed to add the DIMM ID to the list");
+            goto Finish;
+          }
+        }
+      }
+    }
+  }
+
+Finish:
+  NVDIMM_EXIT_I64(ReturnCode);
+  FREE_POOL_SAFE(pRegions);
+  LIST_FOR_EACH_SAFE(pTmpListNode, pTmpListNextNode, &NamespaceListHead) {
+    FreePool(NAMESPACE_INFO_FROM_NODE(pTmpListNode));
+  }
+  FREE_POOL_SAFE(pCommandStatus);
+  return ReturnCode;
+}
+
+/**
+  Adds an element to a element list without allowing duplication
+
+  @param[in,out] pElementList the list
+  @param[in,out] pElementCount size of the list
+  @param[in]     newElement the new element to add
+  @param[in]     maxElements the maximum size of the list
+
+  @retval EFI_OUT_OF_RESOURCES unable to add any more elements
+  @retval EFI_SUCCESS All Ok
+**/
+EFI_STATUS AddElement(
+  IN OUT UINT16 *pElementList,
+  IN OUT UINT32 *pElementCount,
+  IN UINT16 newElement,
+  IN UINT32 maxElements)
+{
+  UINT32 x = 0;
+
+  //check for initial condition
+  if (pElementList == NULL || pElementCount == NULL)
+  {
+    return EFI_SUCCESS;
+  }
+
+  //see if the list already has this item
+  for (; x < *pElementCount && x < maxElements; x++)
+  {
+    if (pElementList[x] == newElement) {
+      return EFI_SUCCESS;
+    }
+  }
+
+  if (x == maxElements) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  *pElementCount = (*pElementCount) + 1;
+  pElementList[x] = newElement;
+
+  return EFI_SUCCESS;
 }

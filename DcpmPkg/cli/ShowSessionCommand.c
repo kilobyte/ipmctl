@@ -49,7 +49,7 @@ PRINTER_LIST_ATTRIB ShowSessionListAttributes =
  *  PRINTER TABLE ATTRIBUTES (3 columns)
  *   TagID  | ExitCode | CliArgs
  *   ========================================================================
- *   0x0001 | X        | X      
+ *   0x0001 | X        | X
  *   ...
  */
 PRINTER_TABLE_ATTRIB ShowSessionTableAttributes =
@@ -153,7 +153,7 @@ ShowSession(
     goto Finish;
   }
 
-  //Retreive the current TagID (CLI's job to track/increment/reset the tag id).
+  //Retrieve the current TagID (CLI's job to track/increment/reset the tag id).
   PbrDcpmmDeserializeTagId(&TagId, 0);
 
   ReturnCode = pNvmDimmPbrProtocol->PbrGetTagCount(&TagCount);

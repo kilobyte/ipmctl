@@ -17,16 +17,14 @@ extern NVMDIMMDRIVER_DATA *gNvmDimmData;
 #define THRESHHOLD_TEST_INDEX 2
 #define SYS_TIME_TEST_INDEX 3
 
-//  [ATTENTION] : Do not use this function for implementing diagnostic tests. This is kept maintain the backward compatibility.
 /**
   Run Fw diagnostics for the list of DIMMs, and appropriately
-  populate the result messages, and test-state.
+  populate the result in diagnostic structure.
 
   @param[in] ppDimms The DIMM pointers list
   @param[in] DimmCount DIMMs count
   @param[in] DimmIdPreference Preference for Dimm ID display (UID/Handle)
-  @param[out] ppResult Pointer to the result string of fw diagnostics message
-  @param[out] pDiagState Pointer to the fw diagnostics test state
+  @param[out] pResult Pointer of structure with diagnostics test result
 
   @retval EFI_SUCCESS Test executed correctly
   @retval EFI_DEVICE_ERROR Test wasn't executed correctly
@@ -35,107 +33,6 @@ extern NVMDIMMDRIVER_DATA *gNvmDimmData;
 **/
 EFI_STATUS
 RunFwDiagnostics(
-  IN     DIMM **ppDimms,
-  IN     CONST UINT16 DimmCount,
-  IN     UINT8 DimmIdPreference,
-     OUT CHAR16 **ppResult,
-     OUT UINT8 *pDiagState
-  )
-{
-  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
-  UINT16 Index = 0;
-
-  NVDIMM_ENTRY();
-
-  if (ppResult == NULL || pDiagState == NULL || DimmCount > MAX_DIMMS) {
-    NVDIMM_DBG("The firmware consistency and settings diagnostics test aborted due to an internal error.");
-    ReturnCode = EFI_INVALID_PARAMETER;
-    goto Finish;
-  }
-
-  if (DimmCount == 0 || ppDimms == NULL) {
-    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_NO_MANAGEABLE_DIMMS), EVENT_CODE_901, DIAG_STATE_MASK_OK, ppResult, pDiagState);
-    ReturnCode = EFI_INVALID_PARAMETER;
-    goto Finish;
-  }
-
-  if (*ppResult != NULL) {
-    NVDIMM_DBG("The passed result string for firmware diagnostics tests is not empty");
-    ReturnCode = EFI_INVALID_PARAMETER;
-    goto FinishError;
-  }
-
-  ReturnCode = CheckFwConsistency(ppDimms, DimmCount, DimmIdPreference, ppResult, pDiagState);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("The check for firmware consistency failed.");
-    if ((*pDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
-      goto FinishError;
-    }
-  }
-
-  ReturnCode = CheckViralPolicyConsistency(ppDimms, DimmCount, ppResult, pDiagState);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("The check for viral policy settings consistency failed");
-    if ((*pDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
-      goto FinishError;
-    }
-  }
-
-  for (Index = 0; Index < DimmCount; Index++) {
-    if (ppDimms[Index] == NULL) {
-      ReturnCode = EFI_INVALID_PARAMETER;
-      *pDiagState |= DIAG_STATE_MASK_ABORTED;
-      goto Finish;
-    }
-
-    ReturnCode = ThresholdsCheck(ppDimms[Index], ppResult, pDiagState);
-    if (EFI_ERROR(ReturnCode)) {
-      NVDIMM_DBG("The check for firmware threshold settings failed. Dimm handle 0x%04x.", ppDimms[Index]->DeviceHandle.AsUint32);
-      if ((*pDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
-        goto FinishError;
-      }
-    }
-
-#ifdef OS_BUILD
-    ReturnCode = SystemTimeCheck(ppDimms[Index], ppResult, pDiagState);
-    if (EFI_ERROR(ReturnCode)) {
-      NVDIMM_DBG("The check for Dimm's system time failed. Dimm handle 0x%04x.", ppDimms[Index]->DeviceHandle.AsUint32);
-      if ((*pDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
-        goto FinishError;
-      }
-    }
-#endif // OS_BUILD
-  }
-
-  if ((*pDiagState & DIAG_STATE_MASK_ALL) <= DIAG_STATE_MASK_OK) {
-    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_SUCCESS), EVENT_CODE_900, DIAG_STATE_MASK_OK, ppResult, pDiagState);
-  }
-  ReturnCode = EFI_SUCCESS;
-  goto Finish;
-
-FinishError:
-  APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED, ppResult, pDiagState);
-Finish:
-  NVDIMM_EXIT_I64(ReturnCode);
-  return ReturnCode;
-}
-
-/**
-  Run Fw diagnostics for the list of DIMMs, and appropriately
-  populate the result in diagnostic structure.
-
-  @param[in] ppDimms The DIMM pointers list
-  @param[in] DimmCount DIMMs count
-  @param[in] DimmIdPreference Preference for Dimm ID display (UID/Handle)
-  @param[out] ppResult Pointer to the result structure of fw diagnostics message
-
-  @retval EFI_SUCCESS Test executed correctly
-  @retval EFI_DEVICE_ERROR Test wasn't executed correctly
-  @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL.
-  @retval EFI_OUT_OF_RESOURCES when memory allocation fails.
-**/
-EFI_STATUS
-RunFwDiagnosticsDetail(
   IN     DIMM **ppDimms,
   IN     CONST UINT16 DimmCount,
   IN     UINT8 DimmIdPreference,
@@ -154,28 +51,29 @@ RunFwDiagnosticsDetail(
   }
 
   if (DimmCount == 0 || ppDimms == NULL) {
-    NVDIMM_DBG("The dimm count and dimm information is missing");
+    ReturnCode = EFI_SUCCESS;
+    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_NO_MANAGEABLE_DIMMS), EVENT_CODE_901, DIAG_STATE_MASK_OK, &pResult->Message, &pResult->StateVal);
     goto Finish;
   }
 
   pResult->SubTestName[FW_CONSIST_TEST_INDEX] = CatSPrint(NULL, L"FW Consistency");
-  ReturnCode = CheckFwConsistency(ppDimms, DimmCount, DimmIdPreference, &pResult->Message[FW_CONSIST_TEST_INDEX], &pResult->SubTestStateVal[FW_CONSIST_TEST_INDEX]);
+  ReturnCode = CheckFwConsistency(ppDimms, DimmCount, DimmIdPreference, &pResult->SubTestMessage[FW_CONSIST_TEST_INDEX], &pResult->SubTestStateVal[FW_CONSIST_TEST_INDEX]);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("The check for firmware consistency failed.");
     if ((pResult->SubTestStateVal[FW_CONSIST_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
       APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-        &pResult->Message[FW_CONSIST_TEST_INDEX], &pResult->SubTestStateVal[FW_CONSIST_TEST_INDEX]);
+        &pResult->SubTestMessage[FW_CONSIST_TEST_INDEX], &pResult->SubTestStateVal[FW_CONSIST_TEST_INDEX]);
       goto Finish;
     }
   }
 
   pResult->SubTestName[VIRAL_POLICY_CONSIST_TEST_INDEX] = CatSPrint(NULL, L"Viral Policy");
-  ReturnCode = CheckViralPolicyConsistency(ppDimms, DimmCount, &pResult->Message[VIRAL_POLICY_CONSIST_TEST_INDEX], &pResult->SubTestStateVal[VIRAL_POLICY_CONSIST_TEST_INDEX]);
+  ReturnCode = CheckViralPolicyConsistency(ppDimms, DimmCount, &pResult->SubTestMessage[VIRAL_POLICY_CONSIST_TEST_INDEX], &pResult->SubTestStateVal[VIRAL_POLICY_CONSIST_TEST_INDEX]);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("The check for viral policy settings consistency failed");
     if ((pResult->SubTestStateVal[VIRAL_POLICY_CONSIST_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
       APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-        &pResult->Message[VIRAL_POLICY_CONSIST_TEST_INDEX], &pResult->SubTestStateVal[VIRAL_POLICY_CONSIST_TEST_INDEX]);
+        &pResult->SubTestMessage[VIRAL_POLICY_CONSIST_TEST_INDEX], &pResult->SubTestStateVal[VIRAL_POLICY_CONSIST_TEST_INDEX]);
       goto Finish;
     }
   }
@@ -189,27 +87,15 @@ RunFwDiagnosticsDetail(
       goto Finish;
     }
 
-    ReturnCode = ThresholdsCheck(ppDimms[Index], &pResult->Message[THRESHHOLD_TEST_INDEX], &pResult->SubTestStateVal[THRESHHOLD_TEST_INDEX]);
+    ReturnCode = ThresholdsCheck(ppDimms[Index], &pResult->SubTestMessage[THRESHHOLD_TEST_INDEX], &pResult->SubTestStateVal[THRESHHOLD_TEST_INDEX]);
     if (EFI_ERROR(ReturnCode)) {
       NVDIMM_DBG("The check for firmware threshold settings failed. Dimm handle 0x%04x.", ppDimms[Index]->DeviceHandle.AsUint32);
       if ((pResult->SubTestStateVal[THRESHHOLD_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
         APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-          &pResult->Message[THRESHHOLD_TEST_INDEX], &pResult->SubTestStateVal[THRESHHOLD_TEST_INDEX]);
+          &pResult->SubTestMessage[THRESHHOLD_TEST_INDEX], &pResult->SubTestStateVal[THRESHHOLD_TEST_INDEX]);
         goto Finish;
       }
     }
-
-#ifdef OS_BUILD
-    ReturnCode = SystemTimeCheck(ppDimms[Index], &pResult->Message[SYS_TIME_TEST_INDEX], &pResult->SubTestStateVal[SYS_TIME_TEST_INDEX]);
-    if (EFI_ERROR(ReturnCode)) {
-      NVDIMM_DBG("The check for Dimm's system time failed. Dimm handle 0x%04x.", ppDimms[Index]->DeviceHandle.AsUint32);
-      if ((pResult->SubTestStateVal[SYS_TIME_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
-        APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-          &pResult->Message[SYS_TIME_TEST_INDEX], &pResult->SubTestStateVal[SYS_TIME_TEST_INDEX]);
-        goto Finish;
-      }
-    }
-#endif // OS_BUILD
   }
 
   ReturnCode = EFI_SUCCESS;
@@ -343,12 +229,12 @@ GetOptimumFwVersion(
           InitialFwVer = ppDimms[Index]->FwVer;
           DimmIndex = Index;
         } else if (InitialFwVer.FwRevision == ppDimms[Index]->FwVer.FwRevision) {
-	  if (InitialFwVer.FwSecurityVersion < ppDimms[Index]->FwVer.FwSecurityVersion) {
-	    InitialFwVer = ppDimms[Index]->FwVer;
+    if (InitialFwVer.FwSecurityVersion < ppDimms[Index]->FwVer.FwSecurityVersion) {
+      InitialFwVer = ppDimms[Index]->FwVer;
             DimmIndex = Index;
-	  } else if (InitialFwVer.FwSecurityVersion == ppDimms[Index]->FwVer.FwSecurityVersion) {
-	    if (InitialFwVer.FwBuild < ppDimms[Index]->FwVer.FwBuild) {
-	      InitialFwVer = ppDimms[Index]->FwVer;
+    } else if (InitialFwVer.FwSecurityVersion == ppDimms[Index]->FwVer.FwSecurityVersion) {
+      if (InitialFwVer.FwBuild < ppDimms[Index]->FwVer.FwBuild) {
+        InitialFwVer = ppDimms[Index]->FwVer;
               DimmIndex = Index;
             }
           }
@@ -575,14 +461,15 @@ ThresholdsCheck(
 )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
-  SENSOR_INFO SensorInfo;
+  SMART_AND_HEALTH_INFO HealthInfo;
+  UINT8 AlarmEnabled = 0;
   INT16 MediaTemperatureThreshold = 0;
   INT16 ControllerTemperatureThreshold = 0;
   INT16 PercentageRemainingThreshold = 0;
 
   NVDIMM_ENTRY();
 
-  ZeroMem(&SensorInfo, sizeof(SensorInfo));
+  ZeroMem(&HealthInfo, sizeof(HealthInfo));
 
   if ((NULL == pDimm) || (NULL == pDiagState) || (NULL == ppResultStr)) {
     if (pDiagState != NULL) {
@@ -592,7 +479,7 @@ ThresholdsCheck(
     goto Finish;
   }
 
-  ReturnCode = GetSmartAndHealth(NULL, pDimm->DimmID, &SensorInfo, NULL, NULL, NULL, NULL);
+  ReturnCode = GetSmartAndHealth(NULL, pDimm->DimmID, &HealthInfo);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_ERR("Failed to Get SMART Info from Dimm handle 0x%x", pDimm->DeviceHandle.AsUint32);
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
@@ -604,7 +491,7 @@ ThresholdsCheck(
     pDimm->DimmID,
     SENSOR_TYPE_MEDIA_TEMPERATURE,
     &MediaTemperatureThreshold,
-    NULL,
+    &AlarmEnabled,
     NULL);
   if (EFI_ERROR(ReturnCode)) {
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
@@ -612,16 +499,16 @@ ThresholdsCheck(
     goto Finish;
   }
 
-  if (SensorInfo.MediaTempShutdownThresh < MediaTemperatureThreshold) {
+  if (FALSE != AlarmEnabled && HealthInfo.MediaTempShutdownThresh < MediaTemperatureThreshold) {
     APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_FW_MEDIA_TEMPERATURE_THRESHOLD_ERROR), EVENT_CODE_903, DIAG_STATE_MASK_WARNING, ppResultStr, pDiagState,
-      pDimm->DeviceHandle.AsUint32, MediaTemperatureThreshold, SensorInfo.MediaTempShutdownThresh);
+      pDimm->DeviceHandle.AsUint32, MediaTemperatureThreshold, HealthInfo.MediaTempShutdownThresh);
   }
 
   ReturnCode = GetAlarmThresholds(NULL,
     pDimm->DimmID,
     SENSOR_TYPE_CONTROLLER_TEMPERATURE,
     &ControllerTemperatureThreshold,
-    NULL,
+    &AlarmEnabled,
     NULL);
   if (EFI_ERROR(ReturnCode)) {
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
@@ -629,16 +516,16 @@ ThresholdsCheck(
     goto Finish;
   }
 
-  if (SensorInfo.ContrTempShutdownThresh < ControllerTemperatureThreshold) {
+  if (FALSE != AlarmEnabled && HealthInfo.ContrTempShutdownThresh < ControllerTemperatureThreshold) {
     APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_FW_CONTROLLER_TEMPERATURE_THRESHOLD_ERROR), EVENT_CODE_904, DIAG_STATE_MASK_WARNING, ppResultStr, pDiagState,
-      pDimm->DeviceHandle.AsUint32, ControllerTemperatureThreshold, SensorInfo.ContrTempShutdownThresh);
+      pDimm->DeviceHandle.AsUint32, ControllerTemperatureThreshold, HealthInfo.ContrTempShutdownThresh);
   }
 
   ReturnCode = GetAlarmThresholds(NULL,
     pDimm->DimmID,
     SENSOR_TYPE_PERCENTAGE_REMAINING,
     &PercentageRemainingThreshold,
-    NULL,
+    &AlarmEnabled,
     NULL);
   if (EFI_ERROR(ReturnCode)) {
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
@@ -646,81 +533,12 @@ ThresholdsCheck(
     goto Finish;
   }
 
-  if (SensorInfo.PercentageRemaining < PercentageRemainingThreshold) {
+  if (FALSE != AlarmEnabled && HealthInfo.PercentageRemainingValid && HealthInfo.PercentageRemaining < PercentageRemainingThreshold) {
     APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_FW_SPARE_BLOCK_THRESHOLD_ERROR), EVENT_CODE_905, DIAG_STATE_MASK_WARNING, ppResultStr, pDiagState,
-      pDimm->DeviceHandle.AsUint32, SensorInfo.PercentageRemaining, PercentageRemainingThreshold);
+      pDimm->DeviceHandle.AsUint32, HealthInfo.PercentageRemaining, PercentageRemainingThreshold);
   }
 
 Finish:
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
-
-#ifdef OS_BUILD
-/**
-Get the DIMMs system time and compare it to the local system time.
-Log proper events in case of any error.
-
-@param[in] pDimm Pointer to the DIMM
-@param[in out] ppResult Pointer to the result string of fw diagnostics message
-@param[out] pDiagState Pointer to the quick diagnostics test state
-
-@retval EFI_SUCCESS Test executed correctly
-@retval EFI_INVALID_PARAMETER if any of the parameters is a NULL
-**/
-EFI_STATUS
-SystemTimeCheck(
-  IN     DIMM *pDimm,
-  IN OUT CHAR16 **ppResultStr,
-  IN OUT UINT8 *pDiagState
-)
-{
-  EFI_STATUS ReturnCode = EFI_SUCCESS;
-  time_t raw_start_time;
-  time_t raw_end_time;
-  PT_SYTEM_TIME_PAYLOAD SystemTimePayload;
-
-  NVDIMM_ENTRY();
-
-  if ((NULL == pDimm) || (NULL == pDiagState) || (NULL == ppResultStr)) {
-    if (pDiagState != NULL) {
-      *pDiagState |= DIAG_STATE_MASK_ABORTED;
-    }
-    ReturnCode = EFI_INVALID_PARAMETER;
-    goto Finish;
-  }
-
-  // Get the start test system time
-  time(&raw_start_time);
-  // Get the DIMM's time
-  ReturnCode = FwCmdGetSystemTime(pDimm, &SystemTimePayload);
-  if (EFI_ERROR(ReturnCode)) {
-    *pDiagState |= DIAG_STATE_MASK_ABORTED;
-    NVDIMM_ERR("Failed to get system time Dimm handle 0x%x", pDimm->DeviceHandle.AsUint32);
-    goto Finish;
-  }
-  // Get the end test system time
-  time(&raw_end_time);
-
-  // Validate resulats
-  if ((time_t) SystemTimePayload.UnixTime < raw_start_time) {
-    CHAR16 *pTmpStr = HiiGetString(gNvmDimmData->HiiHandle, STR_DIAGNOSTIC_LOWER, NULL);
-    APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_FW_SYSTEM_TIME_ERROR), EVENT_CODE_907, DIAG_STATE_MASK_OK, ppResultStr, pDiagState,
-      pDimm->DeviceHandle.AsUint32, pTmpStr, (raw_start_time - SystemTimePayload.UnixTime));
-    FREE_POOL_SAFE(pTmpStr)
-  }
-  else if ((time_t) SystemTimePayload.UnixTime > raw_end_time) {
-    CHAR16 *pTmpStr = HiiGetString(gNvmDimmData->HiiHandle, STR_DIAGNOSTIC_GREATER, NULL);
-    APPEND_RESULT_TO_THE_LOG(pDimm, STRING_TOKEN(STR_FW_SYSTEM_TIME_ERROR), EVENT_CODE_907, DIAG_STATE_MASK_OK, ppResultStr, pDiagState,
-      pDimm->DeviceHandle.AsUint32, pTmpStr, (SystemTimePayload.UnixTime - raw_end_time));
-    FREE_POOL_SAFE(pTmpStr);
-  }
-  else {
-    NVDIMM_DBG("Dimm 0x%x time verification diagnostic test: success", pDimm->DeviceHandle.AsUint32);
-  }
-
-Finish:
-  NVDIMM_EXIT_I64(ReturnCode);
-  return ReturnCode;
-}
-#endif // OS_BUILD

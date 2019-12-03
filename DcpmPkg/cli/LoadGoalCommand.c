@@ -11,6 +11,7 @@
 #include "NvmInterface.h"
 #include "CommandParser.h"
 #include "LoadGoalCommand.h"
+#include "CreateGoalCommand.h"
 #include "Common.h"
 #include "NvmDimmCli.h"
 #include <ReadRunTimePreferences.h>
@@ -37,7 +38,7 @@ struct Command LoadGoalCommand =
   {                                                                     //!< targets
     {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, FALSE, ValueOptional},
     {GOAL_TARGET, L"", L"", TRUE, ValueEmpty},
-    {SOCKET_TARGET, L"", HELP_TEXT_SOCKET_IDS, FALSE, ValueRequired}
+    {SOCKET_TARGET, L"", HELP_TEXT_SOCKET_IDS, FALSE, ValueOptional}
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                              //!< properties
   L"Load stored configuration goal for specific DIMMs",            //!< help
@@ -87,6 +88,7 @@ LoadGoal(
   INTEL_DIMM_CONFIG *pIntelDIMMConfig = NULL;
   PRINT_CONTEXT *pPrinterCtx = NULL;
   CHAR16 * pShowGoalOutputArgs = NULL;
+  BOOLEAN isDimmUnlocked = FALSE;
 
   NVDIMM_ENTRY();
 
@@ -111,7 +113,7 @@ LoadGoal(
   }
 
   // Populate the list of DIMM_INFO structures with relevant information
-  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmCount);
+  ReturnCode = GetDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_SECURITY, &pDimms, &DimmCount);
   if (EFI_ERROR(ReturnCode)) {
     if(ReturnCode == EFI_NOT_FOUND) {
       PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_INFO_NO_FUNCTIONAL_DIMMS);
@@ -192,6 +194,11 @@ LoadGoal(
       PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_UNMANAGEABLE_DIMM);
       goto Finish;
     }
+    if (!AllDimmsInListInSupportedConfig(pDimms, DimmCount, pDimmIds, DimmIdsCount)) {
+      ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_POPULATION_VIOLATION);
+      goto Finish;
+    }
   }
 
   if (ContainTarget(pCmd, SOCKET_TARGET)) {
@@ -222,10 +229,24 @@ LoadGoal(
 
   if (!Force) {
     PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, CLI_INFO_LOAD_GOAL_CONFIRM_PROMPT, pLoadFilePath);
-    //NVDIMM_BUFFER_CONTROLLED_MSG(FALSE, L"\n");
-    ReturnCode = PromptYesNo(&Confirmation);
 
-    if (!Confirmation || EFI_ERROR(ReturnCode)) {
+    ReturnCode = AreRequestedDimmsSecurityUnlocked(pDimms, DimmCount, pDimmIds, DimmIdsCount, &isDimmUnlocked);
+    if (EFI_ERROR(ReturnCode)) {
+      goto Finish;
+    }
+
+    // send warning if security unlocked for target dimms
+    if (isDimmUnlocked) {
+      PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, CLI_WARN_GOAL_CREATION_SECURITY_UNLOCKED);
+    }
+
+    ReturnCode = PromptYesNo(&Confirmation);
+    if (EFI_ERROR(ReturnCode)) {
+      PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_PROMPT_INVALID);
+      NVDIMM_DBG("Failed on PromptedInput");
+      goto Finish;
+    }
+    else if (!Confirmation) {
       goto Finish;
     }
   }
@@ -292,6 +313,7 @@ FinishSkipPrinterProcess:
   FreeCommandInput(&ShowGoalCmdInput);
   FreeCommandStructure(&ShowGoalCmd);
   FreeCommandStatus(&pCommandStatus);
+  FREE_POOL_SAFE(pCommandStr);
   FREE_POOL_SAFE(pLoadFilePath);
   FREE_POOL_SAFE(pFileString);
   FREE_POOL_SAFE(pSocketIds);
@@ -300,6 +322,7 @@ FinishSkipPrinterProcess:
   FREE_POOL_SAFE(pLoadUserPath);
   FREE_POOL_SAFE(pUnitsStr);
   FREE_POOL_SAFE(pShowGoalOutputArgs);
+  FREE_POOL_SAFE(pCommandStr);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }

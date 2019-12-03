@@ -46,6 +46,10 @@ EFI_GUID gIntelDimmPbrVariableGuid = INTEL_DIMM_PBR_VARIABLE_GUID;
 
 EFI_GUID gIntelDimmPbrTagIdVariableguid = INTEL_DIMM_PBR_TAGID_VARIABLE_GUID;
 
+#ifndef OS_BUILD
+EFI_GUID gDcpmmProtocolGuid = EFI_DCPMM_GUID;
+#endif // !OS_BUILD
+
 /**
   Array of dimms UEFI-related data structures.
 **/
@@ -219,6 +223,10 @@ CleanNamespacesAndISs(
   **/
   CleanISLists(&gNvmDimmData->PMEMDev.Dimms, &gNvmDimmData->PMEMDev.ISs);
   gNvmDimmData->PMEMDev.RegionsAndNsInitialized = FALSE;
+
+  CleanISLists(&gNvmDimmData->PMEMDev.Dimms, &gNvmDimmData->PMEMDev.ISsNfit);
+  gNvmDimmData->PMEMDev.RegionsNfitInitialized = FALSE;
+
 Finish:
 #endif
   return ReturnCode;
@@ -252,11 +260,11 @@ ReenumerateNamespacesAndISs(
       NVDIMM_WARN("Failed to clean namespaces and pools");
     }
   }
+
   /** Initialize Interleave Sets **/
-  ReturnCode = InitializeISs(gNvmDimmData->PMEMDev.pFitHead,
-    &gNvmDimmData->PMEMDev.Dimms, &gNvmDimmData->PMEMDev.ISs);
+  ReturnCode = InitializeInterleaveSets(FALSE);
   if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_WARN("Failed to retrieve the Interleave Set and Region list, error = " FORMAT_EFI_STATUS ".", ReturnCode);
+    NVDIMM_WARN("Failed to retrieve the REGION/IS list from PCD, error = " FORMAT_EFI_STATUS ".", ReturnCode);
     goto Finish;
   }
 
@@ -406,13 +414,6 @@ NvmDimmDriverUnload(
     clean up data struct
   **/
   FREE_POOL_SAFE(gNvmDimmData);
-
-#if !defined(MDEPKG_NDEBUG) && !defined(_MSC_VER)
-  /** Disable recording AllocatePool and FreePool occurrences, print list and clear it **/
-  FlushPointerTrace((CHAR16 *)__WFUNCTION__);
-#endif
-
-
 
   if (EFI_ERROR(ReturnCode) && DriverAlreadyUnloaded) {
     NVDIMM_WARN("The driver was not properly initialized or was unloaded before, error = " FORMAT_EFI_STATUS ".", TempReturnCode);
@@ -721,8 +722,8 @@ NvmDimmDriverDriverEntryPoint(
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   EFI_HANDLE ExistingDriver = NULL;
-  DRIVER_PREFERENCES DriverPreferences;
 #ifndef OS_BUILD
+  SetSerialAttributes();
   EFI_LOADED_IMAGE_PROTOCOL *pLoadedImage = NULL;
 #endif
 
@@ -745,8 +746,6 @@ NvmDimmDriverDriverEntryPoint(
   /** Print runtime function address to ease calculation of GDB symbol loading offset. **/
   NVDIMM_DBG_CLEAN("NvmDimmDriverDriverEntryPoint=0x%x\n", (UINT64)&NvmDimmDriverDriverEntryPoint);
 
-  ZeroMem(&DriverPreferences, sizeof(DriverPreferences));
-
   gSystemTable = pSystemTable;
 
   /**
@@ -767,18 +766,11 @@ NvmDimmDriverDriverEntryPoint(
   }
 
   gNvmDimmData->DriverHandle = ImageHandle;
-
-  ReturnCode = ReadRunTimeDriverPreferences(&DriverPreferences);
-  if (EFI_ERROR(ReturnCode)) {
-    gNvmDimmData->Alignments.RegionPartitionAlignment = SIZE_32GB;
-  } else {
-    gNvmDimmData->Alignments.RegionPartitionAlignment = ConvertAppDirectGranularityPreference(DriverPreferences.AppDirectGranularity);
-  }
+  gNvmDimmData->Alignments.RegionPartitionAlignment = SIZE_1GB;
   gNvmDimmData->Alignments.RegionVolatileAlignment = REGION_VOLATILE_SIZE_ALIGNMENT_B;
   gNvmDimmData->Alignments.RegionPersistentAlignment = REGION_PERSISTENT_SIZE_ALIGNMENT_B;
 
   gNvmDimmData->Alignments.PmNamespaceMinSize = PM_NAMESPACE_MIN_SIZE;
-  gNvmDimmData->Alignments.BlockNamespaceMinSize = BLOCK_NAMESPACE_MIN_SIZE;
 
 #if defined(DYNAMIC_WA_ENABLE)
 #ifndef OS_BUILD
@@ -823,6 +815,29 @@ NvmDimmDriverDriverEntryPoint(
     NVDIMM_WARN("Failed to install the driver protocols, error = 0x%llx.", ReturnCode);
     goto Finish;
   }
+
+  /**
+     Locate DCPMM - BIOS protocol for writing to mailboxes in UEFI
+  **/
+#ifndef OS_BUILD
+  ReturnCode = gBS->LocateProtocol(&gDcpmmProtocolGuid, NULL, (VOID **)&gNvmDimmData->pDcpmmProtocol);
+  if (EFI_ERROR(ReturnCode)) {
+    if (ReturnCode == EFI_NOT_FOUND) {
+      NVDIMM_WARN("Dcpmm protocol not found");
+    }
+    else {
+      NVDIMM_WARN("Communication with the device driver failed (dcpmm protocol)");
+    }
+    goto Finish;
+  }
+  // Make sure the protocol version is supported.
+  if (gNvmDimmData->pDcpmmProtocol->ProtocolVersion != DCPMM_PROTOCOL_VER_2) {
+    NVDIMM_ERR("Unexpected DCPMM protocol version. Expected %d got %d",
+        DCPMM_PROTOCOL_VER_2,gNvmDimmData->pDcpmmProtocol->ProtocolVersion);
+    ReturnCode = EFI_UNSUPPORTED;
+    goto Finish;
+  }
+#endif // !OS_BUILD
 
   /**
     Install Driver Supported EFI Version Protocol onto ImageHandle.
@@ -965,7 +980,6 @@ NvmDimmDriverDriverBindingSupported(
   ReturnCode = gBS->OpenProtocol(ControllerHandle, &gNfitBindingProtocolGuid,
     (VOID **)&pDummy, pThis->DriverBindingHandle, ControllerHandle,
     EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-
   if (!EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Detected the Intel NVM Dimm device");
 
@@ -1099,15 +1113,8 @@ InitializeDimms()
    if (EFI_ERROR(ReturnCode)) {
     NVDIMM_WARN("Failed on Smbus init, error = " FORMAT_EFI_STATUS ".", ReturnCodeNonBlocking);
    }
+#endif //!OS_BUILD
 
-   // For right now, this only fills in additional smbus information for
-   // uninitialized dimms listed in the NFIT *only* (not any that aren't listed
-   // in the NFIT)
-   ReturnCodeNonBlocking = PopulateUninitializedDimmList();
-   if (EFI_ERROR(ReturnCodeNonBlocking)) {
-    NVDIMM_WARN("Failed on Smbus dimm list init, error = " FORMAT_EFI_STATUS ".", ReturnCodeNonBlocking);
-   }
-#endif
    /**
     Verify that all manageable NVM-DIMMs have unique identifier. Otherwise, print a critical error and
     break further initialization.
@@ -1154,10 +1161,15 @@ InitializeDimms()
       We try to initialize all Regions, but if something goes wrong with a specific Region, then we just don't
       create the Region or add a proper error state to it. So even then we continue the driver initialization.
     **/
-    ReturnCode = InitializeISs(gNvmDimmData->PMEMDev.pFitHead,
-      &gNvmDimmData->PMEMDev.Dimms, &gNvmDimmData->PMEMDev.ISs);
+    ReturnCode = InitializeInterleaveSets(FALSE);
     if (EFI_ERROR(ReturnCode)) {
-      NVDIMM_WARN("Failed to retrieve the REGION/IS list, error = " FORMAT_EFI_STATUS ".", ReturnCode);
+      NVDIMM_WARN("Failed to retrieve the REGION/IS list from PCD, error = " FORMAT_EFI_STATUS ".", ReturnCode);
+    }
+
+    // Initialize Interleave Sets using NFIT table
+    ReturnCode = InitializeInterleaveSets(TRUE);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_WARN("Failed to retrieve the REGION/IS list from NFIT, error = " FORMAT_EFI_STATUS ".", ReturnCode);
     }
 
     /**
@@ -1326,12 +1338,6 @@ NvmDimmDriverDriverBindingStart(
 
 
    NVDIMM_ENTRY();
-#if !defined(MDEPKG_NDEBUG) && !defined(_MSC_VER)
-   /**
-   Enable recording AllocatePool and FreePool occurences
-   **/
-   EnableTracing();
-#endif
 
    /**
    Init container keeping operation statuses with wanring, error and info level messages.
@@ -1472,15 +1478,6 @@ NvmDimmDriverDriverBindingStart(
     PbrResetSession(NextId);
     PbrDcpmmSerializeTagId(NextId + 1);
   }
-
-
-#if !defined(MDEPKG_NDEBUG) && !defined(_MSC_VER)
-   /**
-   Enable recording AllocatePool and FreePool occurences
-   **/
-   EnableTracing();
-#endif
-
    /**
    Remember the Controller handle that we were started with.
    **/
@@ -1552,7 +1549,7 @@ NvmDimmDriverDriverBindingStart(
    }
 
    /**
-   load the ACPI Tables (NFIT and PCAT)
+   load the ACPI Tables (NFIT, PCAT and PMTT)
    **/
    ReturnCode = initAcpiTables();
    if (EFI_ERROR(ReturnCode)) {
@@ -1795,19 +1792,16 @@ NvmDimmDriverDriverBindingStop(
   TempReturnCode = gBS->UninstallMultipleProtocolInterfaces(gNvmDimmData->DriverHandle,
       &gNvmDimmConfigProtocolGuid, &gNvmDimmDriverNvmDimmConfig, NULL);
   if (EFI_ERROR(TempReturnCode)) {
-    FIRST_ERR(ReturnCode, TempReturnCode);
     NVDIMM_WARN("Failed to uninstall the NvmDimmConfig protocol, error = " FORMAT_EFI_STATUS ".\n", TempReturnCode);
   }
 
   TempReturnCode = UninitializeSmbusAccess();
   if (EFI_ERROR(TempReturnCode)) {
-    FIRST_ERR(ReturnCode, TempReturnCode);
     NVDIMM_DBG("Failed to uninstall smbus access, error = 0x%llx.", TempReturnCode);
   }
 
   TempReturnCode = SmbusDeinit();
   if (EFI_ERROR(TempReturnCode)) {
-    FIRST_ERR(ReturnCode, TempReturnCode);
     NVDIMM_DBG("Failed to Smbus deinit, error = " FORMAT_EFI_STATUS ".\n", TempReturnCode);
   }
   /**
@@ -1815,7 +1809,6 @@ NvmDimmDriverDriverBindingStop(
   **/
   TempReturnCode = FreeDimmList();
   if (EFI_ERROR(TempReturnCode)) {
-    FIRST_ERR(ReturnCode, TempReturnCode);
     NVDIMM_DBG("Failed to free dimm list, error = " FORMAT_EFI_STATUS ".\n", TempReturnCode);
   }
 
@@ -1824,6 +1817,9 @@ NvmDimmDriverDriverBindingStop(
 
   /** Free NFIT tables memory **/
   FreeParsedNfit(gNvmDimmData->PMEMDev.pFitHead);
+
+  /** Free PMTT tables memory **/
+  FreeParsedPmtt(gNvmDimmData->PMEMDev.pPmttHead);
 
   if (gNvmDimmData->HiiHandle != NULL) {
     HiiRemovePackages(gNvmDimmData->HiiHandle);
@@ -1835,7 +1831,7 @@ NvmDimmDriverDriverBindingStop(
 
 Finish:
 #else //not OS_BUILD
-  
+
 
   /**
    Remove the DIMM from memory
@@ -1847,6 +1843,9 @@ Finish:
 
   /** Free NFIT tables memory **/
   FreeParsedNfit(gNvmDimmData->PMEMDev.pFitHead);
+
+  /** Free PMTT tables memory **/
+  FreeParsedPmtt(gNvmDimmData->PMEMDev.pPmttHead);
 
 #endif //not OS_BUILD
 #if _BullseyeCoverage

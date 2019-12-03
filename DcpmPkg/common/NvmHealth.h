@@ -23,15 +23,18 @@
 #define FW_ERROR_COUNT_STR                    L"FwErrorCount"
 #define DIMM_HEALTH_STR                       L"Health"
 #define UNLATCHED_DIRTY_SHUTDOWN_COUNT_STR    L"UnlatchedDirtyShutdownCount"
+#define MAX_MEDIA_TEMPERATURE_STR             L"MaxMediaTemperature"
+#define MAX_CONTROLLER_TEMPERATURE_STR        L"MaxControllerTemperature"
 
 #define SENSORS_COMBINED \
   L"Health|MediaTemperature|ControllerTemperature|PercentageRemaining|LatchedDirtyShutdownCount|PowerOnTime|" \
-  L"UpTime|PowerCycles|FwErrorCount|UnlatchedDirtyShutdownCount" \
+  L"UpTime|PowerCycles|FwErrorCount|UnlatchedDirtyShutdownCount|MaxMediaTemperature|MaxControllerTemperature" \
 
 
 #define TEMPERATURE_MSR     L"C"
 #define SPARE_CAPACITY_MSR  L"%"
 #define TIME_MSR            L"s"
+#define TIME_MSR_MS         L"ms"
 
 #define THRESHOLD_NONE_STR                L"None"
 #define THRESHOLD_ALARM_STR               L"AlarmThreshold"
@@ -95,15 +98,13 @@ typedef union {
 typedef union {
   UINT8 Raw[3];
   struct {
-    UINT8 ViralInterrupt              : 1; //!< Viral interrupt received
-    UINT8 SurpriseClockStopInterrupt  : 1; //!< Surprise clock stop interrupt received
-    UINT8 WriteDataFlushComplete      : 1; //!< Write Data Flush Complete
-    UINT8 S4PowerState                : 1; //!< S4 Power State received
-    UINT8 PMIdle                      : 1; //!< PM Idle received
-    UINT8 DdrtSurpriseReset           : 1; //!< Surprise Reset received
-    UINT8                             : 2; //!< Reserved
-    UINT8                             : 8; //!< Reserved
-    UINT8                             : 8; //!< Reserved
+    UINT16 ViralInterrupt              : 1; //!< Viral interrupt received
+    UINT16 SurpriseClockStopInterrupt  : 1; //!< Surprise clock stop interrupt received
+    UINT16 WriteDataFlushComplete      : 1; //!< Write Data Flush Complete
+    UINT16 S4PowerState                : 1; //!< S4 Power State received
+    UINT16 PMIdle                      : 1; //!< PM Idle received
+    UINT16 DdrtSurpriseReset           : 1; //!< Surprise Reset received
+    UINT16 EnhancedAdrFlushStatus      : 4; //!< eADR Flush Status
   } Separated;
 } LAST_SHUTDOWN_STATUS_DETAILS_EXTENDED;
 

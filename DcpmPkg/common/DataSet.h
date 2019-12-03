@@ -28,6 +28,10 @@
 #define ACPITYPE_MODE_STR     L"Type"
 #define REGISTER_MODE_STR     L"Register"
 #define SMBIOS_MODE_STR       L"Smbios"
+#define DIE_NODE_STR          L"Die"
+#define IMC_NODE_STR          L"Imc"
+#define CHANNEL_NODE_STR      L"Channel"
+#define SLOT_NODE_STR         L"Slot"
 
 /*
 * Types of values supported in DataSets.
@@ -66,7 +70,7 @@ typedef struct _KEY_VAL_INFO {
 #define DATA_SET_CONTEXT  VOID
 
 /*
-* Utilized with DataSet recursing APIs.  Executed for each DataSet found while traversing 
+* Utilized with DataSet recursing APIs.  Executed for each DataSet found while traversing
 * a DataSet tree.
 */
 typedef VOID * (*DataSetCallBack)(DATA_SET_CONTEXT *, CHAR16*, VOID*, VOID*);

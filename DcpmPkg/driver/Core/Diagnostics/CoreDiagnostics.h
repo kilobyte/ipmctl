@@ -24,18 +24,12 @@
 #include <Protocol/Smbios.h>
 #include <Library/HiiLib.h>
 
-#ifdef OS_BUILD
-#define APPEND_TO_DIAG_RESULT_FUNC SendTheEventAndAppendToDiagnosticsResult
-#else // OS_BUILD
-#define APPEND_TO_DIAG_RESULT_FUNC AppendToDiagnosticsResult
-#endif // OSBUILD
-
 #define APPEND_RESULT_TO_THE_LOG(pDimm,String,Code,StateMask,ppResult,pState,...) { \
   CHAR16 *pTempHiiString = HiiGetString(gNvmDimmData->HiiHandle, String, NULL); \
   CHAR16 *pTempHiiString1 = CatSPrintClean(NULL, pTempHiiString, ## __VA_ARGS__); \
   FREE_POOL_SAFE(pTempHiiString); \
   if (pTempHiiString1) \
-    APPEND_TO_DIAG_RESULT_FUNC(pDimm, Code, pTempHiiString1, StateMask, ppResult, pState); \
+    AppendToDiagnosticsResult(pDimm, Code, pTempHiiString1, StateMask, ppResult, pState); \
 }
 
  /** Diagnostics State bitmasks **/
@@ -94,6 +88,9 @@
 #define EVENT_CODE_628      628
 #define EVENT_CODE_629      629
 #define EVENT_CODE_630      630
+#define EVENT_CODE_631      631
+#define EVENT_CODE_632      632
+#define EVENT_CODE_633      633
 /* Diagnostic Security Events **/
 #define EVENT_CODE_800      800
 #define EVENT_CODE_801      801
@@ -108,7 +105,6 @@
 #define EVENT_CODE_904      904
 #define EVENT_CODE_905      905
 #define EVENT_CODE_906      906
-#define EVENT_CODE_907      907
 #define EVENT_CODE_910      910
 #define EVENT_CODE_911      911
 typedef enum {
@@ -117,36 +113,6 @@ typedef enum {
   SecurityDiagnosticIndex,
   FwDiagnosticIndex
 } DiagnosticTestIndex;
-
-/**
-  The fundamental core diagnostics function that is used by both
-  the NvmDimmConfig protocol and the DriverDiagnostic protoocls.
-
-  It runs the specified diagnostics tests on the list of specified dimms,
-  and returns a single combined test result message
-
-  @param[in] ppDimms The platform DIMM pointers list
-  @param[in] DimmsNum Platform DIMMs count
-  @param[in] pDimmIds Pointer to an array of user-specified DIMM IDs
-  @param[in] DimmIdsCount Number of items in the array of user-specified DIMM IDs
-  @param[in] DiagnosticsTest The selected tests bitmask
-  @param[in] DimmIdPreference Preference for Dimm ID display (UID/Handle)
-  @param[out] ppResult Pointer to the combined result string
-
-  @retval EFI_SUCCESS Test executed correctly
-  @retval EFI_OUT_OF_RESOURCES memory allocation failure
-  @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL.
-**/
-EFI_STATUS
-CoreStartDiagnostics(
-  IN     DIMM **ppDimms,
-  IN     UINT32 DimmsNum,
-  IN     UINT16 *pDimmIds OPTIONAL,
-  IN     UINT32 DimmIdsCount,
-  IN     UINT8 DiagnosticsTest,
-  IN     UINT8 DimmIdPreference,
-     OUT CHAR16 **ppResult
-);
 
 /**
   The fundamental core diagnostics function that is used by both
@@ -161,14 +127,14 @@ CoreStartDiagnostics(
   @param[in] DimmIdsCount Number of items in the array of user-specified DIMM IDs
   @param[in] DiagnosticsTest The selected tests bitmask
   @param[in] DimmIdPreference Preference for Dimm ID display (UID/Handle)
-  @param[out] ppResult Pointer to the combined result string
+  @param[out] ppResult Pointer to the structure with information about test result
 
   @retval EFI_SUCCESS Test executed correctly
   @retval EFI_OUT_OF_RESOURCES memory allocation failure
   @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL.
 **/
 EFI_STATUS
-CoreStartDiagnosticsDetail(
+CoreStartDiagnostics(
   IN     DIMM **ppDimms,
   IN     UINT32 DimmsNum,
   IN     UINT16 *pDimmIds OPTIONAL,
@@ -222,44 +188,6 @@ AppendToDiagnosticsResult (
   IN OUT UINT8 *pDiagState
   );
 
-#ifdef OS_BUILD
-#include "event.h"
-
-#define EVENT_CODE_BASE_VALUE     100
-#define DEVICE_CONFIG_BASE_CODE   1
-#define DEVICE_HEALTH_BASE_CODE   2
-#define CONFIG_CHANGE_BASE_CODE   3
-#define QUICK_HEALTH_BASE_CODE    5
-#define PLATFORM_CONFIG_BASE_CODE 6
-#define SECURITY_CHECK_BASE_CODE  8
-#define FW_CONSISTENCY_BASE_CODE  9
-
-/**
-Append to the results string for a particular diagnostic test, modify
-the test state as per the message being appended and send the event
-to the event log.
-
-@param[in] pDimm Pointer to the DIMM structure
-@param[in] Code The event's code (for details see the event CSPEC)
-@param[in] pStrToAppend Pointer to the message string to be appended
-@param[in] DiagStateMask State corresponding to the string that is being appended
-@param[in out] ppResult Pointer to the result string of the particular test-suite's messages
-@param[in out] pDiagState Pointer to the particular test state
-
-@retval EFI_SUCCESS Success
-@retval EFI_INVALID_PARAMETER if any of the parameters is a NULL
-**/
-EFI_STATUS
-SendTheEventAndAppendToDiagnosticsResult(
-  IN     DIMM *pDimm,
-  IN     UINT32 Code,
-  IN     CHAR16 *pStrToAppend,
-  IN     UINT8 DiagStateMask,
-  IN OUT CHAR16 **ppResultStr,
-  IN OUT UINT8 *pDiagState
-);
-#endif // OS_BUILD
-
 /**
   Add headers to the message results from all the tests that were run,
   and then append those messages into one single Diagnostics result string
@@ -277,4 +205,20 @@ CombineDiagnosticsTestResults(
   IN     UINT8 DiagState[],
      OUT CHAR16 **ppResult
   );
+
+/**
+  This function should be used to update status of the test based on information stored
+  inside diagnostic information structure.
+
+  @param[in] pBuffer Pointer to Diagnostic information structure
+  @param[in] DiagnosticTestIndex Test Index
+
+  @retval EFI_SUCCESS Test executed correctly
+  @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL.
+**/
+EFI_STATUS
+UpdateTestState(
+  IN   DIAG_INFO *pBuffer,
+  IN   UINT8 DiagnosticTestIndex
+);
 #endif

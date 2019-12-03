@@ -63,7 +63,7 @@ struct Command ShowPerformanceCommand =
 #endif
     },
     {                                                                   //!< targets
-        { DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, TRUE, ValueOptional },
+        { DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, FALSE, ValueOptional },
         { PERFORMANCE_TARGET, L"", HELP_TEXT_PERFORMANCE_CAT, TRUE, ValueOptional }
     },
     {                                                                   //!< properties
@@ -261,6 +261,11 @@ ShowPerformance(
     if (!AllDimmsInListAreManageable(pDimms, DimmsCount, pDimmIds, DimmIdsNum)) {
       ReturnCode = EFI_INVALID_PARAMETER;
       PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_UNMANAGEABLE_DIMM);
+      goto Finish;
+    }
+    if (!AllDimmsInListInSupportedConfig(pDimms, DimmsCount, pDimmIds, DimmIdsNum)) {
+      ReturnCode = EFI_INVALID_PARAMETER;
+      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_POPULATION_VIOLATION);
       goto Finish;
     }
   }

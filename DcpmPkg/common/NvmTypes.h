@@ -10,7 +10,6 @@
 
 #ifndef _NVM_TYPES_H_
 #define _NVM_TYPES_H_
-
 #include "NvmLimits.h"
 #include "NvmWorkarounds.h"
 #ifdef OS_BUILD
@@ -46,7 +45,7 @@
 #define HII_SENSOR_VALUE_STRING_SIZE   19
 #define HII_HEALTH_REASON_STRNG_SIZE   110
 #define HII_ISET_ID_STRNG_SIZE   64
-#define HII_DIMM_ID_STRNG_SIZE   48
+#define HII_DIMM_ID_STRNG_SIZE   255
 #define HII_APPDIRECT_PREFERENCE_OPTION_SIZE 30
 
 /** UINT128_DIGITS + 1; it has to be a number because of Vfr compilator requirements **/
@@ -92,7 +91,7 @@ typedef struct {
 #define SECURITYCAPABILITES_LEN        18 // @todo confirm label length
 #define IFC_STRING_LEN                255
 #define MEMORY_MODES_LEN               40 // @todo confirm label length
-#define MEMORY_TYPE                    30 
+#define MEMORY_TYPE                    30
 #define BOOT_STATUS_LEN               100
 #define FW_UPDATE_STATUS_LEN           64
 #define FW_BUILD_LEN                   16
@@ -103,6 +102,8 @@ typedef struct {
 #define SW_TRIG_ENABLED_DETAILS_LEN   120
 #define CONTROLLER_RID_LEN             12
 #define SECURITY_STATE_STR_LEN         32
+#define S3_RESUME_STR_LEN              12
+#define AVG_PWR_REPORTING_TIME_CONSTANT_MULT_STR_LEN    6
 
 /** DIMM UID length, including null terminator **/
 #define MAX_DIMM_UID_LENGTH      22   //!< DIMM UID hexadecimal-format representation length, including manufacturing fields
@@ -110,8 +111,8 @@ typedef struct {
 #define NVM_EVENT_MSG_LEN        1024 // Length of event message string
 
 #ifdef OS_BUILD
-#define	NVM_SYSLOG_SOURCE	"NVM_MGMT"
-#define	NVM_SYSLOG_SRC_W	L"NVM_MGMT"
+#define  NVM_SYSLOG_SOURCE  "NVM_MGMT"
+#define  NVM_SYSLOG_SRC_W  L"NVM_MGMT"
 #define NVM_DEBUG_LOGGER_SOURCE "NVM_DBG_LOGGER"
 #define NVM_DIMM_NAME       "Intel Persistent Memory Module"
 #define MAX_SOURCE_STR_LENGTH    32
@@ -146,9 +147,9 @@ typedef wchar_t NVM_EVENT_MSG_W[NVM_EVENT_MSG_LEN]; // Event message string
 #define APPDIRECT_GRANULARITY_1GIB          1
 #define APPDIRECT_GRANULARITY_32GIB         0
 #define APPDIRECT_GRANULARITY_MAX           APPDIRECT_GRANULARITY_1GIB
-#define APPDIRECT_GRANULARITY_DEFAULT       APPDIRECT_GRANULARITY_32GIB
+#define APPDIRECT_GRANULARITY_DEFAULT       APPDIRECT_GRANULARITY_1GIB
 
-#define APPDIRECT_GRANULARITY_VARIABLE_NAME L"APPDIRECT_GRANULARITY"
+
 #define PBR_CONTEXT_VAR L"PBR_CONTEXT"
 #define PBR_TAG_ID_VAR  L"PBR_TAG"
 
@@ -178,8 +179,8 @@ typedef wchar_t NVM_EVENT_MSG_W[NVM_EVENT_MSG_LEN]; // Event message string
 **/
 #define PM_TYPE_AD           0x1 // BIT0
 #define PM_TYPE_AD_NI        0x2 // BIT1
-#define PM_TYPE_STORAGE      0x4 // BIT2
-#define PM_TYPE_ALL          0x7 // (PM_TYPE_AD | PM_TYPE_AD_NI | PM_TYPE_STORAGE)
+#define PM_TYPE_RESERVED     0x4 // BIT2
+#define PM_TYPE_ALL          0x7 // (PM_TYPE_AD | PM_TYPE_AD_NI | PM_TYPE_RESERVED)
 
 #define RECOMMENDED_SETTINGS         BIT0
 
@@ -200,6 +201,13 @@ typedef wchar_t NVM_EVENT_MSG_W[NVM_EVENT_MSG_LEN]; // Event message string
 #define GOAL_CONFIG_STATUS_FIRMWARE_ERROR         5   ///< Unable to apply goal because of a FW error
 #define GOAL_CONFIG_STATUS_FAILED_UNKNOWN         6   ///< Unable to apply goal. Internal error
 
+ /**
+   Goal Config data type has 2 elements
+   AppDirect1 & AppDirect2 regions
+ **/
+#define APPDIRECT_1_INDEX   0
+#define APPDIRECT_2_INDEX   1
+
 /**
  * @}
  * Firmware types
@@ -218,10 +226,9 @@ typedef wchar_t NVM_EVENT_MSG_W[NVM_EVENT_MSG_LEN]; // Event message string
 
 /**
   Intel NVM Dimm format interface code
-  The current code should be 0x201 for Storage mode and 0x301 for AppDirect mode
+  The current code should be 0x301 for AppDirect mode
   We should use the values that are reported by BIOS
 **/
-#define DCPMM_FMT_CODE_STORAGE     0x201
 #define DCPMM_FMT_CODE_APP_DIRECT  0x301
 
 typedef struct _FIRMWARE_VERSION {
@@ -261,13 +268,15 @@ typedef struct _SMBUS_DIMM_ADDR {
 #define DIMM_INFO_CATEGORY_PACKAGE_SPARING              (1 << 2)    ///< Package sparing fields will be populated: PackageSparingEnabled, PackageSparesAvailable.
 #define DIMM_INFO_CATEGORY_ARS_STATUS                   (1 << 3)    ///< ARS status field will be populated: ARSStatus.
 #define DIMM_INFO_CATEGORY_SMART_AND_HEALTH             (1 << 4)    ///< Health related fields will be populated: HealthStatusReason, LatchedLastShutdownStatus, LastShutdownTime, AitDramEnabled.
-#define DIMM_INFO_CATEGORY_POWER_MGMT_POLICY            (1 << 5)    ///< Power management fields will be populated: PeakPowerBudget, AvgPowerBudget.
-#define DIMM_INFO_CATEGORY_OPTIONAL_CONFIG_DATA_POLICY  (1 << 6)    ///< Optional config data policy fields will be populated:
+#define DIMM_INFO_CATEGORY_POWER_MGMT_POLICY            (1 << 5)    ///< Power management fields will be populated: PeakPowerBudget, AvgPowerLimit, AveragePowerTimeConstant, TurboModeState, TurboPowerLimit
+#define DIMM_INFO_CATEGORY_OPTIONAL_CONFIG_DATA_POLICY  (1 << 6)    ///< Optional config data policy fields will be populated: AvgPowerReportingTimeConstantMultiplier
 #define DIMM_INFO_CATEGORY_OVERWRITE_DIMM_STATUS        (1 << 7)    ///< Overwrite DIMM status field will be populated: OverwriteDimmStatus.
 #define DIMM_INFO_CATEGORY_FW_IMAGE_INFO                (1 << 8)    ///< Firmware Image info fields will be populated: LastFwUpdateStatus, StagedFwVersion, FWImageMaxSize.
 #define DIMM_INFO_CATEGORY_MEM_INFO_PAGE_3              (1 << 9)    ///< Memory info page 3 fields will be populated: ErrorInjectionEnabled, MediaTemperatureInjectionEnabled, SoftwareTriggersEnabled, PoisonErrorInjectionsCounter, PoisonErrorClearCounter, MediaTemperatureInjectionsCouner, SoftwareTriggersCounter, SoftwareTriggersEnabledDetails.
 #define DIMM_INFO_CATEGORY_VIRAL_POLICY                 (1 << 10)   ///< Viral policy fields will be populated: ViralPolicyEnable, ViralStatus.
-#define DIMM_INFO_CATEGORY_DEVICE_CHARACTERISTICS       (1 << 11)
+#define DIMM_INFO_CATEGORY_DEVICE_CHARACTERISTICS       (1 << 11)   ///< Device Characteristics fields will be populated: CTST, MTST, MTSTT, MTSPT, CTSTT, CTSPT, MaxAveragePowerLimit, MaxTurboModePowerConsumption, MaxAveragePowerTimeConstant, AveragePowerTimeConstantStep.
+#define DIMM_INFO_CATEGORY_MEM_INFO_PAGE_4              (1 << 12)   ///< Memory info page 4 fields will be populated
+#define DIMM_INFO_CATEGORY_EXTENDED_ADR                 (1 << 13)   ///< Extended ADR status info
 #define DIMM_INFO_CATEGORY_ALL                          (0xFFFF)    ///< All DIMM_INFO fields will be populated.
 
 /**
@@ -287,7 +296,49 @@ typedef struct _SMBUS_DIMM_ADDR {
 #define DIMM_INFO_ERROR_VIRAL_POLICY                    (1 << 10)
 #define DIMM_INFO_ERROR_MEM_INFO_PAGE                   (1 << 11)
 #define DIMM_INFO_ERROR_MAX                             (1 << 12)
-#define DIMM_INFO_ERROR_DEVICE_CHARACTERISTICS                (1 << 13)
+#define DIMM_INFO_ERROR_DEVICE_CHARACTERISTICS          (1 << 13)
+#define DIMM_INFO_ERROR_S3RESUME                        (1 << 14)
+
+
+#define DIMM_INFO_TYPE_CHAR16   1
+#define DIMM_INFO_TYPE_UINT8    2
+#define DIMM_INFO_TYPE_UINT16   3
+#define DIMM_INFO_TYPE_UINT32   4
+#define DIMM_INFO_TYPE_BOOLEAN  5
+
+typedef struct {
+  UINT64 Code;
+}DIMM_INFO_ATTRIBUTE_STATUS;
+
+typedef struct _DIMM_INFO_ATTRIB_HEADER {
+  DIMM_INFO_ATTRIBUTE_STATUS Status;
+  UINT8 Type;
+}DIMM_INFO_ATTRIB_HEADER;
+
+typedef struct _DIMM_INFO_ATTRIB_CHAR16{
+  DIMM_INFO_ATTRIB_HEADER Header;
+  CHAR16 Data[32];
+}DIMM_INFO_ATTRIB_CHAR16;
+
+typedef struct _DIMM_INFO_ATTRIB_UINT8 {
+  DIMM_INFO_ATTRIB_HEADER Header;
+  UINT8 Data;
+}DIMM_INFO_ATTRIB_UINT8;
+
+typedef struct _DIMM_INFO_ATTRIB_UINT16 {
+  DIMM_INFO_ATTRIB_HEADER Header;
+  UINT16 Data;
+}DIMM_INFO_ATTRIB_UINT16;
+
+typedef struct _DIMM_INFO_ATTRIB_UINT32 {
+  DIMM_INFO_ATTRIB_HEADER Header;
+  UINT32 Data;
+}DIMM_INFO_ATTRIB_UINT32;
+
+typedef struct _DIMM_INFO_ATTRIB_BOOLEAN {
+  DIMM_INFO_ATTRIB_HEADER Header;
+  BOOLEAN Data;
+} DIMM_INFO_ATTRIB_BOOLEAN;
 
 // The "global dimm struct" is at &gNvmDimmData->PMEMDev.Dimms and is populated
 // at HII driver loading, so they are included by default on any call to GetDimmInfo()
@@ -334,15 +385,23 @@ typedef struct _DIMM_INFO {
   UINT16 HealthStatusReason;                //!< Health state reason(s)
   UINT32 LatchedLastShutdownStatusDetails;  //!< The detailed status of the last shutdown of the DIMM.
   UINT32 UnlatchedLastShutdownStatusDetails; //!< The detailed status of the last shutdown of the DIMM.
+  UINT8 ThermalThrottlePerformanceLossPrct; //!< the average percentage loss (0..100) due to thermal throttling since last read in current boot
   UINT64 LastShutdownTime;                  //!< The time the system was last shutdown.
   UINT8 AitDramEnabled;                     //!< Whether or not the DIMM AIT DRAM is enabled
+  UINT16 MaxMediaTemperature;      //!< The highest die temperature reported in degrees Celsius.
+  UINT16 MaxControllerTemperature; //!< The highest controller temperature repored in degrees Celsius.
 
   //DIMM_INFO_CATEGORY_POWER_MGMT_POLICY
-  UINT16 PeakPowerBudget;                   //!< The power budget in mW used for instantaneous power (100-20000 mW). The default is 100 mW.
-  UINT16 AvgPowerBudget;                    //!< The power budget in mW used for average power (100-18000 mW). The default is 100 mW.
+  DIMM_INFO_ATTRIB_UINT16 PeakPowerBudget;                              //!< The power budget in mW used for instantaneous power (10000-20000 mW). The default is 20000 mW.
+  DIMM_INFO_ATTRIB_UINT16 AvgPowerLimit;                                //!< The power budget in mW used for average power (10000-18000 mW). The default is 12000 mW.
+  DIMM_INFO_ATTRIB_UINT8  AveragePowerTimeConstant;                     //!< The value used as a base time window for power usage measurements [ms].
+  DIMM_INFO_ATTRIB_UINT8  MemoryBandwidthBoostFeature;                  //!< Returns if the Turbo Mode is currently enabled or not.
+  DIMM_INFO_ATTRIB_UINT16 MemoryBandwidthBoostMaxPowerLimit;            //!< Power limit [mW] used for limiting the Turbo Mode power consumption.
+  DIMM_INFO_ATTRIB_UINT32 MemoryBandwidthBoostAveragePowerTimeConstant; //!< The value used as a base time window for power usage measurements [ms].
 
   //DIMM_INFO_CATEGORY_OPTIONAL_CONFIG_DATA_POLICY
-  BOOLEAN FirstFastRefresh;                 //!< DEPRECATED
+  DIMM_INFO_ATTRIB_UINT8  AvgPowerReportingTimeConstantMultiplier;  //!< The value that is used to multiply the base time value used for average power consumption measurements.
+  DIMM_INFO_ATTRIB_UINT32 AvgPowerReportingTimeConstant;            //!< The value [ms] used to determine the time constant for reporting average power consumption.
 
   //DIMM_INFO_CATEGORY_VIRAL_POLICY
   BOOLEAN ViralPolicyEnable;                //!< true if viral policy is enabled
@@ -377,7 +436,7 @@ typedef struct _DIMM_INFO {
   UINT16 VendorId;                          //!< vendor id
   UINT16 DeviceId;                          //!< device id
   UINT16 SubsystemVendorId;                 //!< Vendor id of the subsytem memory controller
-  UINT16 SubsystemDeviceId;                 //!< Device id of the subsystem memory controler
+  UINT16 SubsystemDeviceId;                 //!< Device id of the subsystem memory controller
   UINT16 Rid;                               //!< revision id
   UINT16 SubsystemRid;                      //!< Revision id of the subsystem memory controller from NFIT
   UINT16 ImcId;                             //!< memory controller id
@@ -389,6 +448,7 @@ typedef struct _DIMM_INFO {
   UINT8 ModesSupported;                     //!< A list of the modes supported by the DIMM
   BOOLEAN SecurityCapabilities;             //!< The security features supported by the DIMM
   BOOLEAN SKUViolation;                     //!< The configuration of the DIMM is unsupported due to a license issue
+  BOOLEAN IsInPopulationViolation;          //!< The DIMM population falls outside of the supported config option
   UINT8 OverwriteDimmStatus;                //!< Overwrite DIMM operation status
   BOOLEAN Configured;                       //!< true if the DIMM is configured
   CHAR16 ManufacturerStr[MANUFACTURER_LEN]; //!< Manufacturer string matched from manufacturer string number.
@@ -398,24 +458,45 @@ typedef struct _DIMM_INFO {
   CHAR16 DimmUid[MAX_DIMM_UID_LENGTH];      //!< Globally unique NVDIMM id (in hexadecimal format representation)
   UINT16 ErrorMask;                         //!< Bit mask representing which FW functions failed, see DIMM_INFO_ERROR types
 
-#ifdef OS_BUILD
-  CHAR8 ActionRequired;                     //!< Action Required bit, the value stored in the <uid>.ar file (see event.c file)
-#endif // OS_BUILD
-
   UINT16 ControllerRid;                     //!< Revision id of the subsystem memory controller from FIS
-  UINT16 MaxAveragePowerBudget;             //!< Maximum average power budget supported by the Module in mW
+
+  //DIMM_INFO_CATEGORY_DEVICE_CHARACTERISTICS
+  DIMM_INFO_ATTRIB_UINT16 MaxAveragePowerLimit;                             //!< Maximum average power limit in increments of 250 [mW], if supported by the module. Else, 0x0.
+  DIMM_INFO_ATTRIB_UINT16 MaxMemoryBandwidthBoostMaxPowerLimit;             //!< Maximum value in increments of 250 [mW] that can be set via Set Power Management Policy, if supported by the module. Else, 0x0.
+  DIMM_INFO_ATTRIB_UINT32 MaxMemoryBandwidthBoostAveragePowerTimeConstant;  //!< Maximum supported value [ms] of the Memory Bandwidth Boost Average Power Time Constant.
+  DIMM_INFO_ATTRIB_UINT32 MemoryBandwidthBoostAveragePowerTimeConstantStep; //!< Increments [ms] allowed by the FW when setting the Memory Bandwidth Boost Average Power Time Constant.
+  DIMM_INFO_ATTRIB_UINT32 MaxAveragePowerReportingTimeConstant;             //!< Maximum supported value [ms] of the Reporting Average Power Time Constant.
+  DIMM_INFO_ATTRIB_UINT32 AveragePowerReportingTimeConstantStep;                 //!< Increments [ms] allowed by the FW when setting the Average Power Reporting Time Constant.
 
   //DIMM_INFO_CATEGORY_SECURITY
   BOOLEAN MasterPassphraseEnabled;          //!< If 1, master passphrase is enabled
   UINT32 SecurityStateBitmask;
+  UINT32 S3ResumeOptIn;
 
   CHAR16 SecurityStateStr[SECURITY_STATE_STR_LEN];
-} DIMM_INFO;
+
+  //DIMM_INFO_CATEGORY_MEM_INFO_PAGE_4
+  DIMM_INFO_ATTRIB_UINT16 DcpmmAveragePower;//!< DCPMM Average Power
+  DIMM_INFO_ATTRIB_UINT16 AveragePower12V;  //!< Average 12V Power
+  DIMM_INFO_ATTRIB_UINT16 AveragePower1_2V; //!< Average 1.2V Power
+
+  //Extended ADR Status Info
+  DIMM_INFO_ATTRIB_UINT8 ExtendedAdrEnabled; //!< Is extended ADR flow enabled in the FW
+  DIMM_INFO_ATTRIB_UINT8 PrevPwrCycleExtendedAdrEnabled; //!< Was extended ADR flow enabled in the FW during the last power cycle
+
+  } DIMM_INFO;
 
 typedef struct _TOPOLOGY_DIMM_INFO {
-  UINT16 DimmID;                            //!< SMBIOS Type 17 handle corresponding to this memory device
-  UINT16 SocketID;                          //!< Socket ID for the memory device
+  UINT8 PmttVersion;                //!< PMTT Version
   UINT8 MemoryType;                         //!< memory type
+  UINT16 DimmID;                            //!< SMBIOS Type 17 handle corresponding to this memory device
+  UINT32 DimmHandle;                        //!< NFIT Device Handle
+  UINT16 NodeControllerID;                  //!< Node Controller ID
+  UINT16 SocketID;                          //!< Socket ID for the memory device
+  UINT16 DieID;                             //!< die identifier
+  UINT16 MemControllerID;                   //!< Memory Controller ID
+  UINT16 ChannelID;                         //!< Channel identifier
+  UINT16 SlotID;                            //!< Slot identifier
   UINT64 VolatileCapacity;                  //!< Capacity in bytes mapped as volatile memory
   CHAR16 DeviceLocator[DEVICE_LOCATOR_LEN]; //!< describing the physically-labeled socket or board position
   CHAR16 BankLabel[BANKLABEL_LEN];          //!< identifies the physically labeled bank
@@ -443,6 +524,7 @@ typedef struct _SYSTEM_CAPABILITIES_INFO {
   UINT8 CurrentOperatingMode;                       //!< Memory modes (volatile and persistent) currently selected by BIOS
   UINT16 InterleaveFormatsSupportedNum;             //!< Number of elements in list
   HII_POINTER PtrInterleaveFormatsSupported;        //!< List of supported interleave set formats
+  HII_POINTER PtrInterleaveSize;                    //!< PCAT 3.0 iMc & Channel intereleave size
   UINT64 MinNsSize;                                 //!< Minimum namespace size in bytes
   UINT64 NsBlockSizes[SUPPORTED_BLOCK_SIZES_COUNT]; //!< Supported namespace block sizes in bytes
   UINT8 AppDirectMirrorSupported;
@@ -468,12 +550,16 @@ typedef struct _SYSTEM_CAPABILITIES_INFO {
 } SYSTEM_CAPABILITIES_INFO;
 
 typedef struct _MEMORY_RESOURCES_INFO {
-  UINT64 RawCapacity;               //!< Sum of the raw capacity on all dimms
-  UINT64 VolatileCapacity;          //!< Sum of the usable volatile capacity on all dimms
-  UINT64 AppDirectCapacity;         //!< Sum of the usable appdirect capacity on all dimms
-  UINT64 UnconfiguredCapacity;      //!< Sum of the capacity that is only accessible as Storage capacity
-  UINT64 InaccessibleCapacity;      //!< Sum of the capacity that is inaccessible due to a licensing issue
+  UINT64 RawCapacity;               //!< Sum of the raw capacity on all DCPMM dimms
+  UINT64 VolatileCapacity;          //!< Sum of the usable volatile capacity on all DCPMM dimms
+  UINT64 AppDirectCapacity;         //!< Sum of the usable appdirect capacity on all DCPMM dimms
+  UINT64 UnconfiguredCapacity;      //!< Sum of the DCPMM capacity that is not configured
+  UINT64 InaccessibleCapacity;      //!< Sum of the DCPMM capacity that is inaccessible due to a licensing issue
   UINT64 ReservedCapacity;          //!< Sum of the capacity reserved for metadata on all dimms
+  UINT64 DDRRawCapacity;            //!< Sum of the raw capacity on all DDR dimms
+  UINT64 DDRCacheCapacity;          //!< Sum of the DDR capacity used for caching
+  UINT64 DDRVolatileCapacity;       //!< Sum of the DDR capacity used as volatile memory
+  UINT64 Reserved[7];
 } MEMORY_RESOURCES_INFO;
 
 typedef struct _DIMM_PERFORMANCE_DATA {
@@ -535,7 +621,6 @@ typedef struct _NAMESPACE_INFO {
   Minimum size and alignment of AppDirect and Block Namespace is 1GB
 **/
 #define PM_NAMESPACE_MIN_SIZE           BYTES_IN_GIBIBYTE
-#define BLOCK_NAMESPACE_MIN_SIZE        BYTES_IN_GIBIBYTE
 #define NAMESPACE_4KB_ALIGNMENT_SIZE    KIB_TO_BYTES(4)
 #define NAMESPACE_64KB_ALIGNMENT_SIZE   KIB_TO_BYTES (64)
 #define NAMESPACE_32GB_ALIGNMENT_SIZE   GIB_TO_BYTES (32)
@@ -555,7 +640,6 @@ typedef struct _NAMESPACE_INFO {
 
 /** Reserve Types */
 #define RESERVE_DIMM_NONE                0
-#define RESERVE_DIMM_STORAGE             1
 #define RESERVE_DIMM_AD_NOT_INTERLEAVED  2
 
 #define DEFAULT_CHANNEL_INTERLEAVE_SIZE 0
@@ -591,7 +675,6 @@ typedef struct _REGION_GOAL_PER_DIMM_INFO {
   UINT16 SocketId;                                  //!< Socket ID that DIMM is found
   UINT32 PersistentRegions;                         //!< Count of persistent regions
   UINT64 VolatileSize;                              //!< Volatile capacity
-  UINT64 StorageCapacity;                           //!< Any capacity not allocated to Volatile or AppDirect regions
   UINT8 NumberOfInterleavedDimms[MAX_IS_PER_DIMM];  //!< Count of DIMMs that are part of related Interleaved AppDirect regions
   UINT64 AppDirectSize[MAX_IS_PER_DIMM];            //!< AppDirect capacity
   UINT8 InterleaveSetType[MAX_IS_PER_DIMM];         //!< Type of interleave set: non-interleaved, interleaved, mirrored
@@ -620,7 +703,6 @@ typedef struct _DEBUG_LOG_INFO {
 
 /** Namespace related defines**/
 #define UNKNOWN_TYPE_NAMESPACE            0
-#define STORAGE_NAMESPACE                 1
 #define APPDIRECT_NAMESPACE               2
 
 #define NAMESPACE_BLOCK_COUNT_UNDEFINED   0
@@ -658,6 +740,8 @@ typedef struct _DEBUG_LOG_INFO {
 #define HEALTH_REASON_AIT_DRAM_DISABLED                   BIT5  ///< AIT DRAM state is disabled
 #define HEALTH_REASON_CAP_SELF_TEST_FAILURE               BIT6  ///< CAP Self-Test failed
 #define HEALTH_REASON_CRITICAL_INTERNAL_STATE_FAILURE     BIT7  ///< Critical internal state failure
+#define HEALTH_REASON_PERFORMANCE_DEGRADED                BIT8  ///< Performance degraded
+#define HEALTH_REASON_CAP_SELF_TEST_COMM_FAILURE          BIT9  ///< CAP Self Test Communication failure
 
 /**
   @}
@@ -713,6 +797,7 @@ typedef struct _DEBUG_LOG_INFO {
 #define DDRT_TRAINING_COMPLETE      0x01
 #define DDRT_TRAINING_FAILURE       0x02
 #define DDRT_S3_COMPLETE            0x03
+#define NORMAL_MODE_COMPLETE        0x04
 #define DDRT_TRAINING_UNKNOWN       0xFF
 
 /** Dimm Boot Status Bitmask **/
@@ -744,6 +829,13 @@ typedef struct _DEBUG_LOG_INFO {
 #define SECURITY_MASK_NOT_SUPPORTED       BIT5
 #define SECURITY_MASK_MASTER_ENABLED      BIT8
 #define SECURITY_MASK_MASTER_COUNTEXPIRED BIT9
+
+/**
+  Security Opt-In values
+**/
+#define S3_RESUME_SECURE_S3   0x0
+#define S3_RESUME_UNSECURE_S3 0x1
+#define S3_RESUME_INVALID     0xFF
 
 /**
   Form Factor
@@ -849,6 +941,17 @@ typedef struct _DEBUG_LOG_INFO {
 
 #define OPTIONAL_DATA_UNDEFINED 0xFFUL
 
+#define AVG_PWR_REPORTING_TIME_CONSTANT_MULT_UNKNOWN               0
+#define AVG_PWR_REPORTING_TIME_CONSTANT_MULT_MIXED                 1
+#define AVG_PWR_REPORTING_TIME_CONSTANT_MULT_MAX                   32
+#define AVG_PWR_REPORTING_TIME_CONSTANT_MULT_DEFAULT               0
+#define HII_AVG_PWR_REPORTING_TIME_CONSTANT_MULT_MAX_STR_LEN       3
+
+#define AVG_PWR_REPORTING_TIME_CONSTANT_MAX                        12000
+#define AVG_PWR_REPORTING_TIME_CONSTANT_MIN                        100
+#define AVG_PWR_REPORTING_TIME_CONSTANT_STEP                       100
+#define HII_AVG_PWR_REPORTING_TIME_CONSTANT_MAX_STR_LEN            6
+
 /**
   Namespace security capabilities.
 **/
@@ -873,7 +976,7 @@ typedef struct _DEBUG_LOG_INFO {
 #define SENSOR_TYPE_UNLATCHED_DIRTY_SHUTDOWN_COUNT  9                ///< Unlatched Dirty Shutdowns Count Sensor ID
 #define SENSOR_TYPE_ALL                             10               ///< All Sensor IDs
 #define SENSOR_TYPE_COUNT                           SENSOR_TYPE_ALL  ///< Total count of all supported sensor types
-
+#define ALARM_COUNT                                 3                ///< Number of Alarm Threshold sensors
 /** @} */
 
 /** Sensor enabled/disabled **/
@@ -917,28 +1020,38 @@ typedef struct _DEBUG_LOG_INFO {
   01 - DIMM is configured successfully
   02 - Reserved
   03 - All the DIMMs in the interleave set not found. Volatile memory is mapped to the SPA if possible
-  04 - Matching Interleave set not found. Volatile memory is mapped to the SPA if possible
-  05 - DIMM added to the system or moved within the system or DIMM is not yet configured.
-  Volatile memory is mapped to the SPA if possible. Current configuration present in the DIMM is not modified.
+  04 - Persistent Memory not mapped due to matching Interleave set not found. Volatile memory is mapped to the SPA if possible
+  05 - DIMM added to the system or moved within the system or DIMM is not yet configured
+       Volatile memory is mapped to the SPA if possible. Current configuration present in the DIMM is not modified (Reserved)
   06 - New configuration input structures have errors, old configuration used. Refer to the config output structures
-  for additional errors.
-  07 - New configuration input structures have errors. Volatile memory is mapped to the SPA if possible.
-  Refer to the config output structures for addition errors
+       for additional errors
+  07 - New configuration input structures have errors. Volatile memory is mapped to the SPA if possible
+       Refer to the config output structures for addition errors
   08 - Configuration Input Checksum not valid
   09 - Configuration Input data Revision is not supported
   10 - Current Configuration Checksum not valid
+  11 - DCPMM is not mapped to SPA due to a health issue or configuration change
+  12 - DCPMM persistent and volatile memory is not mapped due to a population issue
+  13 - DCPMM volatile memory is not mapped since NM:FM ratio is not supported
+  14 - DCPMM is not mapped due to a violation of the CPU maximum memory limit
+
+  Other values reserved
 **/
-#define DIMM_CONFIG_UNDEFINED               0
-#define DIMM_CONFIG_SUCCESS                 1
-#define DIMM_CONFIG_RESERVED                2
-#define DIMM_CONFIG_IS_INCOMPLETE           3
-#define DIMM_CONFIG_NO_MATCHING_IS          4
-#define DIMM_CONFIG_NEW_DIMM                5
-#define DIMM_CONFIG_OLD_CONFIG_USED         6
-#define DIMM_CONFIG_BAD_CONFIG              7
-#define DIMM_CONFIG_IN_CHECKSUM_NOT_VALID   8
-#define DIMM_CONFIG_REVISION_NOT_SUPPORTED  9
-#define DIMM_CONFIG_CURR_CHECKSUM_NOT_VALID 10
+#define DIMM_CONFIG_UNDEFINED                      0
+#define DIMM_CONFIG_SUCCESS                        1
+#define DIMM_CONFIG_RESERVED                       2
+#define DIMM_CONFIG_IS_INCOMPLETE                  3
+#define DIMM_CONFIG_NO_MATCHING_IS                 4
+#define DIMM_CONFIG_NEW_DIMM                       5
+#define DIMM_CONFIG_OLD_CONFIG_USED                6
+#define DIMM_CONFIG_BAD_CONFIG                     7
+#define DIMM_CONFIG_IN_CHECKSUM_NOT_VALID          8
+#define DIMM_CONFIG_REVISION_NOT_SUPPORTED         9
+#define DIMM_CONFIG_CURR_CHECKSUM_NOT_VALID        10
+#define DIMM_CONFIG_PM_NOT_MAPPED                  11
+#define DIMM_CONFIG_DCPMM_POPULATION_ISSUE         12
+#define DIMM_CONFIG_DCPMM_NM_FM_RATIO_UNSUPPORTED  13
+#define DIMM_CONFIG_CPU_MAX_MEMORY_LIMIT_VIOLATION 14
 
 /**
   00 - Valid
@@ -964,11 +1077,17 @@ typedef struct {
   CHAR16 ValueString[HII_SENSOR_VALUE_STRING_SIZE];
   UINT64 Value;
   UINT64 AlarmThreshold;
+  UINT8  AlarmThresholdIsMixed;
   UINT64 NewAlarmThreshold;
   UINT64 ThrottlingStopThreshold;
   UINT64 ThrottlingStartThreshold;
   UINT64 ShutdownThreshold;
+  UINT64 MaxTemperature;
 } DIMM_SENSOR_HII;
+
+typedef struct {
+  UINT8 Enabled[MAX_DIMMS];
+}DIMM_ALARM_ENABLED;
 
 #define DIMM_SENSOR_ALARM_DISABLED 0
 #define DIMM_SENSOR_ALARM_ENABLED  1
@@ -1137,4 +1256,6 @@ Start Diagnostic Command tests codes
 #define COMMAND_ACCESS_POLICY_RESTRICTION_BIOSONLY       1
 #define COMMAND_ACCESS_POLICY_RESTRICTION_SMBUSONLY      2
 #define COMMAND_ACCESS_POLICY_RESTRICTION_BIOSSMBUSONLY  3
+#define COMMAND_ACCESS_POLICY_RESTRICTION_UNSUPPORTED    0xFE
+#define COMMAND_ACCESS_POLICY_RESTRICTION_INVALID        0xFF
 #endif /** _NVM_TYPES_H_ **/

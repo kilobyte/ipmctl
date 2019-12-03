@@ -65,10 +65,10 @@ on DCPMMs.
   Changes the DCPMM security lock state
 
 *ipmctl-create-goal(1)*::
-   Creates a memory allocation goal on one or more DCPMM
+  Creates a memory allocation goal on one or more DCPMM
 
 *ipmctl-delete-goal(1)*::
-  Creates a memory allocation goal on one or more DCPMM
+  Deletes a memory allocation goal on one or more DCPMM
 
 *ipmctl-dump-goal(1)*::
    Stores the current system configuration in a file
@@ -103,9 +103,6 @@ Monitor health and track performance of DCPMMs.
 === SUPPORT AND MAINTENANCE
 View and update the firmware on DCPMMs. Other support and maintenance commands.
 
-*ipmctl-acknowledge-event*(1)::
-  Turns off the flag that signals a corrective action on an event
-
 *ipmctl-change-preference*(1)::
   Modifies one or more user preferences
 
@@ -118,14 +115,8 @@ View and update the firmware on DCPMMs. Other support and maintenance commands.
 *ipmctl-modify-device*(1)::
   Changes the configurable setting(s) on one or more DCPMMs
 
-*ipmctl-show-events*(1)::
-  Shows DCPMM related events
-
 *ipmctl-show-firmware*(1)::
   Shows detailed information about the firmware
-
-*ipmctl-show-host*(1)::
-  Shows basic information about the host server
 
 *ipmctl-show-preferences*(1)::
   Displays a list of the DCPMM software user preferences
@@ -139,13 +130,22 @@ View and update the firmware on DCPMMs. Other support and maintenance commands.
 === DEBUG
 Debug and troubleshoot DCPMMs.
 
+*ipmctl-delete-pcd*(1)
+  Clears select partition data from the PCD
+
 *ipmctl-dump-debug-log*(1)::
   Dumps encoded firmware debug logs from DCPMM
 
 *ipmctl-inject-error*(1)::
   Injects an error or clears a previously injected error
 
-*ipmctl-run-diagnostic*(1)::
+*ipmctl-show-cap*(1)::
+  Shows the current Command Access Policy restrictions.
+
+*ipmctl-show-cel*(1)::
+  Shows the current Command Effect Log.
+
+*ipmctl-start-diagnostic*(1)::
   Runs a diagnostic test
 
 *ipmctl-show-acpi*(1)::
@@ -193,20 +193,20 @@ SEE ALSO
 *ipmctl-change-sensor*(1),
 *ipmctl-show-performance*(1),
 *ipmctl-show-sensor*(1),
-*ipmctl-acknowledge-event*(1),
 *ipmctl-change-preference*(1),
 *ipmctl-dump-support*(1),
 *ipmctl-help*(1),
 *ipmctl-modify-device*(1),
-*ipmctl-show-events*(1),
 *ipmctl-show-firmware*(1),
-*ipmctl-show-host*(1),
 *ipmctl-show-preferences*(1),
 *ipmctl-update-firmware*(1),
 *ipmctl-version*(1),
+*impctl-delete-pcd*(1),
 *ipmctl-dump-debug-log*(1),
 *ipmctl-inject-error*(1),
-*ipmctl-run-diagnostic*(1),
+*ipmctl-show-cap*(1),
+*ipmctl-show-cel*(1),
+*ipmctl-start-diagnostic*(1),
 *ipmctl-show-acpi*(1),
 *ipmctl-show-error-log*(1),
 *ipmctl-show-pcd*(1)

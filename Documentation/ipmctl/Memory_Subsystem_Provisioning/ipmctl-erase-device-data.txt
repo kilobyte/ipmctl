@@ -8,10 +8,11 @@ endif::manpage[]
 
 NAME
 ----
+ifndef::os_build[]
 ipmctl-erase-device-data - Erases the persistent data on one or more DCPMMs
-
+endif::os_build[]
 ifdef::os_build[]
-NOTE: This command is subject to OS Vendor (OSV) support. It will return "Not Supported."
+ipmctl-erase-device-data - Erases the persistent data on one or more DCPMMs on supported OS
 endif::os_build[]
 
 SYNOPSIS
@@ -21,7 +22,14 @@ ipmctl delete [OPTIONS] -dimm [TARGETS] Passphrase=(string)
 
 DESCRIPTION
 -----------
-Erases the persistent data on one or more DCPMMs.
+Erases the persistent data on one or more DCPMMs. This commands invokes the DCPMM 'Secure Erase'
+command.
+
+NOTE: This command does not zero out the persistent data, but instead randomizes the data.
+
+ifdef::os_build[]
+NOTE: This command is subject to OS Vendor (OSV) support. It will return "Not Supported."
+endif::os_build[]
 
 OPTIONS
 -------
@@ -61,7 +69,7 @@ endif::os_build[]
 
 TARGETS
 -------
--dimm (DimmIDs)::
+-dimm [DimmIDs]::
 Erases specific DCPMMs by supplying one or more comma-separated DCPMM
 identifiers. However, this is not recommended as it may put the system in an
 undesirable state. The default is to erase all manageable DCPMMs.
@@ -105,10 +113,13 @@ ipmctl delete -dimm Passphrase=""
 
 LIMITATIONS
 -----------
-To successfully execute this command, the caller must have the appropriate privileges
-and the specified DCPMM(s) must be manageable by the host software, not be
-in the "Frozen" or "Exceeded" lock states and any namespaces associated with the 
-requested DCPMM(s) must be deleted before running this command.
+In order to successfully execute this command:
+
+- The caller must have the appropriate privileges.
+
+- The specified DCPMM(s) must be manageable by the host software, not be
+  in the "Frozen" or "Exceeded" lock states and any namespaces associated with the
+  requested DCPMM(s) must be deleted before running this command.
 
 ifdef::os_build[]
 The command is subject to OS Vendor (OSV) support. If OSV does not provide

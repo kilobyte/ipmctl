@@ -64,11 +64,11 @@ PbrGetPassThruRecord(
     goto Finish;
   }
 
-  //skip past the pass thru request header
+  //skip past the pass through request header
   CurDataPos += sizeof(PbrPassThruReq);
   //verify we didn't run out of data
   if (CurDataPos > DataSize) {
-    NVDIMM_ERR("Failed to skip past the pass thru request\n");
+    NVDIMM_ERR("Failed to skip past the pass through request\n");
     ReturnCode = EFI_LOAD_ERROR;
     goto Finish;
   }
@@ -130,8 +130,8 @@ PbrGetPassThruRecord(
       ptResp->OutputLargePayloadSize);
   }
 
-  FreePool(pData);
 Finish:
+  FREE_POOL_SAFE(pData);
   return ReturnCode;
 }
 
@@ -197,7 +197,7 @@ PbrSetPassThruRecord(
 
   if (pCmd->LargeInputPayloadSize)
   {
-    CopyMem_S((VOID*)((UINTN)pData + (UINTN)sizeof(PbrPassThruReq) + (UINTN)pCmd->InputPayloadSize), 
+    CopyMem_S((VOID*)((UINTN)pData + (UINTN)sizeof(PbrPassThruReq) + (UINTN)pCmd->InputPayloadSize),
       DataSize - sizeof(PbrPassThruReq) - pCmd->InputPayloadSize,
       pCmd->LargeInputPayload,
       pCmd->LargeInputPayloadSize);
@@ -336,7 +336,7 @@ PbrSetTableRecord(
   case PBR_RECORD_TYPE_PMTT:
     NVDIMM_DBG("Set Table Record: PMTT: Table size: %d\n", TableSize);
     Signature = PBR_PMTT_SIG;
-    break; 
+    break;
   default:
     NVDIMM_DBG("Unknown table type: %d", TableType);
     ReturnCode = EFI_INVALID_PARAMETER;

@@ -38,14 +38,9 @@
 #include <s_str.h>
 #include <wchar.h>
 #include <CommandParser.h>
-#include "event.h"
-#include <Protocol/EfiShellParameters.h>
+#include <ShellParameters.h>
 #include "LoadCommand.h"
-
-#if defined(__LINUX__)
-#include <safe_str_lib.h>
-#include <safe_mem_lib.h>
-#endif
+#include <os_str.h>
 
 #define STRINGIZE2(s) #s
 #define STRINGIZE(s) STRINGIZE2(s)
@@ -83,13 +78,6 @@ extern EFI_STATUS
 ParseSourceDumpFile(IN CHAR16 *pFilePath, IN EFI_DEVICE_PATH_PROTOCOL *pDevicePath, OUT CHAR8 **pFileString);
 extern EFI_STATUS RegisterCommands();
 extern int g_fast_path;
-extern int acpi_event_create_ctx(unsigned int dimm_handle, void ** ctx);
-extern int acpi_event_ctx_get_dimm_handle(void * ctx, unsigned int * dev_handle);
-extern int acpi_event_get_event_state(void * ctx, enum acpi_event_type event_type, enum acpi_event_state *event_state);
-extern int acpi_event_set_monitor_mask(void * ctx, const unsigned int mask);
-extern int acpi_event_get_monitor_mask(void * ctx, unsigned int * mask);
-extern int acpi_wait_for_event(void * acpi_event_contexts[], const unsigned int dimm_cnt, const int timeout_sec, enum acpi_get_event_result * event_result);
-extern int acpi_event_free_ctx(void * context);
 
 //todo: add error checking
 NVM_API int nvm_init()
@@ -197,7 +185,7 @@ static void nvm_internal_uninit(BOOLEAN binding_stop)
 * @brief    Initialize the config file
 * Please notice that only the first call to the function changes the conf file
 * configuration, the following function calls have no effect and the conf file
-* configuration remains unchanged up to next applicaiton execution.
+* configuration remains unchanged up to next application execution.
 *
 * @param    p_ini_file_name Pointer to the name of the ini file to read
 * @return   void
@@ -253,7 +241,7 @@ NVM_API int nvm_run_cli(int argc, char *argv[])
   if (gOsShellParametersProtocol.StdOut == stdout)
   {
     //WA to ensure wprintf work throughout invocation of DCPMM mgmt stack.
-    wprintf(L"\n");
+    wprintf(L"");
   }
 
   nvm_status = nvm_internal_init(FALSE);
@@ -483,14 +471,16 @@ NVM_API int nvm_get_number_of_memory_topology_devices(unsigned int *count)
   }
 
   ReturnCode = gNvmDimmDriverNvmDimmConfig.GetSystemTopology(&gNvmDimmDriverNvmDimmConfig, &pDimmTopology, (UINT16 *)&DdrDimmCnt);
+
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_ERR_W(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
+    FREE_POOL_SAFE(pDimmTopology);
     return NVM_ERR_UNKNOWN;
   } else if (pDimmTopology == NULL) {
     NVDIMM_ERR("Could not read the system topology.\n");
     return NVM_ERR_UNKNOWN;
   }
-
+  FREE_POOL_SAFE(pDimmTopology);
   if (NVM_SUCCESS != (nvm_status = nvm_get_number_of_devices(&DpcCnt)))
   {
     NVDIMM_ERR("Failed to obtain the number of devices (%d)\n", nvm_status);
@@ -549,8 +539,8 @@ NVM_API int nvm_get_memory_topology(struct memory_topology *  p_devices,
   for (unsigned int ddr_index = 0; ddr_index < ddr_cnt; ddr_index++) {
     p_devices[ddr_index].physical_id = p_dimm_topology[ddr_index].DimmID; // Memory device's physical identifier (SMBIOS handle)
     p_devices[ddr_index].memory_type = MEMORY_TYPE_DDR4;  // Type of memory device
-    memcpy_s(p_devices[ddr_index].device_locator, NVM_DEVICE_LOCATOR_LEN, p_dimm_topology[ddr_index].DeviceLocator, NVM_DEVICE_LOCATOR_LEN);  // Physically-labeled socket of device location
-    memcpy_s(p_devices[ddr_index].bank_label, NVM_BANK_LABEL_LEN, p_dimm_topology[ddr_index].BankLabel, BANKLABEL_LEN); // Physically-labeled bank of device location
+    os_memcpy(p_devices[ddr_index].device_locator, NVM_DEVICE_LOCATOR_LEN, p_dimm_topology[ddr_index].DeviceLocator, NVM_DEVICE_LOCATOR_LEN);  // Physically-labeled socket of device location
+    os_memcpy(p_devices[ddr_index].bank_label, NVM_BANK_LABEL_LEN, p_dimm_topology[ddr_index].BankLabel, BANKLABEL_LEN); // Physically-labeled bank of device location
   }
 
   //allocate memory for pm devices
@@ -572,8 +562,8 @@ NVM_API int nvm_get_memory_topology(struct memory_topology *  p_devices,
   for (unsigned int pm_index = 0; pm_index < pm_cnt; ++pm_index) {
     p_devices[ddr_cnt + pm_index].physical_id = pdimms[pm_index].DimmID;  // Memory device's physical identifier (SMBIOS handle)
     p_devices[ddr_cnt + pm_index].memory_type = MEMORY_TYPE_NVMDIMM; // Type of memory device
-    memcpy_s(p_devices[ddr_cnt + pm_index].device_locator, NVM_DEVICE_LOCATOR_LEN, pdimms[pm_index].DeviceLocator, NVM_DEVICE_LOCATOR_LEN); // Physically-labeled socket of device location
-    memcpy_s(p_devices[ddr_cnt + pm_index].bank_label, NVM_BANK_LABEL_LEN, pdimms[pm_index].BankLabel, BANKLABEL_LEN);  // Physically-labeled bank of device location
+    os_memcpy(p_devices[ddr_cnt + pm_index].device_locator, NVM_DEVICE_LOCATOR_LEN, pdimms[pm_index].DeviceLocator, NVM_DEVICE_LOCATOR_LEN); // Physically-labeled socket of device location
+    os_memcpy(p_devices[ddr_cnt + pm_index].bank_label, NVM_BANK_LABEL_LEN, pdimms[pm_index].BankLabel, BANKLABEL_LEN);  // Physically-labeled bank of device location
   }
 
 Finish:
@@ -711,6 +701,16 @@ static void dimm_info_to_device_status(DIMM_INFO *p_dimm, struct device_status *
    p_status->health = p_dimm->HealthState;                         // Overall device health.
    p_status->last_shutdown_status_details = p_dimm->LatchedLastShutdownStatusDetails;    // State of last DIMM shutdown.
    p_status->unlatched_last_shutdown_status_details = p_dimm->UnlatchedLastShutdownStatusDetails;
+
+   if ((p_dimm->FwVer.FwApiMajor == 0x2 && p_dimm->FwVer.FwApiMinor >= 0x1) ||
+       (p_dimm->FwVer.FwApiMajor >= 0x3)) {
+     p_status->thermal_throttle_performance_loss_pcnt = p_dimm->ThermalThrottlePerformanceLossPrct;
+   } else {
+     p_status->thermal_throttle_performance_loss_pcnt = 0;
+   }
+
+
+
    p_status->last_shutdown_time = p_dimm->LastShutdownTime;        // Time of the last shutdown - seconds since 1 January 1970
    p_status->ait_dram_enabled = p_dimm->AitDramEnabled;            // Whether or not the AIT DRAM is enabled.
 
@@ -771,6 +771,7 @@ NVM_API int nvm_get_device_status(const NVM_UID   device_uid,
   }
   p_status->boot_status = BootstatusBitmask;
   dimm_info_to_device_status(&dimm_info, p_status);
+  p_status->mixed_sku = gNvmDimmData->PMEMDev.DimmSkuConsistency;
   return NVM_SUCCESS;
 }
 
@@ -870,12 +871,6 @@ NVM_API int nvm_get_device_settings(const NVM_UID   device_uid,
   return NVM_SUCCESS;
 }
 
-NVM_API int nvm_modify_device_settings(const NVM_UID      device_uid,
-               const struct device_settings * p_settings)
-{
-  return NVM_ERR_API_NOT_SUPPORTED;
-}
-
 NVM_API int nvm_get_device_details(const NVM_UID    device_uid,
            struct device_details *  p_details)
 {
@@ -907,11 +902,11 @@ NVM_API int nvm_get_device_details(const NVM_UID    device_uid,
   p_details->data_width = dimm_info.DataWidth;                                            // The width in bits used to store user data.
   p_details->total_width = dimm_info.TotalWidth;                                          // The width in bits for data and ECC and/or redundancy.
   p_details->speed = dimm_info.Speed;                                                     // The speed in nanoseconds.
-  memcpy_s(p_details->device_locator, NVM_DEVICE_LOCATOR_LEN, dimm_info.DeviceLocator, NVM_DEVICE_LOCATOR_LEN);     // The socket or board position label
-  memcpy_s(p_details->bank_label, NVM_BANK_LABEL_LEN, dimm_info.BankLabel, sizeof(dimm_info.BankLabel));                 // The bank label
-  p_details->peak_power_budget = dimm_info.PeakPowerBudget;                               // instantaneous power budget in mW (100-20000 mW).
-  p_details->avg_power_budget = dimm_info.AvgPowerBudget;                                 // average power budget in mW (100-18000 mW).
-        p_details->package_sparing_enabled = dimm_info.PackageSparingEnabled;                   // Enable or disable package sparing.
+  os_memcpy(p_details->device_locator, NVM_DEVICE_LOCATOR_LEN, dimm_info.DeviceLocator, NVM_DEVICE_LOCATOR_LEN);     // The socket or board position label
+  os_memcpy(p_details->bank_label, NVM_BANK_LABEL_LEN, dimm_info.BankLabel, sizeof(dimm_info.BankLabel));                 // The bank label
+  p_details->peak_power_budget = dimm_info.PeakPowerBudget.Data;                               // instantaneous power budget in mW (100-20000 mW).
+  p_details->avg_power_budget = dimm_info.AvgPowerLimit.Data;                                 // average power budget in mW (100-18000 mW).
+  p_details->package_sparing_enabled = dimm_info.PackageSparingEnabled;                   // Enable or disable package sparing.
 
   ReturnCode = gNvmDimmDriverNvmDimmConfig.GetSystemCapabilitiesInfo(&gNvmDimmDriverNvmDimmConfig,
     &SystemCapabilitiesInfo);
@@ -1002,6 +997,7 @@ NVM_API int nvm_get_device_performance(const NVM_UID      device_uid,
     p_performance->host_writes = pmem_info_output->TotalWriteRequests.Uint64;
     p_performance->block_reads = 0;
     p_performance->block_writes = 0;
+    p_performance->time = time(NULL);
     rc = NVM_SUCCESS;
     goto finish;
   }
@@ -1251,7 +1247,7 @@ NVM_API int nvm_examine_device_fw(const NVM_UID device_uid,
       rc = NVM_ERR_DUMP_FILE_OPERATION_FAILED;
     } else {
       if (image_version_len > NVM_VERSION_LEN) {
-        sprintf_s(image_version, NVM_VERSION_LEN, "%d.%d.%d.%d", p_fw_image_info->ImageVersion.ProductNumber.Version,
+        os_snprintf(image_version, NVM_VERSION_LEN, "%d.%d.%d.%d", p_fw_image_info->ImageVersion.ProductNumber.Version,
           p_fw_image_info->ImageVersion.RevisionNumber.Version,
           p_fw_image_info->ImageVersion.SecurityRevisionNumber.Version,
           p_fw_image_info->ImageVersion.BuildNumber.Build);
@@ -1334,9 +1330,6 @@ int driver_features_to_nvm_features(
   p_nvm_features->get_namespaces = 0;
   p_nvm_features->get_namespace_details = 0;
   p_nvm_features->create_namespace = 0;
-  p_nvm_features->rename_namespace = 0;
-  p_nvm_features->grow_namespace = 0;
-  p_nvm_features->shrink_namespace = 0;
   p_nvm_features->enable_namespace = 0;
   p_nvm_features->disable_namespace = 0;
   p_nvm_features->delete_namespace = 0;
@@ -1346,7 +1339,6 @@ int driver_features_to_nvm_features(
 
   // Driver memory mode capabilities
   p_nvm_features->app_direct_mode = p_driver_features->app_direct_mode;
-  p_nvm_features->storage_mode = p_driver_features->storage_mode;
 
   return rc;
 }
@@ -1880,254 +1872,12 @@ Finish:
   return rc;
 }
 
-static unsigned int convert_event_filter_data_and_return_event_type(const struct event_filter *p_filter, NVM_UID dimm_uid, unsigned int *p_event_id)
+NVM_API int nvm_get_number_of_regions( NVM_UINT8 *count)
 {
-  unsigned int event_type_mask = 0;
-
-  if (NULL == p_filter) {
-    event_type_mask = SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_ALL_MASK) |
-      SYSTEM_EVENT_TYPE_SEVERITY_SET(SYSTEM_EVENT_ONLY_MASK);
-
-    return event_type_mask;
-  }
-
-  if (NVM_FILTER_ON_TYPE & p_filter->filter_mask) {
-    switch (p_filter->type) {
-    case EVENT_TYPE_ALL:
-      event_type_mask |= SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_ALL_MASK);
-      break;
-    case EVENT_TYPE_CONFIG:
-      event_type_mask |= SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_CONFIG_MASK);
-      break;
-    case EVENT_TYPE_HEALTH:
-      event_type_mask |= SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_HEALTH_MASK);
-      break;
-    case EVENT_TYPE_MGMT:
-      event_type_mask |= SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_MGMT_MASK);
-      break;
-    case EVENT_TYPE_DIAG:
-      event_type_mask |= SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_DIAG_MASK);
-      break;
-    case EVENT_TYPE_DIAG_QUICK:
-      event_type_mask |= SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_QUICK_MASK);
-      break;
-    case EVENT_TYPE_DIAG_PLATFORM_CONFIG:
-      event_type_mask |= SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_PM_MASK);
-      break;
-    case EVENT_TYPE_DIAG_SECURITY:
-      event_type_mask |= SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_SECURITY_MASK);
-      break;
-    case EVENT_TYPE_DIAG_FW_CONSISTENCY:
-      event_type_mask |= SYSTEM_EVENT_TYPE_CATEGORY_SET(SYSTEM_EVENT_CAT_FW_MASK);
-      break;
-    }
-  }
-  if (NVM_FILTER_ON_SEVERITY & p_filter->filter_mask) {
-    switch (p_filter->severity) {
-    case EVENT_SEVERITY_INFO:
-      event_type_mask |= SYSTEM_EVENT_TYPE_SEVERITY_SET(SYSTEM_EVENT_INFO_MASK);
-      break;
-    case EVENT_SEVERITY_WARN:
-      event_type_mask |= SYSTEM_EVENT_TYPE_SEVERITY_SET(SYSTEM_EVENT_WARNING_MASK);
-      break;
-    case EVENT_SEVERITY_CRITICAL:
-    case EVENT_SEVERITY_FATAL:
-      event_type_mask |= SYSTEM_EVENT_TYPE_SEVERITY_SET(SYSTEM_EVENT_ERROR_MASK);
-      break;
-    }
-  }
-  if (NVM_FILTER_ON_CODE & p_filter->filter_mask) {
-    // Not implemented yet
-  }
-  if (NVM_FILTER_ON_UID & p_filter->filter_mask)
-    AsciiStrnCpy(dimm_uid, p_filter->uid, sizeof(p_filter->uid));
-  if (NVM_FILTER_ON_AFTER & p_filter->filter_mask) {
-    // Not implemented yet
-  }
-  if (NVM_FILTER_ON_BEFORE & p_filter->filter_mask) {
-    // Not implemented yet
-  }
-  if (NVM_FILTER_ON_EVENT & p_filter->filter_mask)
-    *p_event_id = (unsigned int)p_filter->event_id;
-  if (NVM_FILTER_ON_AR & p_filter->filter_mask)
-    event_type_mask |= (SYSTEM_EVENT_TYPE_AR_STATUS_SET(TRUE) | SYSTEM_EVENT_TYPE_AR_EVENT_SET(p_filter->action_required));
-
-  return event_type_mask;
+	return nvm_get_number_of_regions_ex( TRUE, count);
 }
 
-static void convert_log_entry_to_event(log_entry *p_log_entry, char *event_message, struct event *p_event)
-{
-  char *p_src_msg = event_message;
-  char *p_dst_msg = p_event->message;
-
-  if (SYSTEM_EVENT_TYPE_CATEGORY_MASK & p_log_entry->event_type) {
-    switch (SYSTEM_EVENT_TYPE_CATEGORY_GET(p_log_entry->event_type)) {
-    case SYSTEM_EVENT_CAT_CONFIG:
-      p_event->type = EVENT_TYPE_CONFIG;
-      break;
-    case SYSTEM_EVENT_CAT_HEALTH:
-      p_event->type = EVENT_TYPE_HEALTH;
-      break;
-    case SYSTEM_EVENT_CAT_MGMT:
-      p_event->type = EVENT_TYPE_MGMT;
-      break;
-    case SYSTEM_EVENT_CAT_DIAG:
-      p_event->type = EVENT_TYPE_DIAG;
-      break;
-    case SYSTEM_EVENT_CAT_QUICK:
-      p_event->type = EVENT_TYPE_DIAG_QUICK;
-      break;
-    case SYSTEM_EVENT_CAT_PM:
-      p_event->type = EVENT_TYPE_DIAG_PLATFORM_CONFIG;
-      break;
-    case SYSTEM_EVENT_CAT_SECURITY:
-      p_event->type = EVENT_TYPE_DIAG_SECURITY;
-      break;
-    case SYSTEM_EVENT_CAT_FW:
-      p_event->type = EVENT_TYPE_DIAG_FW_CONSISTENCY;
-      break;
-    }
-  }
-  if (SYSTEM_EVENT_TYPE_SEVERITY_MASK & p_log_entry->event_type) {
-    switch (SYSTEM_EVENT_TYPE_SEVERITY_GET(p_log_entry->event_type)) {
-    case SYSTEM_EVENT_TYPE_INFO:
-      p_event->severity = EVENT_SEVERITY_INFO;
-      break;
-    case SYSTEM_EVENT_TYPE_WARNING:
-      p_event->severity = EVENT_SEVERITY_WARN;
-      break;
-    case SYSTEM_EVENT_TYPE_ERROR:
-      p_event->severity = EVENT_SEVERITY_CRITICAL;
-      break;
-    }
-  }
-  if (SYSTEM_EVENT_TYPE_NUMBER_MASK & p_log_entry->event_type)
-    p_event->code = SYSTEM_EVENT_TYPE_NUMBER_GET(p_log_entry->event_type);
-
-  for (; (*p_src_msg != '\n') && (*p_src_msg != 0); p_src_msg++, p_dst_msg++)
-    *p_dst_msg = *p_src_msg;
-  *p_dst_msg = 0; // add the null terminator
-}
-
-NVM_API int nvm_get_number_of_events(const struct event_filter *p_filter, int *count)
-{
-  unsigned int event_type_mask = 0;
-  NVM_UID dimm_uid = { 0 };
-  unsigned int event_id = 0;
-  log_entry *p_log_entry = NULL;
-  log_entry *p_prev_log_entry = NULL;
-  int rc = NVM_SUCCESS;
-
-  if (NULL == count) {
-    return NVM_ERR_INVALID_PARAMETER;
-  }
-
-  if (NVM_SUCCESS != (rc = nvm_init())) {
-    NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
-    return rc;
-  }
-  event_type_mask = convert_event_filter_data_and_return_event_type(p_filter, dimm_uid, &event_id);
-  // Get events form system log
-  nvm_get_log_entries_from_file(event_type_mask, dimm_uid, event_id, SYSTEM_EVENT_NOT_APPLICABLE, &p_log_entry);
-  *count = 0;
-  while (p_log_entry) {
-    *count += 1;
-    p_prev_log_entry = p_log_entry;
-    p_log_entry = p_log_entry->p_next;
-    FreePool(p_prev_log_entry);
-  }
-  return NVM_SUCCESS;
-}
-
-NVM_API int nvm_get_events(const struct event_filter *p_filter,
-         struct event *p_events, const NVM_UINT16 count)
-{
-  char *event_buffer = NULL;
-  unsigned int events_number = count;
-  log_entry *p_log_entry = NULL;
-  log_entry *p_previous_entry = NULL;
-  char *p_event_message = NULL;
-  struct event *p_current_event = p_events;
-  int bytes_in_event_buffer = 0;
-  unsigned int event_type_mask = 0;
-  NVM_UID dimm_uid = { 0 };
-  unsigned int event_id = 0;
-  int rc = NVM_SUCCESS;
-  int nvm_status = 0;
-
-  if (NULL == p_events) {
-    return NVM_ERR_INVALID_PARAMETER;
-  }
-
-  if (NVM_SUCCESS != (rc = nvm_init())) {
-    NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
-    return rc;
-  }
-
-  int actual_count = 0;
-  if (NVM_SUCCESS != (nvm_status = nvm_get_number_of_events(p_filter, &actual_count)))
-  {
-    NVDIMM_ERR("Failed to obtain the number of devices (%d)\n",nvm_status);
-    return NVM_ERR_OPERATION_FAILED;
-  }
-
-  if (count != actual_count)
-  {
-    return NVM_ERR_BAD_SIZE;
-  }
-
-  event_type_mask = convert_event_filter_data_and_return_event_type(p_filter, dimm_uid, &event_id);
-  // Get events form system log
-  bytes_in_event_buffer = (int)nvm_get_events_from_file(event_type_mask, dimm_uid, event_id, events_number, &p_log_entry, &event_buffer);
-  while ((bytes_in_event_buffer > 0) && (events_number > 0)) {
-    p_event_message = event_buffer + p_log_entry->message_offset;
-    convert_log_entry_to_event(p_log_entry, p_event_message, p_current_event);
-    nvm_get_event_id_form_entry(p_current_event->message, &(p_current_event->event_id));
-    nvm_get_uid_form_entry(p_current_event->message, sizeof(p_current_event->uid), p_current_event->uid);
-
-    p_previous_entry = p_log_entry;
-    p_log_entry = p_log_entry->p_next;
-    if (p_log_entry && (p_log_entry->message_offset == p_previous_entry->message_offset)) {
-      // It looks the event log service could not allocate enough memory
-      // to get all entries and the next messages are pointing out to the same location
-      rc = NVM_ERR_NOT_ENOUGH_FREE_SPACE;
-    }
-    FreePool(p_previous_entry);
-
-    p_current_event++;
-    events_number--;
-  }
-  free(event_buffer);
-  return rc;
-}
-
-NVM_API int nvm_purge_events(const struct event_filter *p_filter)
-{
-  unsigned int event_type_mask = 0;
-  NVM_UID dimm_uid = { 0 };
-  unsigned int event_id = 0;
-  int rc = NVM_SUCCESS;
-
-  if (NVM_SUCCESS != (rc = nvm_init())) {
-    NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
-    return rc;
-  }
-  event_type_mask = convert_event_filter_data_and_return_event_type(p_filter, dimm_uid, &event_id);
-  return nvm_remove_events_from_file(event_type_mask, dimm_uid, event_id);
-}
-
-NVM_API int nvm_acknowledge_event(NVM_UINT32 event_id)
-{
-  int rc = NVM_SUCCESS;
-
-  if (NVM_SUCCESS != (rc = nvm_init())) {
-    NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
-    return rc;
-  }
-  return nvm_clear_action_required(event_id);
-}
-
-NVM_API int nvm_get_number_of_regions(NVM_UINT8 *count)
+NVM_API int nvm_get_number_of_regions_ex(const NVM_BOOL use_nfit, NVM_UINT8 *count)
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   COMMAND_STATUS *pCommandStatus = NULL;
@@ -2150,6 +1900,7 @@ NVM_API int nvm_get_number_of_regions(NVM_UINT8 *count)
 
   ReturnCode = gNvmDimmDriverNvmDimmConfig.GetRegionCount(
     &gNvmDimmDriverNvmDimmConfig,
+    use_nfit,
     &region_count);
 
   if (EFI_ERROR(ReturnCode)) {
@@ -2162,7 +1913,11 @@ Finish:
   return rc;
 }
 
-NVM_API int nvm_get_regions(struct region *p_regions, NVM_UINT8 *count)
+NVM_API int nvm_get_regions( struct region *p_regions, NVM_UINT8 *count) {
+	return nvm_get_regions_ex( TRUE, p_regions, count);
+}
+
+NVM_API int nvm_get_regions_ex(const NVM_BOOL use_nfit, struct region *p_regions, NVM_UINT8 *count)
 {
   COMMAND_STATUS *pCommandStatus = NULL;
   NVM_UINT8 RegionCount, Index, DimmIndex;
@@ -2183,7 +1938,7 @@ NVM_API int nvm_get_regions(struct region *p_regions, NVM_UINT8 *count)
   if (EFI_ERROR(erc))
     return NVM_ERR_UNKNOWN;
 
-  if (NVM_SUCCESS != (rc = nvm_get_number_of_regions(&RegionCount))) {
+  if (NVM_SUCCESS != (rc = nvm_get_number_of_regions_ex(use_nfit, &RegionCount))) {
     FreeCommandStatus(&pCommandStatus);
     return rc;
   }
@@ -2194,7 +1949,7 @@ NVM_API int nvm_get_regions(struct region *p_regions, NVM_UINT8 *count)
     return NVM_ERR_NO_MEM;
   }
 
-  erc = gNvmDimmDriverNvmDimmConfig.GetRegions(&gNvmDimmDriverNvmDimmConfig, RegionCount, pRegions, pCommandStatus);
+  erc = gNvmDimmDriverNvmDimmConfig.GetRegions(&gNvmDimmDriverNvmDimmConfig, RegionCount, use_nfit, pRegions, pCommandStatus);
   if (EFI_ERROR(erc)) {
     rc = NVM_ERR_UNKNOWN;
     goto Finish;
@@ -2274,7 +2029,7 @@ NVM_API int nvm_create_config_goal(NVM_UID *p_device_uids, NVM_UINT32 device_uid
                     p_goal_input->persistent_mem_type, p_goal_input->volatile_percent,
                     p_goal_input->reserved_percent, p_goal_input->reserve_dimm,
                     p_goal_input->namespace_label_major, p_goal_input->namespace_label_minor,
-                    pCommandStatus);
+                    NULL, pCommandStatus);
 
   if (EFI_ERROR(efi_rc))
     rc = NVM_ERR_UNKNOWN;
@@ -2351,7 +2106,6 @@ NVM_API int nvm_get_config_goal(NVM_UID *p_device_uids, NVM_UINT32 device_uids_c
     p_goal[Index].socket_id = pRegionConfigsInfo[Index].SocketId;
     p_goal[Index].persistent_regions = pRegionConfigsInfo[Index].PersistentRegions;
     p_goal[Index].volatile_size = pRegionConfigsInfo[Index].VolatileSize;
-    p_goal[Index].storage_capacity = pRegionConfigsInfo[Index].StorageCapacity;
     for (Index2 = 0; Index2 < MAX_IS_PER_DIMM; Index2++) {
       p_goal[Index].appdirect_size[Index2] =
         pRegionConfigsInfo[Index].AppDirectSize[Index2];
@@ -2521,13 +2275,13 @@ NVM_API int nvm_load_goal_config(const NVM_PATH file,
     p_socket_ids[index] = p_sockets[index].SocketId;
   ReturnCode = ParseSourceDumpFile(AsciiStrToUnicodeStr(file, file_name), NULL, &p_file_string);
   if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_ERR("Failed to dump a file %s. Return code &d\n", file, ReturnCode);
+    NVDIMM_ERR("Failed to dump a file %s. Return code %d\n", file, ReturnCode);
     rc = NVM_ERR_UNKNOWN;
     goto Finish;
   }
   ReturnCode = gNvmDimmDriverNvmDimmConfig.LoadGoalConfig(&gNvmDimmDriverNvmDimmConfig, p_dimm_ids, dimm_count, p_socket_ids, socket_count, p_file_string, p_command_status);
   if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_ERR("Failed to load the goal configuration. Return code &d\n", ReturnCode);
+    NVDIMM_ERR("Failed to load the goal configuration. Return code %d\n", ReturnCode);
     rc = NVM_ERR_CREATE_GOAL_NOT_ALLOWED;
     goto Finish;
   }
@@ -2543,12 +2297,22 @@ Finish:
 
 void get_version_numbers(int *major, int *minor, int *hotfix, int *build)
 {
-  int first;
-  int second;
-  int third;
-  int fourth;
+  int first = 0;
+  int second = 0;
+  int third = 0;
+  int fourth = 0;
+  char version[] = VERSION_STR;
+  char *ptr;
+  char *token = NULL;
 
-  sscanf_s(VERSION_STR, "%d.%d.%d.%d", &first, &second, &third, &fourth);
+  if ((token = os_strtok(version, ".", &ptr)) != NULL)
+    first = strtol(token, NULL, 10);
+  if ((token = os_strtok(NULL, ".", &ptr)) != NULL)
+    second = strtol(token, NULL, 10);
+  if ((token = os_strtok(NULL, ".", &ptr)) != NULL)
+    third = strtol(token, NULL, 10);
+  if ((token = os_strtok(NULL, ".", &ptr)) != NULL)
+    fourth = strtol(token, NULL, 10);
 
   if(major)
     *major = first;
@@ -2626,7 +2390,7 @@ NVM_API int nvm_gather_support(const NVM_PATH support_file, const NVM_SIZE suppo
     { L"show -a -system -capabilities" },
     { L"show -a -topology"       },
     { L"show -a -sensor"       },
-    { L"show -dimm -performance"     },
+    { L"show -performance"     },
     { L"show -system -host"      },
     { L"start -diagnostic"       },
     { L"show -event"       }
@@ -2643,7 +2407,7 @@ NVM_API int nvm_gather_support(const NVM_PATH support_file, const NVM_SIZE suppo
   if (NULL == (gOsShellParametersProtocol.StdOut = fopen(support_file, "w+")))
     return NVM_ERR_UNKNOWN;
 
-  for (Index = 0; Index < MAX_EXEC_CMDS; ++Index) 
+  for (Index = 0; Index < MAX_EXEC_CMDS; ++Index)
   {
     execute_cli_cmd(exec_commands[Index]);
   }
@@ -2740,9 +2504,10 @@ NVM_API int nvm_run_diagnostic(const NVM_UID device_uid,
   UINT8 diag_tests = 0;
   UINT16 dimm_id;
   UINT16 *p_dimm_id;
-  CHAR16 *pFinalDiagnosticsResult = NULL;
+  CHAR16 *pFinalDiagnosticsResultStr = NULL;
   UINT32 dimm_count;
   int rc = NVM_SUCCESS;
+  DIAG_INFO *pFinalDiagnosticsResult = NULL;
 
   if (NULL == p_diagnostic)
     return NVM_ERR_INVALID_PARAMETER;
@@ -2786,8 +2551,10 @@ NVM_API int nvm_run_diagnostic(const NVM_UID device_uid,
     DISPLAY_DIMM_ID_UID,
     &pFinalDiagnosticsResult);
 
-  Print(pFinalDiagnosticsResult);
+  pFinalDiagnosticsResultStr = DiagnosticResultToStr(pFinalDiagnosticsResult);
+  Print(FORMAT_STR, pFinalDiagnosticsResultStr);
   FreePool(pFinalDiagnosticsResult);
+  FreePool(pFinalDiagnosticsResultStr);
   if (EFI_ERROR(ReturnCode))
     rc = NVM_ERR_UNKNOWN;
 
@@ -2846,7 +2613,7 @@ NVM_API int nvm_clear_dimm_lsa(const NVM_UID device_uid)
     NVDIMM_ERR("Failed to get dimm ID %d\n", nvm_status);
     return NVM_ERR_DIMM_NOT_FOUND;
   }
-  ReturnCode = gNvmDimmDriverNvmDimmConfig.DeletePcd(&gNvmDimmDriverNvmDimmConfig, &dimm_id, 1, p_command_status);
+  ReturnCode = gNvmDimmDriverNvmDimmConfig.ModifyPcdConfig(&gNvmDimmDriverNvmDimmConfig, &dimm_id, 1, DELETE_PCD_CONFIG_LSA_MASK, p_command_status);
   if (EFI_ERROR(ReturnCode)) {
     FreeCommandStatus(&p_command_status);
     NVDIMM_ERR_W(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
@@ -2887,111 +2654,6 @@ NVM_API int nvm_toggle_debug_logging(const NVM_BOOL enabled)
   return DebugLoggerEnable(enabled);
 }
 
-NVM_API int nvm_purge_debug_log()
-{
-  unsigned int event_type_mask = 0;
-  int rc = NVM_SUCCESS;
-
-  if (NVM_SUCCESS != (rc = nvm_init())) {
-    NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
-    return rc;
-  }
-  event_type_mask = SYSTEM_EVENT_TYPE_SEVERITY_SET(SYSTEM_EVENT_DEBUG_MASK);
-  return nvm_remove_events_from_file(event_type_mask, NULL, SYSTEM_EVENT_NOT_APPLICABLE);
-}
-
-NVM_API int nvm_get_number_of_debug_logs(int *count)
-{
-  unsigned int event_type_mask = 0;
-  log_entry *p_log_entry = NULL;
-  log_entry *p_prev_log_entry = NULL;
-  int rc = NVM_SUCCESS;
-
-  if (NULL == count)
-    return NVM_ERR_UNKNOWN;
-  if (NVM_SUCCESS != (rc = nvm_init())) {
-    NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
-    return rc;
-  }
-  event_type_mask = SYSTEM_EVENT_TYPE_SEVERITY_SET(SYSTEM_EVENT_DEBUG_MASK);
-  // Get events form system log
-  nvm_get_log_entries_from_file(event_type_mask, NULL, SYSTEM_EVENT_NOT_APPLICABLE, SYSTEM_EVENT_NOT_APPLICABLE, &p_log_entry);
-  *count = 0;
-  while (p_log_entry) {
-    *count += 1;
-    p_prev_log_entry = p_log_entry;
-    p_log_entry = p_log_entry->p_next;
-    FreePool(p_prev_log_entry);
-  }
-  return NVM_SUCCESS;
-}
-
-static void convert_debug_log_entry_to_event(log_entry *p_log_entry, char *event_message, struct nvm_log *p_event)
-{
-  char *p_src_msg = event_message;
-  char *p_dst_msg = p_event->message;
-
-  for (; (*p_src_msg != '\n') && (*p_src_msg != 0); p_src_msg++, p_dst_msg++)
-    *p_dst_msg = *p_src_msg;
-  *p_dst_msg = 0; // add the null terminator
-}
-
-NVM_API int nvm_get_debug_logs(struct nvm_log *p_logs, const NVM_UINT32 count)
-{
-  char *event_buffer = NULL;
-  unsigned int events_number = count;
-  log_entry *p_log_entry = NULL;
-  log_entry *p_previous_entry = NULL;
-  char *p_event_message = NULL;
-  struct nvm_log *p_current_event = p_logs;
-  int bytes_in_event_buffer = 0;
-  unsigned int event_type_mask = 0;
-  int rc = NVM_SUCCESS;
-  int nvm_status = 0;
-
-  if (NULL == p_logs)
-    return NVM_ERR_INVALID_PARAMETER;
-
-  if (NVM_SUCCESS != (rc = nvm_init())) {
-    NVDIMM_ERR("Failed to intialize nvm library %d\n", rc);
-    return rc;
-  }
-
-  int actual_count = 0;
-  if (NVM_SUCCESS != (nvm_status = nvm_get_number_of_debug_logs(&actual_count)))
-  {
-    NVDIMM_ERR("Failed to obtain the number of devices (%d)\n",nvm_status);
-    return NVM_ERR_OPERATION_FAILED;
-  }
-
-  if (count != actual_count)
-  {
-    return NVM_ERR_BAD_SIZE;
-  }
-
-  event_type_mask = SYSTEM_EVENT_TYPE_SEVERITY_SET(SYSTEM_EVENT_DEBUG_MASK);
-  // Get events form system log
-  bytes_in_event_buffer = (int)nvm_get_events_from_file(event_type_mask, NULL, SYSTEM_EVENT_NOT_APPLICABLE, events_number, &p_log_entry, &event_buffer);
-  while ((bytes_in_event_buffer > 0) && (events_number > 0)) {
-    p_event_message = event_buffer + p_log_entry->message_offset;
-    convert_debug_log_entry_to_event(p_log_entry, p_event_message, p_current_event);
-
-    p_previous_entry = p_log_entry;
-    p_log_entry = p_log_entry->p_next;
-    if (p_log_entry && (p_log_entry->message_offset == p_previous_entry->message_offset)) {
-      // It looks the event log service could not allocate enough memory
-      // to get all entries and the next messages are pointing out to the same location
-      rc = NVM_ERR_NOT_ENOUGH_FREE_SPACE;
-    }
-    FreePool(p_previous_entry);
-
-    p_current_event++;
-    events_number--;
-  }
-  free(event_buffer);
-  return rc;
-}
-
 NVM_API int nvm_get_jobs(struct job *p_jobs, const NVM_UINT32 count)
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
@@ -3001,7 +2663,7 @@ NVM_API int nvm_get_jobs(struct job *p_jobs, const NVM_UINT32 count)
   UINT32 DimmCount = 0;
   PT_OUTPUT_PAYLOAD_FW_LONG_OP_STATUS *pLongOpStatus;
   int job_index = 0;
-  unsigned int i;
+  unsigned int i, j;
   int nvm_status = 0;
   struct Command CmdStub;
 
@@ -3078,8 +2740,17 @@ NVM_API int nvm_get_jobs(struct job *p_jobs, const NVM_UINT32 count)
     else {
       p_jobs[i].status = NVM_JOB_STATUS_UNKNOWN;
     }
-    memmove(p_jobs[i].uid, pDimms[i].DimmUid, MAX_DIMM_UID_LENGTH);
-    memmove(p_jobs[i].affected_element, pDimms[i].DimmUid, MAX_DIMM_UID_LENGTH);
+
+    for (j = 0; j < MAX_DIMM_UID_LENGTH; j++)
+    {
+      p_jobs[i].uid[j] = (char)pDimms[i].DimmUid[j];
+    }
+
+    for (j = 0; j < MAX_DIMM_UID_LENGTH; j++)
+    {
+      p_jobs[i].affected_element[j] = (char)pDimms[i].DimmUid[j];
+    }
+
     p_jobs[i].result = NULL;
     job_index++;
   }
@@ -3124,7 +2795,7 @@ NVM_API int nvm_get_fw_error_log_entry_cmd(
 
   if (!error_entry)
   {
-    NVDIMM_ERR("Invalid error_entry paramter (NULL).\n");
+    NVDIMM_ERR("Invalid error_entry parameter (NULL).\n");
     return NVM_ERR_INVALID_PARAMETER;
   }
 
@@ -3292,6 +2963,7 @@ int get_dimm_id(const char *uid, UINT16 *dimm_id, unsigned int *dimm_handle)
 
 void dimm_info_to_device_discovery(DIMM_INFO *p_dimm, struct device_discovery *p_device)
 {
+  int Index = 0;
   p_device->all_properties_populated = FALSE;
   p_device->device_handle.handle = p_dimm->DimmHandle;
   p_device->physical_id = p_dimm->DimmID;
@@ -3314,7 +2986,11 @@ void dimm_info_to_device_discovery(DIMM_INFO *p_dimm, struct device_discovery *p
   p_device->manufacturing_info_valid = p_dimm->ManufacturingInfoValid;
   p_device->manufacturing_location = p_dimm->ManufacturingLocation;
   p_device->manufacturing_date = p_dimm->ManufacturingDate;
-  CopyMem_S(p_device->part_number, sizeof(p_device->part_number), p_dimm->PartNumber, PART_NUMBER_LEN);
+  for (Index = 0; Index < PART_NUMBER_LEN; Index++)
+  {
+    p_device->part_number[Index] = (char)p_dimm->PartNumber[Index];
+  }
+  p_device->part_number[PART_NUMBER_LEN - 1] = '\0';
   build_revision(p_device->fw_revision, NVM_VERSION_LEN, p_dimm->FwVer.FwProduct, p_dimm->FwVer.FwRevision,
 		 p_dimm->FwVer.FwSecurityVersion, p_dimm->FwVer.FwBuild);
   snprintf(p_device->fw_api_version, NVM_VERSION_LEN, "%02d.%02d", p_dimm->FwVer.FwApiMajor, p_dimm->FwVer.FwApiMinor);
@@ -3355,7 +3031,7 @@ int get_fw_err_log_stats(
   CopyMem_S(cmd->InputPayload, sizeof(cmd->InputPayload), &get_error_log_input, cmd->InputPayloadSize);
   cmd->OutputPayloadSize = sizeof(LOG_INFO_DATA_RETURN);
   if (EFI_SUCCESS == PassThruCommand(cmd, PT_TIMEOUT_INTERVAL)) {
-    memcpy_s(log_info, sizeof(LOG_INFO_DATA_RETURN), cmd->OutPayload, cmd->OutputPayloadSize);
+    os_memcpy(log_info, sizeof(LOG_INFO_DATA_RETURN), cmd->OutPayload, cmd->OutputPayloadSize);
     rc = NVM_SUCCESS;
   }
 finish:
@@ -3433,7 +3109,7 @@ NVM_API int nvm_send_device_passthrough_cmd(const NVM_UID   device_uid,
     if(p_cmd->large_output_payload_size < cmd->LargeOutputPayloadSize)
     {
       p_cmd->large_output_payload_size = 0; //indicate to caller that nothing was copied into their large output payload buffer
-      NVDIMM_ERR("Not enough memory to copy the large output payload\n", rc);
+      NVDIMM_ERR("Not enough memory to copy the large output payload\n");
       rc = NVM_ERR_INVALID_PARAMETER;
       goto finish;
     }
@@ -3445,7 +3121,7 @@ NVM_API int nvm_send_device_passthrough_cmd(const NVM_UID   device_uid,
     if(p_cmd->output_payload_size < cmd->OutputPayloadSize)
     {
       p_cmd->output_payload_size = 0; //indicate to caller that nothing was copied into their output payload buffer
-      NVDIMM_ERR("Not enough memory to copy the output payload\n", rc);
+      NVDIMM_ERR("Not enough memory to copy the output payload\n");
       rc = NVM_ERR_INVALID_PARAMETER;
       goto finish;
     }
@@ -3455,39 +3131,4 @@ NVM_API int nvm_send_device_passthrough_cmd(const NVM_UID   device_uid,
 finish:
   FREE_POOL_SAFE(cmd);
   return rc;
-}
-
-NVM_API int nvm_acpi_event_create_ctx(unsigned int dimm_handle, void ** ctx)
-{
-  return acpi_event_create_ctx(dimm_handle, ctx);
-}
-
-NVM_API int nvm_acpi_event_free_ctx(void * ctx)
-{
-  return acpi_event_free_ctx(ctx);
-}
-
-NVM_API int nvm_acpi_event_ctx_get_dimm_handle(void * ctx, unsigned int  * dev_handle)
-{
-  return acpi_event_ctx_get_dimm_handle(ctx, dev_handle);
-}
-
-NVM_API int nvm_acpi_event_get_event_state(void * ctx, enum acpi_event_type event_type, enum acpi_event_state *event_state)
-{
-  return acpi_event_get_event_state(ctx, event_type, event_state);
-}
-
-NVM_API int nvm_acpi_event_set_monitor_mask(void * ctx, const unsigned int acpi_monitored_event_mask)
-{
-  return acpi_event_set_monitor_mask(ctx, acpi_monitored_event_mask);
-}
-
-NVM_API int nvm_acpi_event_get_monitor_mask(void * ctx, unsigned int * mask)
-{
-  return acpi_event_get_monitor_mask(ctx, mask);
-}
-
-NVM_API int nvm_acpi_wait_for_event(void * acpi_event_contexts[], const NVM_UINT32 dimm_cnt, const int timeout_sec, enum acpi_get_event_result * event_result)
-{
-  return acpi_wait_for_event(acpi_event_contexts, dimm_cnt, timeout_sec, event_result);
 }

@@ -91,6 +91,7 @@
 #define PROTOCOL_OPTION_SMBUS           L"-smbus"                              //!< 'smbus' option name
 #define LARGE_PAYLOAD_OPTION            L"-lpmb"                               //!< 'large payload mailbox' option name
 #define SMALL_PAYLOAD_OPTION            L"-spmb"                               //!< 'small payload mailbox' option name
+#define NFIT_OPTION                     L"-nfit"                               //!< 'nfit' option name
 
 /** command targets **/
 #define DIMM_TARGET                          L"-dimm"                    //!< 'dimm' target name
@@ -107,13 +108,13 @@
 #define CONFIG_TARGET                        L"-config"                  //!< 'config' target name
 #define SENSOR_TARGET                        L"-sensor"                  //!< 'sensor' target name
 #define ERROR_TARGET                         L"-error"                   //!< 'error' target name
+#define CEL_TARGET                         L"-cel"                   //!< 'cel' target name
 #define DEBUG_TARGET                         L"-debug"                   //!< 'debug' target name
 #define REGISTER_TARGET                      L"-register"                //!< 'register' target name
 #define FIRMWARE_TARGET                      L"-firmware"                //!< 'firmware' target name
 #define PCD_TARGET                           L"-pcd"                     //!< 'pcd' target name
 #define SMBIOS_TARGET                        L"-smbios"                  ///< 'smbios' target name
 #define SUPPORT_TARGET                       L"-support"                 //!< 'support' target name
-#define EVENT_TARGET                         L"-event"                   //!< 'event' target name
 #define CONTROLLER_TEMPERATURE_TARGET_VALUE  L"ControllerTemperature"    //!< 'sensor' target value
 #define MEDIA_TEMPERATURE_TARGET_VALUE       L"MediaTemperature"         //!< 'sensor' target value
 #define SPARE_CAPACITY_TARGET_VALUE          L"PercentageRemaining"      //!< 'sensor' target value
@@ -155,7 +156,7 @@
 #define TYPE_VALUE_TRAINGING              L"Training"                 //!< 'Type' property Training value
 #define UPDATE_PROPERTY                   L"Update"                   //!< 'Update' property name
 #define EXEC_PROPERTY                     L"Execute"                  //!< 'Exec' property name
-#define TEMPERATURE_INJ_PROPERTY          L"Temperature"	            //!<  Inject error 'Temperature' property name
+#define TEMPERATURE_INJ_PROPERTY          L"Temperature"              //!<  Inject error 'Temperature' property name
 #define POISON_INJ_PROPERTY               L"Poison"                   //!< Inject error 'Poison' property
 #define POISON_TYPE_INJ_PROPERTY          L"PoisonType"               //!< Inject error 'PoisonType' property
 #define CLEAR_ERROR_INJ_PROPERTY          L"Clear"                    //!< Clear error injection property
@@ -182,7 +183,7 @@
 #define NEWPASSPHRASE_PROPERTY            L"NewPassphrase"            //!< 'NewPassphrase' property name
 #define CONFIRMPASSPHRASE_PROPERTY        L"ConfirmPassphrase"        //!< 'ConfirmPassphrase' property name
 #define ALARM_THRESHOLD_PROPERTY          L"AlarmThreshold"           //!< 'AlarmThreshold' property
-#define ENABLED_STATE_PROPERTY            L"EnabledState"             //!< 'EnabledState' property
+#define ALARM_ENABLED_PROPERTY            L"AlarmEnabled"             //!< 'AlarmEnabled' property
 #define MEMORY_MODE_PROPERTY              L"MemoryMode"               //!< 'MemoryMode' property name
 #define PERSISTENT_MEM_TYPE_PROPERTY      L"PersistentMemoryType"     //!< 'PersistentMemoryType' property name
 #define MEMORY_SIZE_PROPERTY              L"MemorySize"               //!< 'MemorySize' property name
@@ -203,7 +204,7 @@
 #define PROPERTY_VALUE_NO                 L"No"                       //!< Property 'No' value
 #define PROPERTY_VALUE_YES                L"Yes"                      //!< Property 'Yes' value
 #define PROPERTY_VALUE_ENABLED            L"Enabled"                  //!< Property enabled value
-#define PROPERTY_VALUE_DISABLED	          L"Disabled"		      //!< Property disabled value
+#define PROPERTY_VALUE_DISABLED           L"Disabled"                 //!< Property disabled value
 #define SEQUENCE_NUM_PROPERTY             L"SequenceNumber"           //!< 'error' property name
 #define COUNT_PROPERTY                    L"Count"                    //!< 'error' property name
 #define LEVEL_PROPERTY                    L"Level"                    //!< 'error' property name
@@ -220,21 +221,16 @@
 #define MODE_PROPERTY                     L"Mode"
 #define PROPERTY_VALUE_NONE               L"None"
 #define PROPERTY_VALUE_SECTOR             L"Sector"
+#define AVG_PWR_REPORTING_TIME_CONSTANT_MULT_PROPERTY L"AveragePowerReportingTimeConstantMultiplier"
+#define AVG_PWR_REPORTING_TIME_CONSTANT   L"AveragePowerReportingTimeConstant"
 #define ACCESS_TYPE_PROPERTY              L"AccessType"
 #define ERASE_CAPABLE_PROPERTY            L"EraseCapable"
 #define ENCRYPTION_PROPERTY               L"Encryption"
 #define CLI_DEFAULT_DIMM_ID_PROPERTY      L"CLI_DEFAULT_DIMM_ID"
 #define CLI_DEFAULT_SIZE_PROPERTY         L"CLI_DEFAULT_SIZE"
 #define APP_DIRECT_SETTINGS_PROPERTY      L"APPDIRECT_SETTINGS"
-#define APP_DIRECT_GRANULARITY_PROPERTY   L"APPDIRECT_GRANULARITY"
 #define LABEL_VERSION_PROPERTY            L"LabelVersion"
 #define NS_LABEL_VERSION_PROPERTY         L"NamespaceLabelVersion"
-#define PERFORMANCE_MONITOR_ENABLED	      L"PERFORMANCE_MONITOR_ENABLED"
-#define PERFORMANCE_MONITOR_INTERVAL_MINUTES L"PERFORMANCE_MONITOR_INTERVAL_MINUTES"
-#define EVENT_MONITOR_ENABLED             L"EVENT_MONITOR_ENABLED"
-#define EVENT_MONITOR_INTERVAL_MINUTES    L"EVENT_MONITOR_INTERVAL_MINUTES"
-#define EVENT_LOG_MAX                     L"EVENT_LOG_MAX"
-#define DBG_LOG_MAX                       L"DBG_LOG_MAX"
 #define SEVERITY_PROPERTY                 L"Severity"
 #define PROPERTY_VALUE_UID                L"UID"
 #define PROPERTY_VALUE_HANDLE             L"HANDLE"
@@ -242,7 +238,6 @@
 #define PROPERTY_VALUE_AUTO10             L"AUTO_10"
 #define PROPERTY_VALUE_RECOMMENDED        L"RECOMMENDED"
 #define CATEGORY_PROPERTY                 L"Category"
-#define ACTION_REQ_PROPERTY               L"ActionRequired"
 #define DBG_LOG_LEVEL                     L"DBG_LOG_LEVEL"
 #define CREATE_SUPP_NAME                  L"Name"
 #define PROPERTY_ERROR_UNKNOWN                      L"Reason for failure unknown"
@@ -308,9 +303,9 @@
 #define HELP_TEXT_ERROR_LOG             L"Thermal|Media"
 #define HELP_TEXT_PERCENT               L"0|%%"
 #define HELP_TEXT_APPDIRECT_SETTINGS    PROPERTY_VALUE_RECOMMENDED L"|" L"(IMCSize)_(ChannelSize)"
-#define HELP_TEXT_APPDIRECT_GRANULARITY PROPERTY_VALUE_RECOMMENDED L"|" L"1"
 #define HELP_TEXT_NO_MIRROR_APPDIRECT_SETTINGS L"ByOne|(iMCSize)_(ChannelSize)"
 #define HELP_TEXT_NS_LABEL_VERSION      L"1.1|1.2"
+#define HELP_NFIT_DETAILS_TEXT         L"Used to specify NFIT as the source"
 #define HELP_TEXT_DEFAULT_SIZE          PROPERTY_VALUE_AUTO   L"|" \
                                         PROPERTY_VALUE_AUTO10 L"|" \
                                         UNITS_OPTION_B        L"|" \
@@ -322,24 +317,20 @@
                                         UNITS_OPTION_TIB
 #define HELP_TEXT_PERSISTENT_MEM_TYPE   L"AppDirect|AppDirectNotInterleaved"
 #define HELP_TEXT_FLASH_SPI             L"FlashSPI"
-#define HELP_TEXT_EVENT_ID              L"EventID"
-#define HELP_PERFORMANCE_MONITOR_ENABLED	      L"0|1"
-#define HELP_PERFORMANCE_MONITOR_INTERVAL_MINUTES L"minutes"
-#define HELP_EVENT_MONITOR_ENABLED                L"0|1"
-#define HELP_EVENT_MONITOR_INTERVAL_MINUTES       L"minutes"
-#define HELP_EVENT_LOG_MAX                        L"num events"
-#define HELP_DBG_LOG_MAX                          L"num log entries"
-#define HELP_DBG_LOG_LEVEL                        L"log level"
-#define HELP_TEXT_PERFORMANCE_CAT         L"Performance Metrics"
+#define HELP_DBG_LOG_LEVEL              L"log level"
+#define HELP_TEXT_PERFORMANCE_CAT       L"Performance Metrics"
+
+#define HELP_TEXT_AVG_PWR_REPORTING_TIME_CONSTANT_MULT_PROPERTY     L"<0, 32>"
+#define HELP_TEXT_AVG_PWR_REPORTING_TIME_CONSTANT_PROPERTY          L"<100, 12000>"
 
 #define HELP_TEXT_PERFORMANCE_CAT_DETAILS  L"\n    "DCPMM_PERFORMANCE_MEDIA_READS \
-                                          L"\n    "DCPMM_PERFORMANCE_MEDIA_WRITES \
-                                          L"\n    "DCPMM_PERFORMANCE_READ_REQUESTS \
-                                          L"\n    "DCPMM_PERFORMANCE_WRITE_REQUESTS\
-                                          L"\n    "DCPMM_PERFORMANCE_TOTAL_MEDIA_READS \
-                                          L"\n    "DCPMM_PERFORMANCE_TOTAL_MEDIA_WRITES\
-                                          L"\n    "DCPMM_PERFORMANCE_TOTAL_READ_REQUESTS\
-                                          L"\n    "DCPMM_PERFORMANCE_TOTAL_WRITE_REQUESTS
+                                           L"\n    "DCPMM_PERFORMANCE_MEDIA_WRITES \
+                                           L"\n    "DCPMM_PERFORMANCE_READ_REQUESTS \
+                                           L"\n    "DCPMM_PERFORMANCE_WRITE_REQUESTS\
+                                           L"\n    "DCPMM_PERFORMANCE_TOTAL_MEDIA_READS \
+                                           L"\n    "DCPMM_PERFORMANCE_TOTAL_MEDIA_WRITES\
+                                           L"\n    "DCPMM_PERFORMANCE_TOTAL_READ_REQUESTS\
+                                           L"\n    "DCPMM_PERFORMANCE_TOTAL_WRITE_REQUESTS
 
 #define HELP_TEXT_SENSORS_SHORT  L"\n    "MEDIA_TEMPERATURE_STR_DETAIL \
                                  L"\n    "CONTROLLER_TEMPERATURE_STR_DETAIL \
@@ -428,6 +419,8 @@ struct Command
   BOOLEAN ExcludeDriverBinding;
   BOOLEAN Hidden; //!< Never print
   BOOLEAN ShowHelp;
+  BOOLEAN SyntaxErrorHelpNeeded;
+  BOOLEAN VerbMatch;
   UINT8 CommandId;
   UINT8 DispType;
   CHAR16 DispName[DISP_NAME_LEN];

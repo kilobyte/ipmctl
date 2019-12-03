@@ -2,7 +2,7 @@
  * Copyright (c) 2018, Intel Corporation.
  * SPDX-License-Identifier: BSD-3-Clause
  */
-#include <Protocol/EfiShellParameters.h>
+#include <ShellParameters.h>
 #include <Library/BaseMemoryLib.h>
 #include "DumpSupportCommand.h"
 #include "NvmDimmCli.h"
@@ -61,7 +61,6 @@ DUMP_SUPPORT_CMD DumpPlatformLevelCmds[MAX_PLAFORM_SUPPORT_CMDS] = {
 {L"show -a -system -capabilities"},
 {L"show -a -topology" },
 {L"start -diagnostic"},
-{L"show -event"},
 {L"show -system"},
 };
 

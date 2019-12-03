@@ -32,7 +32,7 @@ struct Command DumpDebugCommandSyntax =
   },
   {
     {DEBUG_TARGET, L"", L"", TRUE, ValueEmpty},
-    {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, TRUE, ValueOptional}
+    {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, FALSE, ValueOptional}
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                          //!< properties
   L"Dump firmware debug log",                                       //!< help
@@ -129,12 +129,14 @@ DumpDebugCommand(
     goto Finish;
   }
 
-  /** get specific DIMM pid passed in, set it **/
-  pTargetValue = GetTargetValue(pCmd, DIMM_TARGET);
-  ReturnCode = GetDimmIdsFromString(pCmd, pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsNum);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_WARN("Target value is not a valid Dimm ID");
-    goto Finish;
+  if (ContainTarget(pCmd, DIMM_TARGET)) {
+    /** get specific DIMM pid passed in, set it **/
+    pTargetValue = GetTargetValue(pCmd, DIMM_TARGET);
+    ReturnCode = GetDimmIdsFromString(pCmd, pTargetValue, pDimms, DimmCount, &pDimmIds, &DimmIdsNum);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_WARN("Target value is not a valid Dimm ID");
+      goto Finish;
+    }
   }
 
   // Check -destination option
@@ -172,7 +174,9 @@ DumpDebugCommand(
 
     if (!dictExists)
     {
+      ReturnCode = EFI_LOAD_ERROR;
       PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"The passed dictionary file doesn't exist\n");
+      goto Finish;
     }
   }
 
@@ -182,6 +186,7 @@ DumpDebugCommand(
     dict_head = load_nlog_dict(pCmd, pDictUserPath, &dict_version, &dict_entries);
     if (!dict_head)
     {
+      ReturnCode = EFI_LOAD_ERROR;
       PRINTER_SET_MSG(pPrinterCtx, ReturnCode, L"Failed to load the dictionary file " FORMAT_STR L"\n", pDictUserPath);
       goto Finish;
     }
@@ -283,7 +288,16 @@ FreeAndContinue:
       FreeCommandStatus(&pCommandStatus);
     }
   }
-
+  // Return success if any of 3 logs were retrieved on every specified dimm
+  ReturnCode = EFI_SUCCESS;
+  for (Index = 0; Index < DimmCount; Index++)
+  {
+    if (SuccessesPerDimm[Index] == 0)
+    {
+      // If any specified dimm (initialized with 0) had no successes, then return error
+      ReturnCode = EFI_DEVICE_ERROR;
+    }
+  }
 Finish:
   PRINTER_PROCESS_SET_BUFFER(pPrinterCtx);
 
@@ -301,17 +315,6 @@ Finish:
   FREE_POOL_SAFE(pDimmIds);
   FREE_POOL_SAFE(pDictUserPath);
   FREE_POOL_SAFE(pDumpUserPath);
-
-  // Return success if any of 3 logs were retrieved on every specified dimm
-  ReturnCode = EFI_SUCCESS;
-  for (Index = 0; Index < DimmCount; Index++)
-  {
-    if (SuccessesPerDimm[Index] == 0)
-    {
-      // If any specified dimm (initialized with 0) had no successes, then return error
-      ReturnCode = EFI_DEVICE_ERROR;
-    }
-  }
 
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;

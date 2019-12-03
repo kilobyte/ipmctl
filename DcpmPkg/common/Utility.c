@@ -26,10 +26,6 @@
 #include <string.h>
 #endif
 
-#if defined(__LINUX__)
-#include <safe_mem_lib.h>
-#endif
-
 extern EFI_GUID gNvmDimmConfigProtocolGuid;
 extern EFI_GUID gIntelDimmConfigVariableGuid;
 CHAR16 gFnName[1024];
@@ -91,6 +87,120 @@ GetEnvVariable(
 #endif
 
 /**
+  Removes all whitespace from before, after, and inside a passed string
+
+  @param[IN, OUT]  buffer - The string to remove whitespace from
+**/
+VOID RemoveAllWhiteSpace(
+  CHAR16* buffer)
+{
+  CHAR16* nextNonWs = NULL;
+
+  if (buffer == NULL) {
+    return;
+  }
+
+  TrimString(buffer);
+  nextNonWs = buffer;
+  while (*buffer)
+  {
+    //Advance the forward-pointer to the next non WS char
+    while (*nextNonWs && *nextNonWs <= L' ') {
+      nextNonWs++;
+    }
+
+    if (buffer != nextNonWs) {
+      *buffer = *nextNonWs;
+
+      if (0 == *nextNonWs) {
+        break;
+      }
+    }
+
+    buffer++;
+    nextNonWs++;
+  }
+}
+
+/**
+  Examines the system topology for the system DDR capacity and compares
+  it to the 2LM capacity to check for ratio violations
+
+  @param[IN]  pNvmDimmConfigProtocol the protocol
+  @param[IN]  pRegionConfigsInfo a pointer to the region list to examine
+  @param[IN]  RegionConfigsCount the number of REGION_GOAL_PER_DIMM_INFO elements in the list
+  @param[OUT] pIsAboveLimit the 2LM vs DDR value is above the upper recommended limit
+  @param[OUT] pIsBelowLimit the 2LM vs DDR value is below the lower recommended limit
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_INVALID_PARAMETER input parameter null
+  @retval EFI_DEVICE_ERROR failed to get the system topology
+**/
+EFI_STATUS
+CheckNmFmLimits(
+  IN    EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
+  IN    REGION_GOAL_PER_DIMM_INFO *pRegionConfigsInfo,
+  IN    UINT32  RegionConfigsCount,
+  OUT   BOOLEAN *pIsAboveLimit,
+  OUT   BOOLEAN *pIsBelowLimit
+) {
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
+  UINT64 TwoLM_FmMinRecommended = 0;
+  UINT64 TwoLM_FmMaxRecommended = 0;
+  UINT64 TwoLM_NMTotal = 0;
+  UINT64 TwoLM_FMTotal = 0;
+  TOPOLOGY_DIMM_INFO  *pTopologyDimms = NULL;
+  UINT16 TopologyDimmsNumber = 0;
+  UINT32 Index = 0;
+
+  NVDIMM_ENTRY();
+
+  if (pNvmDimmConfigProtocol == NULL || pRegionConfigsInfo  == NULL || pIsAboveLimit == NULL || pIsBelowLimit == NULL) {
+    goto Finish;
+  }
+
+  *pIsAboveLimit = FALSE;
+  *pIsBelowLimit = FALSE;
+  for (Index = 0; Index < RegionConfigsCount; Index++)
+  {
+    TwoLM_FMTotal += pRegionConfigsInfo[Index].VolatileSize;
+  }
+
+  if (TwoLM_FMTotal == 0) {
+    //no limit check necessary - no 2LM goal in play
+    ReturnCode = EFI_SUCCESS;
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetSystemTopology(pNvmDimmConfigProtocol, &pTopologyDimms, &TopologyDimmsNumber);
+  if (EFI_ERROR(ReturnCode)) {
+    ReturnCode = EFI_DEVICE_ERROR;
+    goto Finish;
+  }
+
+  ReturnCode = EFI_SUCCESS;
+  for (Index = 0; Index < TopologyDimmsNumber; Index++)
+  {
+    if (pTopologyDimms[Index].MemoryType == MEMORYTYPE_DDR4) {
+      TwoLM_NMTotal += pTopologyDimms[Index].VolatileCapacity;
+    }
+  }
+
+  TwoLM_FmMinRecommended = TwoLM_NMTotal * TWOLM_NMFM_RATIO_LOWER;
+  TwoLM_FmMaxRecommended = TwoLM_NMTotal * TWOLM_NMFM_RATIO_UPPER;
+  if (TwoLM_FMTotal > TwoLM_FmMaxRecommended) {
+    *pIsAboveLimit = TRUE;
+  }
+  else if (TwoLM_FMTotal < TwoLM_FmMinRecommended) {
+    *pIsBelowLimit = TRUE;
+  }
+
+Finish:
+  NVDIMM_EXIT();
+  return ReturnCode;
+}
+
+/**
   Generates namespace type string, caller must free it
 
   @param[in] Type, value corresponding to namespace type.
@@ -114,6 +224,59 @@ NamespaceTypeToString(
   return pTypeString;
 }
 
+/**
+  Generates string from diagnostic output to print and frees the diagnostic structure
+
+  @param[in] Type, pointer to type structure
+
+  @retval Pointer to type string
+**/
+CHAR16 *DiagnosticResultToStr(
+  IN    DIAG_INFO *pResult
+)
+{
+  CHAR16 *pOutputLines = NULL;
+  UINT32 NumTokens = 0;
+  CHAR16 *MsgStr = NULL;
+  UINT8 index = 0;
+  UINT8 Id = 0;
+  if (pResult->TestName != NULL) {
+    pOutputLines = CatSPrintClean(pOutputLines,
+      L"\n***** %ls = %ls *****\n", pResult->TestName, pResult->State);
+    CHAR16 **TestEventMesg = StrSplit(pResult->Message, L'\n', &NumTokens);
+    if (TestEventMesg != NULL) {
+      pOutputLines = CatSPrintClean(pOutputLines,
+        L"Message : %ls\n", TestEventMesg[0]);
+      FreeStringArray(TestEventMesg, NumTokens);
+    }
+  }
+
+  for (Id = 0; Id < MAX_NO_OF_DIAGNOSTIC_SUBTESTS; Id++) {
+    if (pResult->SubTestName[Id] != NULL) {
+      pOutputLines = CatSPrintClean(pOutputLines,
+        L"  %-20ls = %ls\n", pResult->SubTestName[Id], pResult->SubTestState[Id]);
+      if (pResult->SubTestMessage[Id] != NULL) {
+        CHAR16 **ppSplitSubTestMessage = StrSplit(pResult->SubTestMessage[Id], L'\n', &NumTokens);
+        if (ppSplitSubTestMessage != NULL) {
+          for (index = 0; index < NumTokens; index++) {
+            MsgStr = CatSPrintClean(MsgStr, L"Message.%d", index + 1);
+            pOutputLines = CatSPrintClean(pOutputLines, L"  %ls = %ls\n", MsgStr, ppSplitSubTestMessage[index]);
+            FREE_POOL_SAFE(MsgStr);
+          }
+        }
+        FreeStringArray(ppSplitSubTestMessage, NumTokens);
+      }
+      FREE_POOL_SAFE(pResult->SubTestName[Id]);
+      FREE_POOL_SAFE(pResult->SubTestMessage[Id]);
+      FREE_POOL_SAFE(pResult->SubTestState[Id]);
+    }
+  }
+  FREE_POOL_SAFE(pResult->TestName);
+  FREE_POOL_SAFE(pResult->Message);
+  FREE_POOL_SAFE(pResult->State);
+
+  return pOutputLines;
+}
 /**
   Generates pointer to string with value corresponding to health state
   Caller is responsible for FreePool on this pointer
@@ -298,12 +461,12 @@ LongPrint(
     if (StrOffset == MaxToPrint) {
       TempChar = pString[StrOffset]; // Remember it and put a NULL there
       pString[StrOffset] = L'\0';
-      Print(pString); // Print the string up to the newline
+      Print(FORMAT_STR, pString); // Print the string up to the newline
       pString[StrOffset] = TempChar;// Put back the stored value.
       pString += StrOffset; // Move the pointer over the printed part and the '\n'
       StrOffset = 0;
     } else { // There is a NULL after the newline or there is just a NULL
-      Print(pString);
+      Print(FORMAT_STR, pString);
       break;
     }
   }
@@ -841,7 +1004,7 @@ GetControllerHandle(
   **/
   for (Index = 0; Index < HandleCount; Index++) {
     ReturnCode =
-		EfiTestManagedDevice(pHandleBuffer[Index],
+    EfiTestManagedDevice(pHandleBuffer[Index],
         DriverHandle, // Our driver handle equals the driver binding handle so this call is valid
         &gEfiDevicePathProtocolGuid);
 
@@ -1373,7 +1536,8 @@ InterleaveSettingsToString(
   pChannelInterleaving = ParseChannelInterleavingValue(ChannelInterleaving);
 
   if (pImcInterleaving == NULL || pChannelInterleaving == NULL) {
-    *ppString = CatSPrintClean(NULL, L"Error");
+    FREE_POOL_SAFE(*ppString);
+    *ppString = CatSPrint(NULL, L"Error");
     return;
   }
 
@@ -1884,7 +2048,7 @@ FileRead(
   }
 
   if (MaxFileSize != 0 && *pFileSize > MaxFileSize) {
-    ReturnCode = EFI_OUT_OF_RESOURCES;
+    ReturnCode = EFI_BUFFER_TOO_SMALL;
     goto Finish;
   }
 
@@ -2283,6 +2447,10 @@ LastShutdownStatusToStr(
     pStatusStr = CatSPrintClean(pStatusStr,
         FORMAT_STR FORMAT_STR, pStatusStr == NULL ? L"" : L", ", LAST_SHUTDOWN_STATUS_SURPRISE_RESET_STR);
   }
+  if (LastShutdownStatus.Combined.LastShutdownStatusExtended.Separated.EnhancedAdrFlushStatus) {
+    pStatusStr = CatSPrintClean(pStatusStr,
+      FORMAT_STR FORMAT_STR, pStatusStr == NULL ? L"" : L", ", LAST_SHUTDOWN_STATUS_ENHANCED_ADR_FLUSH_COMPLETE_STR);
+  }
   if (pStatusStr == NULL) {
     pStatusStr = CatSPrintClean(pStatusStr,
         FORMAT_STR, LAST_SHUTDOWN_STATUS_UNKNOWN_STR);
@@ -2317,7 +2485,7 @@ ConvertHealthStateReasonToHiiStr(
     goto Finish;
   }
   *ppHealthStatusReasonStr = NULL;
-  while (mask <= BIT7) {
+  while (mask <= BIT9) {
     switch (HealthStatusReason & mask) {
     case HEALTH_REASON_PERCENTAGE_REMAINING_LOW:
       *ppHealthStatusReasonStr = CatSPrintClean(*ppHealthStatusReasonStr,
@@ -2358,6 +2526,16 @@ ConvertHealthStateReasonToHiiStr(
       *ppHealthStatusReasonStr = CatSPrintClean(*ppHealthStatusReasonStr,
         ((*ppHealthStatusReasonStr == NULL) ? FORMAT_STR : FORMAT_STR_WITH_COMMA),
         HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_VIEW_DCPMM_FORM_CRITICAL_INTERNAL_FAILURE), NULL));
+      break;
+    case HEALTH_REASON_PERFORMANCE_DEGRADED:
+      *ppHealthStatusReasonStr = CatSPrintClean(*ppHealthStatusReasonStr,
+        ((*ppHealthStatusReasonStr == NULL) ? FORMAT_STR : FORMAT_STR_WITH_COMMA),
+        HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_VIEW_DCPMM_FORM_PERFORMANCE_DEGRADED), NULL));
+      break;
+    case HEALTH_REASON_CAP_SELF_TEST_COMM_FAILURE:
+      *ppHealthStatusReasonStr = CatSPrintClean(*ppHealthStatusReasonStr,
+        ((*ppHealthStatusReasonStr == NULL) ? FORMAT_STR : FORMAT_STR_WITH_COMMA),
+        HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_VIEW_DCPMM_FORM_CAP_SELF_TEST_COMM_FAILURE), NULL));
     }
     mask = mask << 1;
   }
@@ -2379,9 +2557,51 @@ Finish:
 }
 
 /**
-  Converts the dimm Id to its  HII string equivalent
-  @param[in] HiiHandle - handle for hii
+  Get Dimm Info by device handle
+  Scan the dimm list for a DimmInfo identified by device handle
+
+  @param[in] DeviceHandle Device Handle of the dimm
+  @param[in] pDimmInfo Array of DimmInfo
+  @param[in] DimmCount Size of DimmInfo array
+  @param[out] ppRequestedDimmInfo Pointer to the request DimmInfo struct
+
+  @retval EFI_INVALID_PARAMETER pDimmInfo or pRequestedDimmInfo is NULL
+  @retval EFI_SUCCESS Success
+**/
+EFI_STATUS
+GetDimmInfoByHandle(
+  IN     UINT32 DeviceHandle,
+  IN     DIMM_INFO *pDimmInfo,
+  IN     UINT32 DimmCount,
+     OUT DIMM_INFO **ppRequestedDimmInfo
+  )
+{
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
+  UINT32 Index = 0;
+  NVDIMM_ENTRY();
+
+  if (pDimmInfo == NULL || ppRequestedDimmInfo == NULL) {
+    goto Finish;
+  }
+
+  for (Index = 0; Index < DimmCount; Index++) {
+    if (DeviceHandle == pDimmInfo[Index].DimmHandle) {
+      *ppRequestedDimmInfo = &pDimmInfo[Index];
+    }
+  }
+
+  ReturnCode = EFI_SUCCESS;
+
+Finish:
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+
+/**
+  Converts the Dimm IDs within a region to its  HII string equivalent
   @param[in] pRegionInfo The Region info with DimmID and Dimmcount its HII string
+  @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance
+  @param[in] DimmIdentifier Dimm identifier preference
   @param[out] ppDimmIdStr A pointer to the HII DimmId string. Dynamically allocated memory and must be released by calling function.
 
   @retval EFI_OUT_OF_RESOURCES if there is no space available to allocate memory for string
@@ -2389,25 +2609,64 @@ Finish:
   @retval EFI_SUCCESS The conversion was successful
 **/
 EFI_STATUS
-ConvertDimmIdToDimmListStr(
+ConvertRegionDimmIdsToDimmListStr(
   IN     REGION_INFO *pRegionInfo,
+  IN     EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
+  IN     UINT8 DimmIdentifier,
   OUT CHAR16 **ppDimmIdStr
-)
+  )
 {
 
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   INT32 Index = 0;
+  DIMM_INFO *pDimmInfo = NULL;
+  UINT32 DimmCount = 0;
+  DIMM_INFO *pDimmList = NULL;
+
   NVDIMM_ENTRY();
 
-  if (ppDimmIdStr == NULL) {
+  if (pRegionInfo == NULL || pNvmDimmConfigProtocol == NULL || ppDimmIdStr == NULL) {
     goto Finish;
   }
   *ppDimmIdStr = NULL;
 
+  ReturnCode = pNvmDimmConfigProtocol->GetDimmCount(pNvmDimmConfigProtocol, &DimmCount);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Communication with driver failed");
+    goto Finish;
+  }
+
+  pDimmList = AllocateZeroPool(sizeof(*pDimmList) * DimmCount);
+  if (pDimmList == NULL) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    NVDIMM_DBG("Could not allocate memory");
+    goto Finish;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetDimms(pNvmDimmConfigProtocol, DimmCount, DIMM_INFO_CATEGORY_NONE, pDimmList);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Communication with driver failed");
+    goto Finish;
+  }
+
   for (Index = 0; Index < pRegionInfo->DimmIdCount; Index++) {
-    *ppDimmIdStr = CatSPrintClean(*ppDimmIdStr,
-      ((*ppDimmIdStr == NULL) ? FORMAT_HEX : FORMAT_HEX_WITH_COMMA),
-         pRegionInfo->DimmId[Index]);
+    if (DimmIdentifier == DISPLAY_DIMM_ID_HANDLE) {
+      *ppDimmIdStr = CatSPrintClean(*ppDimmIdStr,
+        ((*ppDimmIdStr == NULL) ? FORMAT_HEX : FORMAT_HEX_WITH_COMMA),
+        pRegionInfo->DimmId[Index]);
+    }
+    else {
+      ReturnCode = GetDimmInfoByHandle(pRegionInfo->DimmId[Index], pDimmList, DimmCount, &pDimmInfo);
+      if (EFI_ERROR(ReturnCode)) {
+        FREE_POOL_SAFE(*ppDimmIdStr);
+        NVDIMM_DBG("Failed to retrieve DimmInfo by Device Handle");
+        goto Finish;
+      }
+
+      *ppDimmIdStr = CatSPrintClean(*ppDimmIdStr,
+        ((*ppDimmIdStr == NULL) ? FORMAT_STR : FORMAT_STR_WITH_COMMA),
+        pDimmInfo->DimmUid);
+    }
   }
 
   if (*ppDimmIdStr == NULL) {
@@ -2417,6 +2676,7 @@ ConvertDimmIdToDimmListStr(
   ReturnCode = EFI_SUCCESS;
 
 Finish:
+  FREE_POOL_SAFE(pDimmList);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
@@ -2507,7 +2767,7 @@ SecurityCapabilitiesToStr(
       pCapabilitiesStr = CatSPrintClean(pCapabilitiesStr, FORMAT_STR, L", ");
     }
     pCapabilitiesStr = CatSPrintClean(pCapabilitiesStr, FORMAT_STR, SECURITY_CAPABILITIES_ERASE);
-  } else if (SecurityCapabilities & BIT0) {
+  } else if (SecurityCapabilities == 0) {
     pCapabilitiesStr = CatSPrintClean(pCapabilitiesStr, FORMAT_STR, SECURITY_CAPABILITIES_NONE);
   }
   NVDIMM_EXIT();
@@ -2636,6 +2896,43 @@ SecurityStateBitmaskToString(
 
 Finish:
   return pSecurityString;
+}
+
+/**
+  Convert dimm's S3 Resume Opt-In to its respective string
+
+  @param[in] HiiHandle handle to the HII database that contains i18n strings
+  @param[in] SecurityOptIn, bits define dimm's security opt-in value
+
+  @retval String representation of Dimm's S3 Resume opt-in
+**/
+CHAR16*
+S3ResumeOptInToString(
+  IN     EFI_HANDLE HiiHandle,
+  IN     UINT32 OptInValue
+)
+{
+  CHAR16 *pOptIntString = NULL;
+  CHAR16 *pTempStr = NULL;
+  switch (OptInValue) {
+    case S3_RESUME_SECURE_S3:
+      pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SEC_OPTIN_SECURE_S3), NULL);
+      pOptIntString = CatSPrintClean(pOptIntString, FORMAT_STR, pTempStr);
+      FREE_POOL_SAFE(pTempStr);
+      break;
+    case S3_RESUME_UNSECURE_S3:
+      pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SEC_OPTIN_UNSECURE_S3), NULL);
+      pOptIntString = CatSPrintClean(pOptIntString, FORMAT_STR, pTempStr);
+      FREE_POOL_SAFE(pTempStr);
+      break;
+    default:
+      pTempStr = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_SEC_OPTIN_INVALID), NULL);
+      pOptIntString = CatSPrintClean(pOptIntString, FORMAT_STR, pTempStr);
+      FREE_POOL_SAFE(pTempStr);
+      break;
+  }
+
+  return pOptIntString;
 }
 
 /**
@@ -2979,12 +3276,12 @@ BubbleSortLinkedList(
 
       if (Compare(pNodeCurrentEntry, pNodeNextEntry) > 0) {
 
-		  LIST_ENTRY *
-			  EFIAPI
-			  SwapListEntries(
-				  IN OUT  LIST_ENTRY                *FirstEntry,
-				  IN OUT  LIST_ENTRY                *SecondEntry
-			  ); SwapListEntries(pNodeCurrentEntry, pNodeNextEntry);
+      LIST_ENTRY *
+        EFIAPI
+        SwapListEntries(
+          IN OUT  LIST_ENTRY                *FirstEntry,
+          IN OUT  LIST_ENTRY                *SecondEntry
+        ); SwapListEntries(pNodeCurrentEntry, pNodeNextEntry);
         pNodeCurrentEntry = pNodeNextEntry;
         pNodeNextEntry = pNodeNextEntry->ForwardLink;
         Swapped = TRUE;
@@ -3231,9 +3528,9 @@ EndianSwapUint32(
 {
   UINT32 NewVal;
   NewVal = ((OrigVal & 0x000000FF) << 24) |
-		  ((OrigVal & 0x0000FF00) << 8) |
-		  ((OrigVal & 0x00FF0000) >> 8) |
-		  ((OrigVal & 0xFF000000) >> 24);
+      ((OrigVal & 0x0000FF00) << 8) |
+      ((OrigVal & 0x00FF0000) >> 8) |
+      ((OrigVal & 0xFF000000) >> 24);
   return NewVal;
 }
 
@@ -3250,7 +3547,7 @@ EndianSwapUint16(
 {
   UINT16 NewVal;
   NewVal = ((OrigVal & 0x00FF) << 8) |
-		  ((OrigVal & 0xFF00) >> 8);
+      ((OrigVal & 0xFF00) >> 8);
   return NewVal;
 }
 
@@ -3633,9 +3930,11 @@ CopyMem_S(
 )
 {
 #ifdef OS_BUILD
-  int status = memcpy_s(DestinationBuffer, DestLength, SourceBuffer, Length);
-  if(status != 0)
-    NVDIMM_CRIT("Memcpy_s failed with ErrorCode: %x", status);
+  int status = os_memcpy(DestinationBuffer, DestLength, SourceBuffer, Length);
+  if(status != 0) {
+    NVDIMM_CRIT("0x%x, 0x%x, 0x%x, 0x%x, 0x%x", DestinationBuffer, DestLength, SourceBuffer, Length, status);
+    NVDIMM_CRIT("os_memcpy failed with ErrorCode: %x", status);
+  }
   return DestinationBuffer;
 #else
   return CopyMem(DestinationBuffer, SourceBuffer, Length);
@@ -3753,8 +4052,7 @@ IsDimmInterfaceCodeSupportedByValues(
   if (interfaceCodes != NULL)
   {
     for (Index = 0; Index < interfaceCodeNum; Index++) {
-      if (DCPMM_FMT_CODE_APP_DIRECT == interfaceCodes[Index] ||
-        DCPMM_FMT_CODE_STORAGE == interfaceCodes[Index]) {
+      if (DCPMM_FMT_CODE_APP_DIRECT == interfaceCodes[Index]) {
         Supported = TRUE;
         break;
       }
@@ -3802,11 +4100,13 @@ IsFwApiVersionSupportedByValues(
 {
   BOOLEAN VerSupported = TRUE;
 
-  if ((major < DEV_FW_API_VERSION_MAJOR_MIN) ||
-    (major == DEV_FW_API_VERSION_MAJOR_MIN &&
-      minor < DEV_FW_API_VERSION_MINOR_MIN)) {
+  if (((major <  MIN_FIS_SUPPORTED_BY_THIS_SW_MAJOR) ||
+       (major == MIN_FIS_SUPPORTED_BY_THIS_SW_MAJOR &&
+        minor <  MIN_FIS_SUPPORTED_BY_THIS_SW_MINOR)) ||
+       (major >  MAX_FIS_SUPPORTED_BY_THIS_SW_MAJOR)) {
     VerSupported = FALSE;
   }
+
   return VerSupported;
 }
 
@@ -3918,7 +4218,7 @@ SetObjStatusForDimmInfoWithErase(
   if (TmpDimmUid != NULL) {
     StrnCpyS(DimmUid, MAX_DIMM_UID_LENGTH, TmpDimmUid, MAX_DIMM_UID_LENGTH - 1);
     FREE_POOL_SAFE(TmpDimmUid);
-  } 
+  }
 
   if (EraseFirst) {
     EraseObjStatus(pCommandStatus, pDimm->DimmHandle, DimmUid, MAX_DIMM_UID_LENGTH);
@@ -3927,6 +4227,94 @@ SetObjStatusForDimmInfoWithErase(
   SetObjStatus(pCommandStatus, pDimm->DimmHandle, DimmUid, MAX_DIMM_UID_LENGTH, Status);
 }
 
+/**
+  Retrieve the number of bits set in a number
+  Based on Brian Kernighan's Algorithm
+
+  @param[in] Number Number in which number of bits set is to be counted
+  @param[out] pNumOfBitsSet Number of bits set
+**/
+EFI_STATUS CountNumOfBitsSet(
+  IN  UINT64 Number,
+  OUT UINT8  *pNumOfBitsSet
+)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+
+  NVDIMM_ENTRY();
+
+  if (pNumOfBitsSet == NULL) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  *pNumOfBitsSet = 0;
+  while (Number) {
+    Number &= (Number - 1);
+    (*pNumOfBitsSet)++;
+  }
+
+Finish:
+  NVDIMM_EXIT();
+  return ReturnCode;
+}
+
+/**
+  Retrieve the bitmap for NumOfChannelWays
+
+  @param[in] NumOfChannelWays Number of ChannelWays or Number of Dimms used in an Interleave Set
+  @param[out] pBitField Bitmap based on PCAT 2.0 Type 1 Table for ChannelWays
+**/
+EFI_STATUS GetBitFieldForNumOfChannelWays(
+  IN  UINT64 NumOfChannelWays,
+  OUT UINT16  *pBitField
+)
+{
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+
+  if (pBitField == NULL) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  switch (NumOfChannelWays) {
+  case 1:
+    *pBitField = INTERLEAVE_SET_1_WAY;
+    break;
+  case 2:
+    *pBitField = INTERLEAVE_SET_2_WAY;
+    break;
+  case 3:
+    *pBitField = INTERLEAVE_SET_3_WAY;
+    break;
+  case 4:
+    *pBitField = INTERLEAVE_SET_4_WAY;
+    break;
+  case 6:
+    *pBitField = INTERLEAVE_SET_6_WAY;
+    break;
+  case 8:
+    *pBitField = INTERLEAVE_SET_8_WAY;
+    break;
+  case 12:
+    *pBitField = INTERLEAVE_SET_12_WAY;
+    break;
+  case 16:
+    *pBitField = INTERLEAVE_SET_16_WAY;
+    break;
+  case 24:
+    *pBitField = INTERLEAVE_SET_24_WAY;
+    break;
+  default:
+    NVDIMM_WARN("Unsupported number of channel ways: %d", NumOfChannelWays);
+    *pBitField = 0;
+    break;
+  }
+
+Finish:
+  NVDIMM_EXIT();
+  return ReturnCode;
+}
 
 //Its ok to keep these routines here, but they should be calling abstracted serialize/deserialize data APIs in the future.
 extern EFI_GUID gIntelDimmPbrTagIdVariableguid;
@@ -4018,6 +4406,12 @@ EFI_STATUS PbrDcpmmSerializeTagId(
     *pPbrId = id;
     NVDIMM_DBG("Writing to shared memory: %d\n", *pPbrId);
     shmdt(pPbrId);
+    //If id is reset to zero it is ok to mark
+    //this share memory to be removed
+    if (0 == id)
+    {
+      shmctl(ShmId, IPC_RMID, NULL);
+    }
     ReturnCode = EFI_SUCCESS;
   }
 #endif
@@ -4056,9 +4450,168 @@ EFI_STATUS PbrDcpmmDeserializeTagId(
   {
     *id = *pPbrId;
     shmdt(pPbrId);
+    //If id is reset to zero it is ok to mark
+    //this share memory to be removed
+    if (0 == *id)
+    {
+      shmctl(ShmId, IPC_RMID, NULL);
+    }
   }
 #endif
   return ReturnCode;
 }
 
+#endif
+
+/**
+Converts a DIMM_INFO_ATTRIB_X attribute to a string
+
+@param[in] pAttrib - a DIMM_INFO_ATTRIB_X attribute to convert
+@param[in] pFormatStr - optional format string to use for conversion
+**/
+CHAR16 *
+ConvertDimmInfoAttribToString(
+    IN VOID *pAttrib,
+    IN CHAR16* pFormatStr OPTIONAL)
+{
+  DIMM_INFO_ATTRIB_HEADER *pHeader = (DIMM_INFO_ATTRIB_HEADER *)pAttrib;
+
+  if (NULL == pAttrib) {
+    return NULL;
+  }
+
+  if (pHeader->Status.Code == EFI_UNSUPPORTED) {
+    return NULL;
+  }
+
+  if (pHeader->Status.Code) {
+    return CatSPrintClean(NULL, L"Unknown");
+  }
+
+  switch (pHeader->Type) {
+    case DIMM_INFO_TYPE_BOOLEAN:
+      if (pFormatStr) {
+        return CatSPrintClean(NULL, pFormatStr, ((DIMM_INFO_ATTRIB_BOOLEAN *)pAttrib)->Data);
+      }
+      else if(((DIMM_INFO_ATTRIB_BOOLEAN *)pAttrib)->Data){
+        return  CatSPrintClean(NULL, L"TRUE");
+      }
+      else {
+        return  CatSPrintClean(NULL, L"FALSE");
+      }
+    case DIMM_INFO_TYPE_CHAR16:
+      return (NULL == pFormatStr) ?
+        CatSPrintClean(NULL, FORMAT_STR, ((DIMM_INFO_ATTRIB_CHAR16 *)pAttrib)->Data) :
+        CatSPrintClean(NULL, pFormatStr, ((DIMM_INFO_ATTRIB_CHAR16 *)pAttrib)->Data);
+    case DIMM_INFO_TYPE_UINT8:
+      return (NULL == pFormatStr) ?
+        CatSPrintClean(NULL, L"%d", ((DIMM_INFO_ATTRIB_UINT8 *)pAttrib)->Data) :
+        CatSPrintClean(NULL, pFormatStr, ((DIMM_INFO_ATTRIB_UINT8 *)pAttrib)->Data);
+    case DIMM_INFO_TYPE_UINT16:
+      return (NULL == pFormatStr) ?
+        CatSPrintClean(NULL, L"%d", ((DIMM_INFO_ATTRIB_UINT16 *)pAttrib)->Data) :
+        CatSPrintClean(NULL, pFormatStr, ((DIMM_INFO_ATTRIB_UINT16 *)pAttrib)->Data);
+    case DIMM_INFO_TYPE_UINT32:
+      return (NULL == pFormatStr) ?
+        CatSPrintClean(NULL, L"%d", ((DIMM_INFO_ATTRIB_UINT32 *)pAttrib)->Data) :
+        CatSPrintClean(NULL, pFormatStr, ((DIMM_INFO_ATTRIB_UINT32 *)pAttrib)->Data);
+  }
+  return NULL;
+}
+#ifndef OS_BUILD
+
+#define EFI_ACPI_16550_UART_HID EISA_PNP_ID(0x0501)
+
+extern EFI_GUID gEfiSerialIoProtocolGuid;
+/**
+  Check whether the device path node is ISA Serial Node.
+  @param[in] Acpi           Device path node to be checked
+  @retval TRUE          It's ISA Serial Node.
+  @retval FALSE         It's NOT ISA Serial Node.
+**/
+BOOLEAN
+IsISASerialNode(
+  IN ACPI_HID_DEVICE_PATH *Acpi
+)
+{
+  return (BOOLEAN)(
+    (DevicePathType(Acpi) == ACPI_DEVICE_PATH) &&
+    (DevicePathSubType(Acpi) == ACPI_DP) &&
+    (ReadUnaligned32(&Acpi->HID) == EFI_ACPI_16550_UART_HID)
+    );
+}
+
+/**
+  The initialization routine in DebugLib initializes the
+  serial port to a static value defined in module dec file.
+  This function find's out the serial port attributes
+  from SerialIO protocol and set it on serial port
+
+  @retval EFI_SUCCESS The function complete successfully.
+  @retval EFI_UNSUPPORTED No serial ports present.
+
+**/
+
+EFI_STATUS
+SetSerialAttributes(
+  VOID
+)
+{
+  UINTN                     Index;
+
+  UINTN                     NoHandles;
+  EFI_HANDLE                *Handles;
+  EFI_STATUS                ReturnCode;
+  ACPI_HID_DEVICE_PATH      *Acpi;
+  EFI_DEVICE_PATH_PROTOCOL  *DevicePath;
+  EFI_SERIAL_IO_PROTOCOL    *SerialIo;
+  EFI_DEVICE_PATH_PROTOCOL  *Node;
+
+  ReturnCode = gBS->LocateHandleBuffer(
+    ByProtocol,
+    &gEfiSerialIoProtocolGuid,
+    NULL,
+    &NoHandles,
+    &Handles
+  );
+  CHECK_RETURN_CODE(ReturnCode,Finish);
+  for (Index = 0; Index < NoHandles; Index++) {
+    // Check to see whether the handle has DevicePath Protocol installed
+    ReturnCode = gBS->HandleProtocol(
+      Handles[Index],
+      &gEfiDevicePathProtocolGuid,
+      (VOID **)&DevicePath
+    );
+    CHECK_RETURN_CODE(ReturnCode,Finish);
+    Acpi = NULL;
+    for (Node = DevicePath; !IsDevicePathEnd(Node); Node = NextDevicePathNode(Node)) {
+      if ((DevicePathType(Node) == MESSAGING_DEVICE_PATH) && (DevicePathSubType(Node) == MSG_UART_DP)) {
+        break;
+      }
+      // Acpi points to the node before Uart node
+      Acpi = (ACPI_HID_DEVICE_PATH *)Node;
+    }
+    if ((Acpi != NULL) && IsISASerialNode(Acpi)) {
+      ReturnCode = gBS->HandleProtocol(
+        Handles[Index],
+        &gEfiSerialIoProtocolGuid,
+        (VOID **)&SerialIo
+      );
+      CHECK_RETURN_CODE(ReturnCode,Finish);
+      EFI_PARITY_TYPE    Parity = (EFI_PARITY_TYPE)SerialIo->Mode->Parity;
+      UINT8              DataBits = (UINT8)SerialIo->Mode->DataBits;
+      EFI_STOP_BITS_TYPE StopBits = (EFI_STOP_BITS_TYPE)(SerialIo->Mode->StopBits);
+      ReturnCode = SerialPortSetAttributes(
+        &(SerialIo->Mode->BaudRate),
+        &(SerialIo->Mode->ReceiveFifoDepth),
+        &(SerialIo->Mode->Timeout),
+        &Parity, &DataBits, &StopBits);
+      CHECK_RETURN_CODE(ReturnCode,Finish);
+      break;
+    }
+  }
+Finish:
+  FREE_POOL_SAFE(Handles);
+  return ReturnCode;
+}
 #endif

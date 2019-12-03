@@ -24,7 +24,7 @@
 struct Command DumpSessionCommand =
 {
   DUMP_VERB,                                                                      //!< verb
-  { 
+  {
     {L"", DESTINATION_OPTION, L"", DESTINATION_OPTION_HELP, L"Destination to dump the recorded session", FALSE, ValueRequired},   //!< options
     {L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
     {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty}
@@ -95,23 +95,21 @@ DumpSession(
 
   //get the contents of the pbr session buffer
   ReturnCode = pNvmDimmPbrProtocol->PbrGetSession(&pBuffer, &BufferSz);
-  if (EFI_ERROR(ReturnCode)) {
+  if (EFI_ERROR(ReturnCode) || pBuffer == NULL) {
     PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_FAILED_TO_GET_SESSION_BUFFER);
     goto Finish;
   }
 
   //fill in run-time versioning info
-  if (NULL != pBuffer) {
-    pHeader = (PbrHeader*)pBuffer;
+  pHeader = (PbrHeader*)pBuffer;
 #ifdef OS_BUILD
-    os_get_os_name(pHeader->OsName, PBR_OS_NAME_MAX);
-    os_get_os_version(pHeader->OsVersion, PBR_OS_VERSION_MAX);
-    AsciiSPrint(pHeader->SwVersion, PBR_SW_VERSION_MAX, NVMDIMM_VERSION_STRING_A);
+  os_get_os_name(pHeader->OsName, PBR_OS_NAME_MAX);
+  os_get_os_version(pHeader->OsVersion, PBR_OS_VERSION_MAX);
+  AsciiSPrint(pHeader->SwVersion, PBR_SW_VERSION_MAX, NVMDIMM_VERSION_STRING_A);
 #else
-    AsciiSPrint(pHeader->OsName, PBR_OS_NAME_MAX, "UEFI");
-    UnicodeStrToAsciiStrS(NVMDIMM_VERSION_STRING, pHeader->SwVersion, PBR_SW_VERSION_MAX);
+  AsciiSPrint(pHeader->OsName, PBR_OS_NAME_MAX, "UEFI");
+  UnicodeStrToAsciiStrS(NVMDIMM_VERSION_STRING, pHeader->SwVersion, PBR_SW_VERSION_MAX);
 #endif
-  }
 
   //dump the buffer to a file
   ReturnCode = DumpToFile(pDumpUserPath, BufferSz, pBuffer, TRUE);

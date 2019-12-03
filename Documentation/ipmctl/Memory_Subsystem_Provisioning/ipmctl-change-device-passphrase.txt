@@ -8,10 +8,11 @@ endif::manpage[]
 
 NAME
 ----
+ifndef::os_build[]
 ipmctl-change-device-passphrase - Changes the security passphrase on DCPMM
-
+endif::os_build[]
 ifdef::os_build[]
-NOTE: This command is subject to OS Vendor (OSV) support. It will return "Not Supported."
+ipmctl-change-device-passphrase - Changes the security passphrase on DCPMM on supported OS
 endif::os_build[]
 
 SYNOPSIS
@@ -23,6 +24,10 @@ ConfirmPassphrase=(string)
 DESCRIPTION
 -----------
 Changes the security passphrase on one or more DCPMMs.
+
+ifdef::os_build[]
+NOTE: This command is subject to OS Vendor (OSV) support. It will return "Not Supported."
+endif::os_build[]
 
 OPTIONS
 -------
@@ -54,7 +59,7 @@ NOTE: The file does not need to contain the ConfirmPassphrase property
 
 TARGETS
 -------
--dimm (DimmIDs)::
+-dimm [DimmIDs]::
   Changes the passphrase on specific DCPMMs by supplying one or more
   comma separated DCPMM identifiers. However, this is not recommended as
   it may put the system in an undesirable state. The default is to change the
@@ -105,7 +110,7 @@ ConfirmPassphrase=""
 Changes the default master passphrase to masterpassphrase on all DCPMMs.
 
 [verse]
-ipmctl set -master -default NewPassphrase=masterpassphrase ConfirmPassphrase=
+ipmctl set -master -default -dimm NewPassphrase=masterpassphrase ConfirmPassphrase=
 masterpassphrase
 
 Changes the master passphrase from masterpassphrase to newmasterpassphrase on
@@ -117,8 +122,12 @@ ConfirmPassphrase=newmasterpassphrase
 
 LIMITATIONS
 -----------
-The specified DCPMM must be manageable by the host software, have
-security enabled and not be in the "Frozen" or "Exceeded" lock states.
+In order to successfully execute this command:
+
+- The caller must have the appropriate privileges.
+
+- The specified DCPMM must be manageable by the host software, have
+  security enabled and not be in the "Frozen" or "Exceeded" lock states.
 
 ifdef::os_build[]
 Command is subject to OS Vendor (OSV) support. If OSV does not provide support,
@@ -143,5 +152,6 @@ SAMPLE OUTPUT
 -------------
 [verse]
 Change passphrase on DIMM (DimmID): Success
-...
+
+[verse]
 Change passphrase on DIMM (DimmID): Error (Code)-(Description)

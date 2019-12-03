@@ -23,7 +23,7 @@
 #define DS_REGION_PATH                    L"/RegionList/Region"
 #define DS_DIMM_INDEX_PATH                L"/RegionList/Region[%d]"
 
- 
+
 #ifdef OS_BUILD
 /*
   *  PRINT LIST ATTRIBUTES
@@ -186,6 +186,7 @@ struct Command ShowRegionsCommand =
     {VERBOSE_OPTION_SHORT, VERBOSE_OPTION, L"", L"", HELP_VERBOSE_DETAILS_TEXT, FALSE, ValueEmpty},
     {L"", PROTOCOL_OPTION_DDRT, L"", L"",HELP_DDRT_DETAILS_TEXT, FALSE, ValueEmpty},
     {L"", PROTOCOL_OPTION_SMBUS, L"", L"",HELP_SMBUS_DETAILS_TEXT, FALSE, ValueEmpty},
+    {L"", NFIT_OPTION, L"", L"",HELP_NFIT_DETAILS_TEXT, FALSE, ValueEmpty},
     {L"", LARGE_PAYLOAD_OPTION, L"", L"", HELP_LPAYLOAD_DETAILS_TEXT, FALSE, ValueEmpty},
     {L"", SMALL_PAYLOAD_OPTION, L"", L"", HELP_SPAYLOAD_DETAILS_TEXT, FALSE, ValueEmpty},
     {ALL_OPTION_SHORT, ALL_OPTION, L"", L"",HELP_ALL_DETAILS_TEXT, FALSE, ValueEmpty},
@@ -198,7 +199,7 @@ struct Command ShowRegionsCommand =
   },
   {                                                    //!< targets
     {REGION_TARGET, L"", L"RegionIDs", TRUE, ValueOptional},
-    { SOCKET_TARGET, L"", HELP_TEXT_SOCKET_IDS, FALSE, ValueRequired },
+    { SOCKET_TARGET, L"", HELP_TEXT_SOCKET_IDS, FALSE, ValueOptional },
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                //!< properties
   L"Show information about one or more Regions.",         //!< help
@@ -217,8 +218,6 @@ CHAR16 *mppAllowedShowRegionsDisplayValues[] =
   DIMM_ID_STR,
   ISET_ID_STR,
 };
-
-STATIC CHAR16 *CreateDimmsStr(REGION_INFO *pRegions);
 
 /**
   Register the show regions command
@@ -309,6 +308,8 @@ ShowRegions(
   UINT32 AppDirectRegionCount = 0;
   CMD_DISPLAY_OPTIONS *pDispOptions = NULL;
   CHAR16 *pDimmIds = NULL;
+  CHAR16 *pNfitOption = NULL;
+  BOOLEAN UseNfit = FALSE;
   PRINT_CONTEXT *pPrinterCtx = NULL;
   CHAR16 *pPath = NULL;
 
@@ -407,7 +408,13 @@ ShowRegions(
     UnitsToDisplay = UnitsOption;
   }
 
-  ReturnCode = pNvmDimmConfigProtocol->GetRegionCount(pNvmDimmConfigProtocol, &RegionCount);
+  /** Check if nfit option is set **/
+  pNfitOption = getOptionValue(pCmd, NFIT_OPTION);
+  if (pNfitOption) {
+    UseNfit = TRUE;
+  }
+
+  ReturnCode = pNvmDimmConfigProtocol->GetRegionCount(pNvmDimmConfigProtocol, UseNfit, &RegionCount);
   if (EFI_ERROR(ReturnCode)) {
     if (EFI_NO_RESPONSE == ReturnCode) {
       ResetCmdStatus(pCommandStatus, NVM_ERR_BUSY_DEVICE);
@@ -429,7 +436,7 @@ ShowRegions(
     goto Finish;
   }
 
-  ReturnCode = pNvmDimmConfigProtocol->GetRegions(pNvmDimmConfigProtocol, RegionCount, pRegions, pCommandStatus);
+  ReturnCode = pNvmDimmConfigProtocol->GetRegions(pNvmDimmConfigProtocol, RegionCount, UseNfit, pRegions, pCommandStatus);
   if (EFI_ERROR(ReturnCode)) {
     if (pCommandStatus->GeneralStatus != NVM_SUCCESS) {
       ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
@@ -467,10 +474,6 @@ ShowRegions(
       Skip if the socket is not matching.
     **/
     if (SocketsNum > 0 && !ContainUint(pSocketIds, SocketsNum, pRegions[RegionIndex].SocketId)) {
-      continue;
-    }
-
-    if (pRegions[RegionIndex].RegionType == PM_TYPE_STORAGE) {
       continue;
     }
 
@@ -538,7 +541,10 @@ ShowRegions(
     **/
     if (AllOptionSet ||
       (pDispOptions->DisplayOptionSet && ContainsValue(pDispOptions->pDisplayValues, DIMM_ID_STR))) {
-      pDimmIds = CreateDimmsStr(&pRegions[RegionIndex]);
+      ReturnCode = ConvertRegionDimmIdsToDimmListStr(&pRegions[RegionIndex], pNvmDimmConfigProtocol, DisplayPreferences.DimmIdentifier, &pDimmIds);
+      if (EFI_ERROR(ReturnCode)) {
+        goto Finish;
+      }
       PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, DIMM_ID_STR, pDimmIds);
       FREE_POOL_SAFE(pDimmIds);
     }
@@ -577,7 +583,7 @@ ShowRegions(
     if (SocketsNum > 0) {
       ErrMsg = CatSPrintClean(ErrMsg, CLI_ERR_REGION_TO_SOCKET_MAPPING);
     }
-    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, ErrMsg);
+    PRINTER_SET_MSG(pPrinterCtx, ReturnCode, FORMAT_STR, ErrMsg);
     FREE_POOL_SAFE(ErrMsg);
     goto Finish;
   }
@@ -597,31 +603,8 @@ Finish:
   FREE_POOL_SAFE(pRegions);
   FREE_POOL_SAFE(pRegionsIds);
   FREE_POOL_SAFE(pSocketIds);
+  FREE_POOL_SAFE(pNfitOption);
   FreeCommandStatus(&pCommandStatus);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
-}
-
-/**
-Create comma deliminted list of DimmIDs
-
-@param[in] pRegions - pointer to a REGION_INFO struct
-
-@retval Heap allocated string of DimmIDs (caller to free)
-**/
-STATIC CHAR16 *CreateDimmsStr(REGION_INFO *pRegions) {
-  CHAR16 *DimmsStr = NULL;
-  UINT16 DimmIdx;
-
-  if (NULL == pRegions) {
-    return NULL;
-  }
-
-  for (DimmIdx = 0; DimmIdx < pRegions->DimmIdCount; DimmIdx++) {
-    if (DimmIdx > 0) {
-      DimmsStr = CatSPrintClean(DimmsStr, DIMM_ID_STR_DELIM);
-    }
-    DimmsStr = CatSPrintClean(DimmsStr, FORMAT_HEX, pRegions->DimmId[DimmIdx]);
-  }
-  return DimmsStr;
 }

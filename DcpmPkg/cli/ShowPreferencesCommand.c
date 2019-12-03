@@ -65,7 +65,6 @@ ShowPreferences(
   DISPLAY_PREFERENCES DisplayPreferences;
   CONST CHAR16 *pImcInterleaving = NULL;
   CONST CHAR16 *pChannelInterleaving = NULL;
-  CONST CHAR16 *pAppDirectGranularity = NULL;
 #ifdef OS_BUILD
   CHAR16 tempStr[PROPERTY_VALUE_LEN];
 #endif
@@ -135,54 +134,7 @@ ShowPreferences(
     }
   }
 
-  switch (DriverPreferences.AppDirectGranularity) {
-  case APPDIRECT_GRANULARITY_1GIB:
-    pAppDirectGranularity = L"1";
-    break;
-  case APPDIRECT_GRANULARITY_DEFAULT:
-    pAppDirectGranularity = PROPERTY_VALUE_RECOMMENDED;
-    break;
-  default:
-    pAppDirectGranularity = NULL;
-  }
-
-  if (pAppDirectGranularity == NULL) {
-    ReturnCode = EFI_DEVICE_ERROR;
-    PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_OPENING_CONFIG_PROTOCOL);
-  } else {
-    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  APP_DIRECT_GRANULARITY_PROPERTY, pAppDirectGranularity);
-  }
-
 #ifdef OS_BUILD
-  ReturnCode = GET_VARIABLE_STR(PERFORMANCE_MONITOR_ENABLED, gNvmDimmConfigProtocolGuid, 0, tempStr);
-  if (!EFI_ERROR(ReturnCode)) {
-    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  PERFORMANCE_MONITOR_ENABLED, tempStr);
-  }
-
-  ReturnCode = GET_VARIABLE_STR(PERFORMANCE_MONITOR_INTERVAL_MINUTES, gNvmDimmConfigProtocolGuid, 0, tempStr);
-  if (!EFI_ERROR(ReturnCode)) {
-    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  PERFORMANCE_MONITOR_INTERVAL_MINUTES, tempStr);
-  }
-
-  ReturnCode = GET_VARIABLE_STR(EVENT_MONITOR_ENABLED, gNvmDimmConfigProtocolGuid, 0, tempStr);
-  if (!EFI_ERROR(ReturnCode)) {
-    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  EVENT_MONITOR_ENABLED, tempStr);
-  }
-
-  ReturnCode = GET_VARIABLE_STR(EVENT_MONITOR_INTERVAL_MINUTES, gNvmDimmConfigProtocolGuid, 0, tempStr);
-  if (!EFI_ERROR(ReturnCode)) {
-    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  EVENT_MONITOR_INTERVAL_MINUTES, tempStr);
-  }
-
-  ReturnCode = GET_VARIABLE_STR(EVENT_LOG_MAX, gNvmDimmConfigProtocolGuid, 0, tempStr);
-  if (!EFI_ERROR(ReturnCode)) {
-    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  EVENT_LOG_MAX, tempStr);
-  }
-  ReturnCode = GET_VARIABLE_STR(DBG_LOG_MAX, gNvmDimmConfigProtocolGuid, 0, tempStr);
-  if (!EFI_ERROR(ReturnCode)) {
-    PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  DBG_LOG_MAX, tempStr);
-  }
-
   ReturnCode = GET_VARIABLE_STR(DBG_LOG_LEVEL, gNvmDimmConfigProtocolGuid, 0, tempStr);
   if (!EFI_ERROR(ReturnCode)) {
     PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath,  DBG_LOG_LEVEL, tempStr);

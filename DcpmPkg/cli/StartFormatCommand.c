@@ -34,8 +34,8 @@ struct Command StartFormatCommand =
     {DIMM_TARGET, L"", HELP_TEXT_DIMM_ID, TRUE, ValueOptional}
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                               //!< properties
-  L"Start Format Dimms",                                                                   //!< help
-  StartFormat,								 //!< run function
+  L"Start Format Dimms",                                                 //!< help
+  StartFormat,                                                           //!< run function
   TRUE
 };
 
@@ -71,7 +71,7 @@ StartFormat(
   }
 
   /**
-    Printing will still work via compability mode if NULL so no need to check for NULL.
+    Printing will still work via compatibility mode if NULL so no need to check for NULL.
   **/
   pPrinterCtx = pCmd->pPrintCtx;
 
@@ -140,6 +140,11 @@ StartFormat(
         PRINTER_SET_MSG(pPrinterCtx, ReturnCode, FORMAT_STR_NL, CLI_ERR_UNMANAGEABLE_DIMM);
         goto Finish;
       }
+      if (!AllDimmsInListInSupportedConfig(pDimms, DimmCount, pDimmIds, DimmIdsCount)) {
+        ReturnCode = EFI_INVALID_PARAMETER;
+        PRINTER_SET_MSG(pPrinterCtx, ReturnCode, FORMAT_STR_NL, CLI_ERR_POPULATION_VIOLATION);
+        goto Finish;
+      }
     }
   }
 
@@ -188,7 +193,7 @@ StartFormat(
     }
   }
 
-  PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, CLI_FORMAT_DIMM_STARTING_FORMAT, DimmStr);
+  PRINTER_PROMPT_MSG(pPrinterCtx, ReturnCode, CLI_FORMAT_DIMM_STARTING_FORMAT);
 
   ReturnCode = pNvmDimmConfigProtocol->DimmFormat(pNvmDimmConfigProtocol, pDimmIds, DimmIdsCount, Recovery, pCommandStatus);
   if (!EFI_ERROR(ReturnCode)) {

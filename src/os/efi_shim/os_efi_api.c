@@ -7,9 +7,8 @@
 #include <memory.h>
 #include <Uefi.h>
 #include <Library/BaseLib.h>
-#include <ShellBase.h>
 #include <Guid/FileInfo.h>
-#include <EfiShellParameters.h>
+#include <ShellParameters.h>
 #include <LoadedImage.h>
 #include <EfiShellInterface.h>
 #include <NvmStatus.h>
@@ -22,19 +21,15 @@
 #include <Dimm.h>
 #include <NvmDimmDriver.h>
 #include <Common.h>
+#include <wchar.h>
 #ifdef _MSC_VER
 #include <io.h>
 #include <conio.h>
 #include <time.h>
-#include <wchar.h>
 #include <string.h>
 #else
 #include <unistd.h>
-#include <wchar.h>
 #include <fcntl.h>
-#include <safe_str_lib.h>
-#include <safe_mem_lib.h>
-#include <safe_lib.h>
 #define _read read
 #define _getch getchar
 #endif
@@ -48,9 +43,9 @@
 #include "os_common.h"
 #include <os_efi_api.h>
 #include <os_types.h>
-#include "event.h"
 #include "Pbr.h"
 #include "PbrDcpmm.h"
+#include <os_str.h>
 
 EFI_SYSTEM_TABLE *gST;
 EFI_SHELL_INTERFACE *mEfiShellInterface;
@@ -72,7 +67,7 @@ size_t gSmbiosTableSize = 0;
 UINT8 gSmbiosMinorVersion = 0;
 UINT8 gSmbiosMajorVersion = 0;
 
-#define SMBIOS_SIZE     0x2800 
+#define SMBIOS_SIZE     0x2800
 typedef struct _smbios_table_recording
 {
   size_t size;
@@ -85,7 +80,6 @@ struct debug_logger_config
 {
   UINT8 initialized : 1;
   CHAR8 stdout_enabled;
-  CHAR8 file_enabled;
   CHAR8 level;
 };
 enum
@@ -99,7 +93,6 @@ enum
 
 #define INI_PREFERENCES_LOG_LEVEL L"DBG_LOG_LEVEL"
 #define INI_PREFERENCES_LOG_STDOUT_ENABLED L"DBG_LOG_STDOUT_ENABLED"
-#define INI_PREFERENCES_LOG_DEBUG_FILE_ENABLED L"DBG_LOG_DEBUG_FILE_ENABLED"
 
 /*
 * Debug logger context structure.
@@ -228,26 +221,24 @@ initAcpiTables()
   {
     NVDIMM_WARN("Encountered %d failures.", failures);
     ReturnCode = EFI_NOT_FOUND;
-    goto Finish;
   }
 
   if (NULL == PtrNfitTable || NULL == PtrPcatTable)
   {
     NVDIMM_WARN("Failed to obtain NFIT or PCAT table.");
     ReturnCode = EFI_NOT_FOUND;
+  }
+
+  ReturnCode = ParseAcpiTables(PtrNfitTable, PtrPcatTable, PtrPMTTTable,
+    &gNvmDimmData->PMEMDev.pFitHead, &gNvmDimmData->PMEMDev.pPcatHead, &gNvmDimmData->PMEMDev.pPmttHead,
+    &gNvmDimmData->PMEMDev.IsMemModeAllowedByBios);
+  if (EFI_ERROR(ReturnCode))
+  {
+    NVDIMM_WARN("Failed to parse NFIT or PCAT or PMTT table.");
+    ReturnCode = EFI_NOT_FOUND;
     goto Finish;
   }
-  else
-  {
-    ReturnCode = ParseAcpiTables(PtrNfitTable, PtrPcatTable, PtrPMTTTable,
-      &gNvmDimmData->PMEMDev.pFitHead, &gNvmDimmData->PMEMDev.pPcatHead, &gNvmDimmData->PMEMDev.IsMemModeAllowedByBios);
-    if (EFI_ERROR(ReturnCode))
-    {
-      NVDIMM_WARN("Failed to parse NFIT or PCAT or PMTT table.");
-      ReturnCode = EFI_NOT_FOUND;
-      goto Finish;
-    }
-  }
+
 Finish:
   if (PBR_PLAYBACK_MODE != PBR_GET_MODE(pContext)) {
     FREE_POOL_SAFE(PtrNfitTable);
@@ -386,10 +377,6 @@ static void get_logger_config(struct debug_logger_config *p_log_config)
   efi_status = GET_VARIABLE(INI_PREFERENCES_LOG_STDOUT_ENABLED, guid, &size, &p_log_config->stdout_enabled);
   if (EFI_SUCCESS != efi_status)
     return;
-  size = sizeof(p_log_config->file_enabled);
-  efi_status = GET_VARIABLE(INI_PREFERENCES_LOG_DEBUG_FILE_ENABLED, guid, &size, &p_log_config->file_enabled);
-  if (EFI_SUCCESS != efi_status)
-    return;
   if (is_verbose_debug_print_enabled())
   {
     p_log_config->stdout_enabled = TRUE;
@@ -415,15 +402,13 @@ DebugLoggerEnable(
 
   if (EnableDbgLogger)
   {
-    if (FALSE == g_log_config.file_enabled)
-      g_log_config.file_enabled = TRUE;
+    if (FALSE == g_log_config.stdout_enabled)
+      g_log_config.stdout_enabled = TRUE;
     if (LOGGER_OFF == g_log_config.level)
       g_log_config.level = LOG_WARNING;
   }
   else
   {
-    if (TRUE == g_log_config.file_enabled)
-      g_log_config.file_enabled = FALSE;
     if (TRUE == g_log_config.stdout_enabled)
       g_log_config.stdout_enabled = FALSE;
   }
@@ -441,11 +426,8 @@ IsDebugLoggerEnabled()
   if (FALSE == g_log_config.initialized) {
     return FALSE;
   }
-  if (LOGGER_OFF != g_log_config.level) {
-    if ((TRUE == g_log_config.file_enabled) ||
-      (TRUE == g_log_config.stdout_enabled)) {
-      return TRUE;
-    }
+  if ((LOGGER_OFF != g_log_config.level) && (TRUE == g_log_config.stdout_enabled)) {
+    return TRUE;
   }
   return FALSE;
 }
@@ -453,6 +435,26 @@ IsDebugLoggerEnabled()
 #ifdef NDEBUG
 void (*rel_assert) (void) = NULL;
 #endif // NDEBUG
+
+/*
+* Sends system event entry to standard output.
+*/
+static void write_system_event_to_stdout(const char* source, const char* message)
+{
+  NVM_EVENT_MSG ascii_event_message = { 0 };
+  CHAR16 w_event_message[sizeof(ascii_event_message)] = { 0 };
+
+  // Prepare string
+  os_strcat(ascii_event_message, sizeof(ascii_event_message), source);
+  os_strcat(ascii_event_message, sizeof(ascii_event_message), " ");
+  os_strcat(ascii_event_message, sizeof(ascii_event_message), message);
+  os_strcat(ascii_event_message, sizeof(ascii_event_message), "\n");
+  // Convert to the unicode
+  AsciiStrToUnicodeStr(ascii_event_message, w_event_message);
+
+  // Send it to standard output
+  Print(FORMAT_STR, w_event_message);
+}
 
 /**
 Prints a debug message to the debug output device if the specified error level is enabled.
@@ -478,33 +480,29 @@ DebugPrint(
 )
 {
   VA_LIST args;
-  static unsigned int event_type_common = 0;
   NVM_EVENT_MSG event_message;
   UINT32 size = sizeof(event_message);
 
   if (FALSE == g_log_config.initialized)
   {
     get_logger_config(&g_log_config);
-    if (g_log_config.file_enabled)
-      event_type_common |= SYSTEM_EVENT_TYPE_SYSLOG_FILE_SET(TRUE);
-    if (g_log_config.stdout_enabled)
-      event_type_common |= SYSTEM_EVENT_TYPE_SOUT_SET(TRUE);
-    event_type_common |= SYSTEM_EVENT_TYPE_SEVERITY_SET(SYSTEM_EVENT_TYPE_DEBUG);
   }
+
   if (ErrorLevel == OS_DEBUG_CRIT) {
     // Send the debug entry to the logger
     VA_START(args, Format);
     AsciiVSPrint(event_message, size, Format, args);
     VA_END(args);
-    nvm_store_system_entry(NVM_DEBUG_LOGGER_SOURCE, event_type_common | SYSTEM_EVENT_TYPE_SOUT_SET(TRUE) | SYSTEM_EVENT_TYPE_SYSLOG_FILE_SET(TRUE), NULL, event_message);
+    write_system_event_to_stdout(NVM_DEBUG_LOGGER_SOURCE, event_message);
 #ifdef NDEBUG
     rel_assert ();
 #else // NDEBUG
     assert(FALSE);
 #endif // NDEBUG
   }
-  else if (LOGGER_OFF == g_log_config.level)
+  else if (LOGGER_OFF == g_log_config.level || g_log_config.stdout_enabled == FALSE)
     return;
+
   if (((LOG_ERROR == g_log_config.level) & (ErrorLevel == OS_DEBUG_ERROR)) ||
     ((LOG_WARNING == g_log_config.level) & ((ErrorLevel == OS_DEBUG_ERROR) || (ErrorLevel == OS_DEBUG_WARN))) ||
     ((LOG_INFO == g_log_config.level) & ((ErrorLevel == OS_DEBUG_ERROR) || (ErrorLevel == OS_DEBUG_WARN) || (ErrorLevel == OS_DEBUG_INFO))) ||
@@ -514,7 +512,7 @@ DebugPrint(
     VA_START(args, Format);
     AsciiVSPrint(event_message, size, Format, args);
     VA_END(args);
-    nvm_store_system_entry(NVM_DEBUG_LOGGER_SOURCE, event_type_common, NULL, event_message);
+    write_system_event_to_stdout(NVM_DEBUG_LOGGER_SOURCE, event_message);
   }
 }
 
@@ -562,11 +560,7 @@ AsciiVSPrint(
   if (0 == BufferSize)
     return BufferSize;
 
-  return vsnprintf_s(StartOfBuffer, (const size_t)BufferSize
-#ifdef _MSC_VER
-    , (size_t)(BufferSize - 1)
-#endif
-    , FormatString, Marker);
+  return os_vsnprintf(StartOfBuffer, BufferSize, FormatString, Marker);
 }
 
 /**
@@ -705,7 +699,7 @@ CopyMem(
   IN UINTN       Length
 )
 {
-  memcpy_s(DestinationBuffer, Length, SourceBuffer, Length);
+  os_memcpy(DestinationBuffer, Length, SourceBuffer, Length);
   return DestinationBuffer;
 }
 
@@ -919,7 +913,7 @@ CatVSPrint(
   VA_COPY(ExtraMarker, Marker);
   static const int nBuffSize = 8192;
   static wchar_t evalBuff[8192];
-  CharactersRequired = vswprintf_s(evalBuff, nBuffSize, FormatString, ExtraMarker);
+  CharactersRequired = os_vswprintf(evalBuff, nBuffSize, FormatString, ExtraMarker);
   if (CharactersRequired > nBuffSize)
     return NULL;
 
@@ -939,9 +933,9 @@ CatVSPrint(
   }
 
   if (String != NULL) {
-    wcscpy_s(BufferToReturn, (SizeRequired / sizeof(CHAR16)), String);
+    os_wcscpy(BufferToReturn, (SizeRequired / sizeof(CHAR16)), String);
   }
-  vswprintf_s(BufferToReturn + StrLen(BufferToReturn), (CharactersRequired + 1), FormatString, Marker);
+  os_vswprintf(BufferToReturn + StrLen(BufferToReturn), (CharactersRequired + 1), FormatString, Marker);
 
   ASSERT(StrSize(BufferToReturn) == SizeRequired);
 
@@ -1057,7 +1051,7 @@ AllocateCopyPool(
 {
   void * ptr = calloc((size_t)AllocationSize, 1);
   if (NULL != ptr) {
-    memcpy_s(ptr, AllocationSize, Buffer, AllocationSize);
+    os_memcpy(ptr, AllocationSize, Buffer, AllocationSize);
   }
   return ptr;
 }
@@ -1468,7 +1462,7 @@ Initialize the library and determine if the underlying is a UEFI Shell 2.0 or an
 @param ImageHandle    the image handle of the process
 @param SystemTable    the EFI System Table pointer
 
-@retval EFI_SUCCESS   the initialization was complete sucessfully
+@retval EFI_SUCCESS   the initialization was complete successfully
 **/
 EFI_STATUS
 EFIAPI
@@ -1488,7 +1482,7 @@ Initialize the library and determine if the underlying is a UEFI Shell 2.0 or an
 @param ImageHandle    the image handle of the process
 @param SystemTable    the EFI System Table pointer
 
-@retval EFI_SUCCESS   the initialization was complete sucessfully
+@retval EFI_SUCCESS   the initialization was complete successfully
 **/
 EFI_STATUS
 EFIAPI
@@ -1506,7 +1500,7 @@ Constructor for the Shell Debug1 Commands library.
 @param ImageHandle    the image handle of the process
 @param SystemTable    the EFI System Table pointer
 
-@retval EFI_SUCCESS        the shell command handlers were installed sucessfully
+@retval EFI_SUCCESS        the shell command handlers were installed successfully
 @retval EFI_UNSUPPORTED    the shell level required was not found.
 **/
 EFI_STATUS
@@ -1764,7 +1758,7 @@ UnicodeSPrint(
 {
   VA_LIST Marker;
   VA_START(Marker, FormatString);
-  return vswprintf_s(StartOfBuffer, (size_t)(BufferSize / sizeof(CHAR16)), FormatString, Marker);
+  return os_vswprintf(StartOfBuffer, (size_t)(BufferSize / sizeof(CHAR16)), FormatString, Marker);
 }
 
 /**
@@ -1810,7 +1804,7 @@ UnicodeVSPrint(
   IN  VA_LIST        Marker
 )
 {
-  return vswprintf_s(StartOfBuffer, (size_t)(BufferSize / sizeof(CHAR16)), FormatString, Marker);
+  return os_vswprintf(StartOfBuffer, (size_t)(BufferSize / sizeof(CHAR16)), FormatString, Marker);
 }
 
 /**
@@ -1857,11 +1851,8 @@ AsciiSPrint(
 {
   VA_LIST Marker;
   VA_START(Marker, FormatString);
-  return vsnprintf_s(StartOfBuffer, (size_t)BufferSize
-#ifdef _MSC_VER
-    , (size_t)(BufferSize - 1)
-#endif
-    , FormatString, Marker);
+
+  return os_vsnprintf(StartOfBuffer, (size_t)BufferSize, FormatString, Marker);
 }
 /**
 Returns the number of characters that would be produced by if the formatted
@@ -1885,45 +1876,7 @@ SPrintLength(
 {
   static const int nBuffSprintLenSize = 1024;
   static wchar_t evalSprintBuff[1024];
-  return vswprintf_s(evalSprintBuff, nBuffSprintLenSize, FormatString, Marker);
-}
-/**
-Makes Bios emulated pass thru call and returns the values
-
-@param[in]  pDimm    pointer to current Dimm
-@param[out] pBsrValue   Value from passthru
-
-@retval EFI_SUCCESS  The count was returned properly
-@retval EFI_INVALID_PARAMETER One or more parameters are NULL
-@retval Other errors failure of FW commands
-**/
-
-EFI_STATUS
-EFIAPI
-FwCmdGetBsr(DIMM *pDimm, UINT64 *pBsrValue)
-{
-  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
-  FW_CMD *pFwCmd = NULL;
-  if (pBsrValue == NULL || pDimm == NULL) {
-    goto Finish;
-  }
-  pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
-  if (pFwCmd == NULL) {
-    goto Finish;
-  }
-  pFwCmd->DimmID = pDimm->DimmID;
-  pFwCmd->Opcode = BIOS_EMULATED_COMMAND;
-  pFwCmd->SubOpcode = SUBOP_GET_BOOT_STATUS;
-  pFwCmd->OutputPayloadSize = sizeof(unsigned long long);
-  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
-  if (EFI_ERROR(ReturnCode)) {
-    goto Finish;
-  }
-  CopyMem_S(pBsrValue, sizeof(*pBsrValue), pFwCmd->OutPayload, sizeof(UINT64));
-
-Finish:
-  FREE_POOL_SAFE(pFwCmd);
-  return ReturnCode;
+  return os_vswprintf(evalSprintBuff, nBuffSprintLenSize, FormatString, Marker);
 }
 
 VOID

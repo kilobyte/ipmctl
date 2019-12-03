@@ -49,7 +49,7 @@ endif::os_build[]
 
 TARGETS
 -------
--dimm (DimmIDs)::
+-dimm [DimmIDs]::
   Filter output to events on a specific DCPMM by supplying the dimm target and
   one DCPMM identifier.
 
@@ -78,7 +78,7 @@ ipmctl show -error Thermal Level=High
 
 Show all low media error log entries
 [verse]
-ipmctl show -error Thermal Level=High
+ipmctl show -error Media Level=Low
 
 LIMITATIONS
 -----------

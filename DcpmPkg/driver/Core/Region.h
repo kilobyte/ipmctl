@@ -14,13 +14,21 @@
 #include <Dimm.h>
 #include <NvmTypes.h>
 
+#define INTERLEAVE_WAYS_X1  1
+#define INTERLEAVE_WAYS_X2  2
+#define INTERLEAVE_WAYS_X3  3
+#define INTERLEAVE_WAYS_X4  4
+#define INTERLEAVE_WAYS_X8  8
+#define INTERLEAVE_WAYS_X12 12
+#define INTERLEAVE_WAYS_X16 16
+#define INTERLEAVE_WAYS_X24 24
+
+/** IS_STATE value indicates its priority (0 is lowest) **/
 #define IS_STATE_HEALTHY          0
-#define IS_STATE_INIT_FAILURE     BIT0
-#define IS_STATE_DIMM_MISSING     BIT1
-#define IS_STATE_CONFIG_INACTIVE  BIT2
-#define IS_STATE_SPA_MISSING      BIT3
-#define IS_STATE_NEW_GOAL         BIT4
-#define IS_STATE_DIMM_LOCKED      BIT5
+#define IS_STATE_SPA_MISSING      1
+#define IS_STATE_CONFIG_INACTIVE  2
+#define IS_STATE_DIMM_MISSING     3
+#define IS_STATE_INIT_FAILURE     4
 struct _NAMESPACE;
 typedef struct _DIMM_REGION {
   LIST_ENTRY DimmRegionNode;
@@ -99,6 +107,24 @@ typedef struct _REGION_GOAL {
   UINT32 DimmsNum;
 } REGION_GOAL;
 
+/**
+  Allocate and initialize the Interleave Set by using NFIT table
+
+  @param[in] pFitHead Fully populated NVM Firmware Interface Table
+  @param[in] pNvDimmRegionMappingStructure The NVDIMM region that helps describe this region of memory
+  @param[in] RegionId The next consecutive region id
+  @param[out] ppIS Interleave Set parent for new dimm region
+
+  @retval EFI_SUCCESS
+  @retval EFI_OUT_OF_RESOURCES memory allocation failure
+**/
+EFI_STATUS
+InitializeISFromNfit(
+  IN     ParsedFitHeader *pFitHead,
+  IN     NvDimmRegionMappingStructure *pNvDimmRegionTbl,
+  IN     UINT16 RegionId,
+  OUT NVM_IS **ppIS
+);
 
 /**
   Allocate and initialize the Interleave Set by using Interleave Information table from Platform Config Data
@@ -108,9 +134,10 @@ typedef struct _REGION_GOAL {
 **/
 EFI_STATUS
 InitializeIS(
-  IN     NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo,
+  IN     VOID *pInterleaveInfoTable,
   IN     UINT16 RegionId,
-     OUT NVM_IS **ppIS
+  IN     ACPI_REVISION PcdConfRevision,
+  OUT NVM_IS **ppIS
   );
 
 /**
@@ -131,7 +158,22 @@ EFI_STATUS
 InitializeISs(
   IN     ParsedFitHeader *pFitHead,
   IN     LIST_ENTRY *pDimmList,
+  IN     BOOLEAN UseNfit,
      OUT LIST_ENTRY *pISList
+  );
+
+/**
+  Initialize interleave sets
+  It initializes the interleave sets using NFIT or PCD
+
+  @param[in] UseNfit Flag to indicate usage of NFIT or else default to PCD
+
+  @retval EFI_SUCCESS
+  @retval EFI_OUT_OF_RESOURCES memory allocation failure
+**/
+EFI_STATUS
+InitializeInterleaveSets(
+  IN     BOOLEAN UseNfit
   );
 
 /**
@@ -144,8 +186,8 @@ Determine Region Type based on the Interleave sets
 **/
 EFI_STATUS
 DetermineRegionType(
-	IN NVM_IS *pRegion,
-	OUT UINT8 *pRegionType
+  IN NVM_IS *pRegion,
+  OUT UINT8 *pRegionType
 );
 
 /**
@@ -166,13 +208,19 @@ GetRegionById(
 
 /**
   Get Region List
-  Retruns the pointer to the pool list.
-  It's also initializing the pool list if it's necessary.
+  Retruns the pointer to the region list.
+  It's also initializing the region list if it's necessary.
 
-  @retval pointer to the pool list
+  @param[in] pRegionList Head of the list for Regions
+  @param[in] UseNfit Flag to indicate usage of NFIT
+
+  @retval pointer to the region list
 **/
 EFI_STATUS
-GetRegionList(LIST_ENTRY **ppRegionList);
+GetRegionList(
+  IN     LIST_ENTRY **ppRegionList,
+  IN     BOOLEAN UseNfit
+  );
 
 /**
   Clean the Interleave Set
@@ -186,7 +234,6 @@ CleanISLists(
   IN OUT LIST_ENTRY *pISList
   );
 
-
 /**
   Free a Interleave Set and all memory resources in use by the Interleave Set.
 
@@ -198,25 +245,31 @@ FreeISResources(
   );
 
 /**
-  Clean the Interleave Set
+  Allocate and initialize the DIMM region by using NFIT table
 
-  @param[in, out] pDimmList: the list of DCPMMs
-  @param[in, out] pISList: the list of Interleave Sets to clean
+  @param[in] pFitHead Fully populated NVM Firmware Interface Table
+  @param[in] pDimm Target DIMM structure pointer
+  @param[in] pISList List of interleaveset formed so far
+  @param[in] pNvDimmRegionMappingStructure The NVDIMM region that helps describe this region of memory
+  @param[out] pRegionId The next consecutive region id
+  @param[out] ppNewIS Interleave Set parent for new dimm region
+  @param[out] ppDimmRegion new allocated dimm region will be put here
+  @param[out] pISDimmRegionAlreadyExists TRUE if Interleave Set DIMM region already exists
+
+  @retval EFI_SUCCESS
+  @retval EFI_NOT_FOUND the Dimm related with DimmRegion has not been found on the Dimm list
+  @retval EFI_OUT_OF_RESOURCES memory allocation failure
 **/
-VOID
-CleanISList(
-  IN OUT LIST_ENTRY *pDimmList,
-  IN OUT LIST_ENTRY *pISList
-  );
-
-/**
-  Free a Interleave Set and all memory resources in use by the Interleave Set.
-
-  @param[in, out] pIS the Interleave Set and its regions that will be released
-**/
-VOID
-FreeISResources(
-  IN OUT NVM_IS *pIS
+EFI_STATUS
+InitializeDimmRegionFromNfit(
+  IN     ParsedFitHeader *pFitHead,
+  IN     DIMM *pDimm,
+  IN     LIST_ENTRY *pISList,
+  IN     NvDimmRegionMappingStructure *pNvDimmRegionMappingStructure,
+  OUT    UINT16 *pRegionId,
+  OUT    NVM_IS **ppCurrentIS,
+  OUT    DIMM_REGION **ppDimmRegion,
+  OUT    BOOLEAN *pISDimmRegionAlreadyExists
   );
 
 /**
@@ -224,8 +277,8 @@ FreeISResources(
 
   @param[in] pDimmList Head of the list of all Intel NVM Dimm in the system
   @param[in] pISList List of interleaveset formed so far
-  @param[in] pIdentificationInfo Identification Information table
-  @param[in] pInterleaveInfo Interleave information for the particular dimm
+  @param[in] pIdentificationInfoTable Identification Information table
+  @param[in] pInterleaveInfoTable Interleave information for the particular dimm
   @param[in] PcdConfRevision Revision of the PCD Config tables
   @param[out] pRegionId The next consecutive region id
   @param[out] ppNewIS Interleave Set parent for new dimm region
@@ -240,13 +293,32 @@ EFI_STATUS
 InitializeDimmRegion(
   IN     LIST_ENTRY *pDimmList,
   IN     LIST_ENTRY *pISList,
-  IN     NVDIMM_IDENTIFICATION_INFORMATION *pIdentificationInfo,
-  IN     NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo,
-  IN     UINT8 PcdConfRevision,
+  IN     VOID *pIdentificationInfoTable,
+  IN     VOID *pInterleaveInfoTable,
+  IN     ACPI_REVISION PcdConfRevision,
   OUT    UINT16 *pRegionId,
   OUT    NVM_IS **ppNewIS,
-  OUT DIMM_REGION **ppDimmRegion,
+  OUT    DIMM_REGION **ppDimmRegion,
   OUT    BOOLEAN *pISAlreadyExists
+  );
+
+/**
+  Retrieve Interleave Sets by using NFIT table
+
+  Using the parsed NFIT table data to get information about Interleave Sets configuration.
+
+  @param[in] pFitHead Fully populated NVM Firmware Interface Table
+  @param[in] pDimmList Head of the list of all NVM DIMMs in the system
+  @param[out] pISList Head of the list for Interleave Sets
+
+  @retval EFI_SUCCESS
+  @retval EFI_OUT_OF_RESOURCES memory allocation failure
+**/
+EFI_STATUS
+RetrieveISsFromNfit(
+  IN     ParsedFitHeader *pFitHead,
+  IN     LIST_ENTRY *pDimmList,
+     OUT LIST_ENTRY *pISList
 );
 
 /**
@@ -276,7 +348,7 @@ RetrieveISsFromPlatformConfigData(
   @param[in] pInterleaveInfo Interleave Information table retrieve from DIMM
   @param[in] PcdCurrentConfRevision PCD Current Config table revision
   @param[in] pDimm the DIMM from which Interleave Information table was retrieved
-  @param[in, out] pRegionId Unique id for region
+  @param[in out] pRegionId Unique id for region
   @param[out] pISList Head of the list for Interleave Sets
 
   @retval EFI_SUCCESS
@@ -286,8 +358,8 @@ EFI_STATUS
 RetrieveISFromInterleaveInformationTable(
   IN     ParsedFitHeader *pFitHead,
   IN     LIST_ENTRY *pDimmList,
-  IN     NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo,
-  IN     UINT8 PcdCurrentConfRevision,
+  IN     VOID *pInterleaveInfoTable,
+  IN     ACPI_REVISION PcdCurrentConfRevision,
   IN     DIMM *pDimm,
   IN OUT UINT16 *pRegionId,
      OUT LIST_ENTRY *pISList
@@ -420,7 +492,8 @@ ADNamespaceMinAndMaxAvailableSizeOnIS(
 EFI_STATUS
 RetrieveGoalConfigsFromPlatformConfigData(
   IN OUT LIST_ENTRY *pDimmList,
-  IN     BOOLEAN RestoreCorrupt
+  IN     BOOLEAN RestoreCorrupt,
+  IN     BOOLEAN CheckSupportedConfigDimms
   );
 
 /**
@@ -553,21 +626,6 @@ VerifySKUSupportForCreateGoal(
   );
 
 /**
-  Check for new goal configs for the DIMM
-
-  @param[in] pDimm The current DIMM
-  @param[out] pHasNewGoal TRUE if any of the dimms on the IS have a new goal, else FALSE
-
-  @retval EFI_SUCCESS
-  #retval EFI_INVALID_PARAMETER If IS is null
-**/
-EFI_STATUS
-FindIfNewGoalOnDimm(
-  IN     DIMM *pDimm,
-     OUT BOOLEAN *pHasNewGoal
-  );
-
-/**
 Calculate free Region capacity
 
 @param[in]  pRegion       Region that a free capacity will be calculated for
@@ -579,8 +637,8 @@ Calculate free Region capacity
 **/
 EFI_STATUS
 GetFreeRegionCapacity(
-	IN  NVM_IS *pRegion,
-	OUT UINT64 *pFreeCapacity
+  IN  NVM_IS *pRegion,
+  OUT UINT64 *pFreeCapacity
 );
 
 /**
@@ -594,6 +652,8 @@ GetFreeRegionCapacity(
   @param[out] pDimmsAsymmetricalNum Returned number of items in DimmsAsymmetrical
   @param[in] PersistentMemType Persistent memory type
   @param[in] VolatileSize Volatile region size
+  @param[in] ReservedPercent Amount of AppDirect memory to not map in percent
+  @param[in] pMaxPMInterleaveSets Pointer to MaxPmInterleaveSets per Die & per Dcpmm
   @param[out] pVolatileSizeActual Actual Volatile region size
   @param[out] RegionGoalTemplates Array of pool goal templates
   @param[out] pRegionGoalTemplatesNum Number of items in RegionGoalTemplates
@@ -613,7 +673,8 @@ MapRequestToActualRegionGoalTemplates(
      OUT UINT32 *pDimmsAsymmetricalNum,
   IN     UINT8 PersistentMemType,
   IN     UINT64 VolatileSize,
-  IN     UINT64 ReservedSize,
+  IN     UINT32 ReservedPercent,
+  IN     MAX_PMINTERLEAVE_SETS *pMaxPMInterleaveSets,
      OUT UINT64 *pVolatileSizeActual OPTIONAL,
      OUT REGION_GOAL_TEMPLATE RegionGoalTemplates[MAX_IS_PER_DIMM],
      OUT UINT32 *pRegionGoalTemplatesNum,
@@ -638,8 +699,8 @@ EFI_STATUS
 RetrieveRegionGoalFromInterleaveInformationTable(
   IN     REGION_GOAL *pRegionGoals[],
   IN     UINT32 RegionGoalsNum,
-  IN     NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo,
-  IN     UINT8 PcdCinRev,
+  IN     VOID *pInterleaveInfo,
+  IN     ACPI_REVISION PcdCinRev,
      OUT REGION_GOAL **ppRegionGoal,
      OUT BOOLEAN *pNew
   );
@@ -701,6 +762,8 @@ DeleteRegionsGoalConfigs(
 
   @param[in] pDimms List of DIMMs to configure
   @param[in] DimmsNum Number of DIMMs to configure
+  @param[in] PersistentMemType Persistent memory type
+  @param[in] VolatilePercent Volatile region size in percents
   @param[out] pCommandStatus Structure containing detailed NVM error codes
 
   @retval EFI_SUCCESS
@@ -711,7 +774,9 @@ EFI_STATUS
 VerifyCreatingSupportedRegionConfigs(
   IN     DIMM *pDimms[],
   IN     UINT32 DimmsNum,
-     OUT COMMAND_STATUS *pCommandStatus
+  IN     UINT8 PersistentMemType,
+  IN     UINT32 VolatilePercent,
+  OUT COMMAND_STATUS *pCommandStatus
   );
 
 /**
@@ -944,5 +1009,34 @@ EFI_STATUS
 IsDimmLocked(
   IN     DIMM *pDimm,
      OUT BOOLEAN *pIsLocked
+  );
+
+/**
+  Set Interleave Set state taking states' priority into account
+
+  @param[in] CurrentState Current IS state
+  @param[in] NewState IS state to be set
+
+  @retval UINT8 New IS state
+**/
+UINT8
+SetISStateWithPriority(
+  IN    UINT8 CurrentState,
+  IN    UINT8 NewState
+  );
+
+/**
+  Check for existing goal configs on a socket for which a new goal config has been requested
+
+  @param[in] pDimms Array of pointers to DIMMs based on the goal config requested
+  @param[in] pDimmsNum Number of pointers in pDimms
+
+  @retval EFI_ABORTED one or more DIMMs on a socket already have goal configs
+  @retval EFI_INVALID_PARAMETER pDimms or pDimmsNum is NULL
+**/
+EFI_STATUS
+CheckForExistingGoalConfigPerSocket(
+  IN    DIMM *pDimms[MAX_DIMMS],
+  IN    UINT32 *pDimmsNum
   );
 #endif

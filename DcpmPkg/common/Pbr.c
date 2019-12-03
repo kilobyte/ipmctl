@@ -36,7 +36,7 @@ extern EFI_GUID gIntelDimmPbrTagIdVariableguid;
    @param[in] Signature: unique dword identifier that categorizes
       the data to be recorded
    @param[in] pData: Data to be recorded.  If NULL, a zeroed data buffer
-      is allocated.  Usefull, when used with ppData.
+      is allocated.  Useful, when used with ppData.
    @param[in] Size: Byte size of pData
    @param[in] Singleton: Only one data object associated with Signature.
       Data previously set will be overriden with this data object.
@@ -81,12 +81,13 @@ PbrSetData(
             FreePool(pContext->PartitionContexts[CtxIndex].PartitionData);
           }
           //allocate just enough to add our new singleton data object
-          pContext->PartitionContexts[CtxIndex].PartitionData = pDataItem = AllocateZeroPool(Size+sizeof(PbrPartitionLogicalDataItem));
-          if (NULL == pContext->PartitionContexts[CtxIndex].PartitionData) {
+          pDataItem = AllocateZeroPool(Size+sizeof(PbrPartitionLogicalDataItem));
+          if (NULL == pDataItem) {
             ReturnCode = EFI_OUT_OF_RESOURCES;
             NVDIMM_DBG("Failed to allocate memory for partition buffer\n");
             goto Finish;
           }
+          pContext->PartitionContexts[CtxIndex].PartitionData = pDataItem;
           //update our internal context with the new partition size
           pContext->PartitionContexts[CtxIndex].PartitionSize = Size + sizeof(PbrPartitionLogicalDataItem);
           //now that we have memory allocated, let's copy caller data into it
@@ -254,7 +255,7 @@ PbrGetData(
         ReturnCode = EFI_SUCCESS;
       }
       else {
-        //caller wants a specific indexed data item 
+        //caller wants a specific indexed data item
         pDataItem = (PbrPartitionLogicalDataItem *)(pContext->PartitionContexts[CtxIndex].PartitionData);
         //iterate through all items
         while (PBR_LOGICAL_DATA_SIG == pDataItem->Signature) {
@@ -595,7 +596,7 @@ PbrResetSession(
   for (CtxIndex = 0; CtxIndex < MAX_PARTITIONS; ++CtxIndex) {
     //found a partition
     if (PBR_INVALID_SIG != pContext->PartitionContexts[CtxIndex].PartitionSig) {
-      //default is to reset the current offset to the begining
+      //default is to reset the current offset to the beginning
       pContext->PartitionContexts[CtxIndex].PartitionCurrentOffset = 0;
       //find the corresponding TagPartitionInfo associated with the partition signature
       for (TagPartIndex = 0; TagPartIndex < pTag->PartitionInfoCnt; ++TagPartIndex) {
@@ -1132,7 +1133,7 @@ Finish:
   Helper that provdies the number of active data partitions
 **/
 STATIC
-UINT32 
+UINT32
 PbrPartitionCount(
 )
 {
@@ -1175,7 +1176,7 @@ PbrGetPartition(
 #define COPY_CHUNK_SZ_BYTES   1024
 
 /**
-  Helper that breaks up large memory copies into managable sized chunks
+  Helper that breaks up large memory copies into manageable sized chunks
 **/
 STATIC
 EFI_STATUS

@@ -103,6 +103,53 @@ ParsePcatTable (
   );
 
 /**
+  Performs deserialization from binary memory block, containing PMTT tables, into parsed structure of pointers.
+
+  @param[in] pTable pointer to the memory containing the PMTT binary representation.
+
+  @retval NULL if there was an error while parsing the memory.
+  @retval pointer to the allocated header with parsed PMTT.
+**/
+ParsedPmttHeader *
+ParsePmttTable(
+  IN     VOID *pTable
+  );
+
+/**
+  Get PMTT Dimm Module by Dimm ID
+  Scan the dimm list for a dimm identified by Dimm ID
+
+  @param[in] DimmID: The SMBIOS Type 17 handle of the dimm
+  @param[in] pPmttHead: Parsed PMTT Table
+
+  @retval PMTT_MODULE_INFO struct pointer if matching dimm has been found
+  @retval NULL pointer if not found
+**/
+PMTT_MODULE_INFO *
+GetDimmModuleByPidFromPmtt(
+  IN     UINT32 DimmID,
+  IN     ParsedPmttHeader *pPmttHead
+  );
+
+/**
+  Retrieve the Logical Socket ID from PMTT Table
+
+  @param[in] SocketId SocketID
+  @param[in] DieId DieID
+  @param[out] pLogicalSocketId Logical socket ID based on Dimm socket ID & Die ID
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_INVALID_PARAMETER Input parameter is NULL
+  @retval EFI_NOT_FOUND PCAT socket sku info table not found for given socketID
+**/
+EFI_STATUS
+GetLogicalSocketIdFromPmtt(
+  IN     UINT32 SocketId,
+  IN     UINT32 DieId,
+  OUT    UINT32 *pLogicalSocketId
+  );
+
+/**
   Conversion Functions
 **/
 
@@ -110,7 +157,7 @@ ParsePcatTable (
   Returns the FlushHint table associated with the provided NVDIMM region table.
 
   @param[in] pFitHead pointer to the parsed NFit Header structure.
-  @param[in] pNvDimmRegionTbl the NVDIMM region table that contains the index.
+  @param[in] pNvDimmRegionMappingStructure the NVDIMM region table that contains the index.
   @param[out] ppFlushHintTable pointer to a pointer where the table will be stored.
 
   @retval EFI_SUCCESS if the table was found and is properly returned.
@@ -120,7 +167,7 @@ ParsePcatTable (
 EFI_STATUS
 GetFlushHintTableForNvDimmRegionTable(
   IN     ParsedFitHeader *pFitHead,
-  IN     NvDimmRegionTbl *pNvDimmRegionTbl,
+  IN     NvDimmRegionMappingStructure *pNvDimmRegionMappingStructure,
      OUT FlushHintTbl **ppFlushHintTable
   );
 
@@ -146,7 +193,7 @@ GetBlockDataWindowRegDescTabl(
   Returns the ControlRegion table associated with the provided NVDIMM region table.
 
   @param[in] pFitHead pointer to the parsed NFit Header structure.
-  @param[in] pNvDimmRegionTbl the NVDIMM region table that contains the index.
+  @param[in] pNvDimmRegionMappingStructure the NVDIMM region table that contains the index.
   @param[out] ppControlRegionTable pointer to a pointer where the table will be stored.
 
   @retval EFI_SUCCESS if the table was found and is properly returned.
@@ -156,7 +203,7 @@ GetBlockDataWindowRegDescTabl(
 EFI_STATUS
 GetControlRegionTableForNvDimmRegionTable(
   IN     ParsedFitHeader *pFitHead,
-  IN     NvDimmRegionTbl *pNvDimmRegionTbl,
+  IN     NvDimmRegionMappingStructure *pNvDimmRegionMappingStructure,
      OUT ControlRegionTbl **ppControlRegionTable
   );
 
@@ -208,20 +255,20 @@ GetSpaRangeTable(
   @param[in] pAddrRangeTypeGuid pointer to GUID type of the range that we are looking for. OPTIONAL
   @param[in] SpaRangeIndexProvided Determine if SpaRangeIndex is provided
   @param[in] SpaRangeIndex Looking for NVDIMM region table that is related with provided SPA table. OPTIONAL
-  @param[out] ppNvDimmRegionTbl pointer to a pointer for the return NVDIMM region.
+  @param[out] ppNvDimmRegionMappingStructure pointer to a pointer for the return NVDIMM region.
 
   @retval EFI_SUCCESS if the table was found and was returned.
   @retval EFI_INVALID_PARAMETER if one or more input parameters equal NULL.
   @retval EFI_NOT_FOUND if there is no NVDIMM region for the provided Dimm PID and AddrRangeType.
 **/
 EFI_STATUS
-GetNvDimmRegionTableForPid(
+GetNvDimmRegionMappingStructureForPid(
   IN     ParsedFitHeader *pFitHead,
   IN     UINT16 Pid,
   IN     GUID *pAddrRangeTypeGuid OPTIONAL,
   IN     BOOLEAN SpaRangeIndexProvided,
   IN     UINT16 SpaRangeIndex OPTIONAL,
-     OUT NvDimmRegionTbl **ppNvDimmRegionTbl
+     OUT NvDimmRegionMappingStructure **ppNvDimmRegionMappingStructure
   );
 
 /**
@@ -261,7 +308,7 @@ GetInterleaveTable(
 EFI_STATUS
 RdpaToSpa(
   IN     UINT64 Rdpa,
-  IN     NvDimmRegionTbl *pNvDimmRegionTable,
+  IN     NvDimmRegionMappingStructure *pNvDimmRegionTable,
   IN     SpaRangeTbl *pSpaRangeTable,
   IN     InterleaveStruct *pInterleaveTable OPTIONAL,
      OUT UINT64 *pSpaAddr
@@ -305,10 +352,45 @@ AllowedMemoryMode(
   );
 
 /**
+  Check if BIOS supports changing configuration through management software
+
+  @param[out] pConfigChangeSupported The Config Change support in BIOS
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_INVALID_PARAMETER Input parameter is NULL
+  @retval EFI_LOAD_ERROR PCAT tables not found
+  @retval EFI_UNSUPPORTED Config change request through management software not supported
+**/
+EFI_STATUS
+CheckIfBiosSupportsConfigChange(
+  OUT BOOLEAN *pConfigChangeSupported
+  );
+
+/**
+  Check Memory Mode Capabilties from PCAT table type 0
+
+  @param[in] pMemMode2LMSupported 2LM Mode Support
+  @param[in] pAppDirectPMSupported AppDirect PM Mode Support
+  @param[in] pMemMode1LMSupported 2LM Memory Mode Support
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_INVALID_PARAMETER Input parameter is NULL
+  @retval EFI_LOAD_ERROR PCAT tables not found
+  @retval EFI_UNSUPPORTED Config change request through management software not supported
+**/
+EFI_STATUS
+CheckMemModeCapabilities(
+  OUT BOOLEAN *pMemMode2LMSupported,
+  OUT BOOLEAN *pAppDirectPMSupported,
+  OUT BOOLEAN *pMemMode1LMSupported
+  );
+
+/**
   Retrieve the PCAT Socket SKU info table for a given Socket
 
   @param[in] SocketId SocketID to retrieve the table for
   @param[out] ppSocketSkuInfoTable Sku info table referenced by socket ID
+  @param[out] PCAT Table revision
 
   @retval EFI_SUCCESS Success
   @retval EFI_INVALID_PARAMETER Input parameter is NULL
@@ -317,16 +399,95 @@ AllowedMemoryMode(
 EFI_STATUS
 RetrievePcatSocketSkuInfoTable(
   IN     UINT32 SocketId,
-     OUT SOCKET_SKU_INFO_TABLE **ppSocketSkuInfoTable
+  OUT    VOID **ppSocketSkuInfoTable,
+  OUT    ACPI_REVISION *pPcatRevison
   );
 
 /**
-Performs deserialization from binary memory block containing PMTT table and checks if memory mode can be configured.
+  Retrieve the list of supported Channel & iMC Interleave sizes
 
-@param[in] pTable pointer to the memory containing the PMTT binary representation.
+  @param[out] ppChannelInterleaveSize Array of supported Channel Interleave sizes
+  @param[out] ppiMCInterleaveSize Array of supported iMC Interleave sizes
+  @param[out] ppRecommendedFormats Array of recommended formats
+  @param[out] ppChannelWays Array of supported channel ways
+  @param[out] pLength Length of the array
+  @param[out] pInterleaveAlignmentSize Interleave Alignment Size
+  @param[out] pRevision PCAT Table revision
 
-@retval false if memory mode CANNOT be  configured.
-@retval true if memory mode can be  configured.
+  @retval EFI_SUCCESS Success
+  @retval EFI_OUT_OF_RESOURCES Memory Allocation failure
+  @retval EFI_INVALID_PARAMETER ppChannelInterleaveSize, ppiMCInterleaveSize or pLength is NULL
+  @retval EFI_NOT_FOUND Interleave size info not found
 **/
-BOOLEAN CheckIsMemoryModeAllowed(PMTT_TABLE *pPMTT);
+EFI_STATUS
+RetrieveSupportediMcAndChannelInterleaveSizes(
+  OUT  UINT32 **ppChannelInterleaveSize,
+  OUT  UINT32 **ppiMCInterleaveSize,
+  OUT  UINT32 **ppRecommendedFormats,
+  OUT  UINT32 **ppChannelWays,
+  OUT  UINT32 *pLength,
+  OUT  UINT32 *pInterleaveAlignmentSize,
+  OUT  ACPI_REVISION *pRevision
+  );
+
+/**
+  Retrieve InterleaveSetMap Info
+
+  @param[out] ppInterleaveMap Info List used to determine the best interleave based on requested DCPMMs
+  @param[out] pInterleaveMapListLength Pointer to the InterleaveSetMap Length
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_OUT_OF_RESOURCES Memory Allocation failure
+  @retval EFI_INVALID_PARAMETER ppInterleaveSetMap or InterleaveMapListLength is NULL
+  @retval EFI_NOT_FOUND InterleaveSetMap Info not found
+**/
+EFI_STATUS
+RetrieveInterleaveSetMap(
+  OUT  UINT32 **ppInterleaveMap,
+  OUT  UINT32 *pInterleaveMapListLength
+  );
+
+/**
+  Retrieve Channel ways from InterleaveSetMap Info
+
+  @param[out] ppChannelWays Array of channel ways supported
+  @param[out] pChannelWaysListLength Pointer to the ppChannelWays array Length
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_OUT_OF_RESOURCES Memory Allocation failure
+  @retval EFI_INVALID_PARAMETER ppInterleaveSetMap or InterleaveMapListLength is NULL
+  @retval EFI_NOT_FOUND InterleaveSetMap Info not found
+**/
+EFI_STATUS
+RetrieveChannelWaysFromInterleaveSetMap(
+  OUT  UINT32 **ppChannelWays,
+  OUT  UINT32 *pChannelWaysListLength
+  );
+
+/**
+  Performs deserialization from binary memory block containing PMTT table and checks if memory mode can be configured.
+
+  @param[in] pTable pointer to the memory containing the PMTT binary representation.
+
+  @retval false if topology does NOT allows MM.
+  @retval true if topology allows MM.
+**/
+BOOLEAN
+CheckIsMemoryModeAllowed(
+  IN TABLE_HEADER *pPMTT
+  );
+
+/**
+  Retrieve Maximum PM Interleave Sets per Die & DCPMM
+
+  @param[out] pMaxPMInterleaveSets Pointer to Maximum PM Interleave Sets per Die & Dcpmm
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_INVALID_PARAMETER pMaxPMInterleaveSetsPerDie or pMaxPMInterleaveSetsPerDcpmm is NULL
+  @retval EFI_NOT_FOUND InterleaveSetMap Info not found
+**/
+EFI_STATUS
+RetrieveMaxPMInterleaveSets(
+  OUT  MAX_PMINTERLEAVE_SETS *pMaxPMInterleaveSets
+  );
 #endif

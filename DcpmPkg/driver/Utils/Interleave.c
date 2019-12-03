@@ -9,7 +9,7 @@
 #include "Region.h"
 #include <Library/PrintLib.h>
 
-#define DIMM_LOCATION(iMC, channel, iMCsPerCPU, channelsPeriMC)     (iMCsPerCPU * (channel % channelsPeriMC) + iMC)
+#define DIMM_LOCATION(iMC, channel, iMCsPerCPU, channelsPeriMC)     (channelsPeriMC * (iMC % iMCsPerCPU) + channel)
 #define DIMM_POPULATED(map, dimmIndex)  ((map >> dimmIndex) & 0x1)
 #define CLEAR_DIMM(map, dimmIndex)      map &= ~(0x1 << dimmIndex)
 
@@ -138,16 +138,24 @@ GetDimmsFromListMatchingInterleaveSet(
     goto Finish;
   }
 
-
+  NVDIMM_DBG("InterleaveMap flags = %lu", InterleaveMap);
   for (Index = 0; Index < DimmsNum; Index++) {
     DimmIndex = DIMM_LOCATION(pDimms[Index]->ImcId, pDimms[Index]->ChannelId, iMCNum, ChannelNum);
+    NVDIMM_DBG("DIMM %d ImcId = %lu", Index, pDimms[Index]->ImcId);
+    NVDIMM_DBG("DIMM %d ChannelId = %lu", Index, pDimms[Index]->ChannelId);
+    NVDIMM_DBG("DIMM %d Map Location = %lu", Index, DimmIndex);
     if (DIMM_POPULATED(InterleaveMap, DimmIndex)) {
       pDimmsInterleaved[(*pDimmsUsed)++] = pDimms[Index];
       CLEAR_DIMM(DimmsNotFound, DimmIndex);
     }
   }
+
+  NVDIMM_DBG("InterleaveMap flags without located DIMMs = %lu", DimmsNotFound);
   if (DimmsNotFound != 0) {
     *pDimmsUsed = 0;
+    NVDIMM_DBG("Not all the required map position flags were matched to DIMMs. Condition not satisfied.");
+  } else if(*pDimmsUsed > 0) {
+    NVDIMM_DBG("All the required map position flags were matched to DIMMs. Condition satisfied!");
   }
 
 Finish:
@@ -179,7 +187,7 @@ FindBestInterleavingForDimms(
   UINT32 Index = 0;
   UINT8 NumOfiMCsPerCPU = 0;
   UINT8 NumOfChannelsPeriMC = 0;
-  const UINT32 *pInterleaveSet = NULL;
+  UINT32 *pInterleaveSet = NULL;
 
   NVDIMM_ENTRY();
 
@@ -193,17 +201,25 @@ FindBestInterleavingForDimms(
     goto Finish;
   }
 
-  for (Index = 0; (*pDimmsUsed == 0) && (pInterleaveSet[Index] != END_OF_INTERLEAVE_SETS); Index++) {
+  for (Index = 0; pInterleaveSet[Index] != END_OF_INTERLEAVE_SETS; Index++) {
+    NVDIMM_DBG("Checking interleave set map %d (%lu)", Index, pInterleaveSet[Index]);
+    NVDIMM_DBG("NumOfiMCsPerCPU = %lu", NumOfiMCsPerCPU);
+    NVDIMM_DBG("NumOfChannelsPeriMC = %lu", NumOfChannelsPeriMC);
     GetDimmsFromListMatchingInterleaveSet(pDimms, DimmsNum, pInterleaveSet[Index], NumOfiMCsPerCPU, NumOfChannelsPeriMC, pDimmsInterleaved, pDimmsUsed);
+    if (*pDimmsUsed > 0) {
+      NVDIMM_DBG("Found interleave map match");
+      break;
+    }
   }
 
   if (*pDimmsUsed == 0) {
-    NVDIMM_WARN("Interleaving match not found");
+    NVDIMM_WARN("Interleaving map match not found");
     ReturnCode = EFI_ABORTED;
     goto Finish;
   }
 
 Finish:
+  FREE_POOL_SAFE(pInterleaveSet);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }

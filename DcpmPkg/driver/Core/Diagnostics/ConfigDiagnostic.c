@@ -105,7 +105,6 @@ GetPlatformConfigOutputPCATStatus(
   )
 {
   NVDIMM_PARTITION_SIZE_CHANGE *pPartSizeChange = NULL;
-  NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo = NULL;
   PCAT_TABLE_HEADER *pCurPcatTable = NULL;
   UINT32 SizeOfPcatTables = 0;
   UINT8 InterleaveTableNumber = 1;
@@ -138,21 +137,81 @@ GetPlatformConfigOutputPCATStatus(
 
       pCurPcatTable = GET_VOID_PTR_OFFSET(pCurPcatTable, pPartSizeChange->Header.Length);
     } else if (pCurPcatTable->Type == PCAT_TYPE_INTERLEAVE_INFORMATION_TABLE) {
-      pInterleaveInfo = (NVDIMM_INTERLEAVE_INFORMATION *) pCurPcatTable;
+      if (IS_ACPI_HEADER_REV_MAJ_0_MIN_1_OR_MIN_2(pConfigOutput)) {
+        NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo = (NVDIMM_INTERLEAVE_INFORMATION *)pCurPcatTable;
 
-      if (InterleaveTableNumber == 1) {
-        *pInterleaveInformationTableStatus_1 = pInterleaveInfo->InterleaveChangeStatus;
-        InterleaveTableNumber++;
-      } else {
-        *pInterleaveInformationTableStatus_2 = pInterleaveInfo->InterleaveChangeStatus;
+        if (InterleaveTableNumber == 1) {
+          *pInterleaveInformationTableStatus_1 = pInterleaveInfo->InterleaveChangeStatus;
+          InterleaveTableNumber++;
+        }
+        else {
+          *pInterleaveInformationTableStatus_2 = pInterleaveInfo->InterleaveChangeStatus;
+        }
+
+        pCurPcatTable = GET_VOID_PTR_OFFSET(pCurPcatTable, pInterleaveInfo->Header.Length);
+      } else if (IS_ACPI_HEADER_REV_MAJ_1_MIN_1_OR_MIN_2(pConfigOutput)) {
+        NVDIMM_INTERLEAVE_INFORMATION3 *pInterleaveInfo = (NVDIMM_INTERLEAVE_INFORMATION3 *)pCurPcatTable;
+
+        if (InterleaveTableNumber == 1) {
+          *pInterleaveInformationTableStatus_1 = pInterleaveInfo->InterleaveChangeStatus;
+          InterleaveTableNumber++;
+        }
+        else {
+          *pInterleaveInformationTableStatus_2 = pInterleaveInfo->InterleaveChangeStatus;
+        }
+
+        pCurPcatTable = GET_VOID_PTR_OFFSET(pCurPcatTable, pInterleaveInfo->Header.Length);
       }
-
-      pCurPcatTable = GET_VOID_PTR_OFFSET(pCurPcatTable, pInterleaveInfo->Header.Length);
     } else {
       NVDIMM_DBG("Unknown table discovered in COUT");
       break;
     }
   }
+}
+
+/**
+  Create the detailed status string for when current configuration failed to apply
+
+  @param[in] CCurStatus, Status byte from the CCUR table
+
+  @retval NULL - failed to retrieve string from HII strings DB
+  @retval Formatted CHAR16 string
+**/
+STATIC
+CHAR16*
+GetCCurDetailedStatusStr(
+  IN     UINT16 CCurStatus
+  )
+{
+  CHAR16 *pTmpStr = NULL;
+  CHAR16 *pCCurErrorMessage = NULL;
+  CHAR16 *pReturnStr = NULL;
+
+  NVDIMM_ENTRY();
+
+  pTmpStr = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_DIAG_CCUR_CONFIG_DETAILED_STATUS), NULL);
+
+  switch (CCurStatus) {
+  case DIMM_CONFIG_CPU_MAX_MEMORY_LIMIT_VIOLATION:
+    pCCurErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_CPU_MAX_MEMORY_LIMIT_VIOLATION), NULL);
+    break;
+  case DIMM_CONFIG_DCPMM_NM_FM_RATIO_UNSUPPORTED:
+    pCCurErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_NM_FM_RATIO_UNSUPPORTED), NULL);
+    break;
+  case DIMM_CONFIG_DCPMM_POPULATION_ISSUE:
+    pCCurErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_POPULATION_VIOLATION), NULL);
+    break;
+  default:
+    pCCurErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_UNKNOWN), NULL);
+    break;
+  }
+
+  pReturnStr = CatSPrint(NULL, pTmpStr, CCurStatus, pCCurErrorMessage);
+  FREE_POOL_SAFE(pTmpStr);
+  FREE_POOL_SAFE(pCCurErrorMessage);
+
+  NVDIMM_EXIT();
+  return pReturnStr;
 }
 
 /**
@@ -167,21 +226,22 @@ GetPlatformConfigOutputPCATStatus(
   @param[in] InterleaveInformationTableStatus_2, Status from the second discovered interleave information table
 
   @retval NULL - failed to retrieve string from HII strings DB
-  @retval Formated CHAR16 string
+  @retval Formatted CHAR16 string
 **/
 STATIC
 CHAR16*
-GetDetailedStatusStr(
+GetCoutDetailedStatusStr(
   IN     UINT8 CoutStatus,
   IN     UINT32 PartitionSizeChangeTableStatus,
   IN     UINT8 InterleaveInformationTableStatus_1,
   IN     UINT8 InterleaveInformationTableStatus_2
-  )
+)
 {
   CHAR16 PartitionSizeChangeTableStatusStr[MAX_PCD_TABLE_STATUS_LENGTH];
   CHAR16 InterleaveInformationTableStatus_1Str[MAX_PCD_TABLE_STATUS_LENGTH];
   CHAR16 InterleaveInformationTableStatus_2Str[MAX_PCD_TABLE_STATUS_LENGTH];
   CHAR16 *pTmpStr = NULL;
+  CHAR16 *pCoutErrorMessage = NULL;
   CHAR16 *pTmpStr1 = NULL;
   CHAR16 *pReturnStr = NULL;
 
@@ -196,37 +256,104 @@ GetDetailedStatusStr(
   if (pTmpStr != NULL) {
     if (PartitionSizeChangeTableStatus == MAX_UINT32) {
       StrnCpyS(PartitionSizeChangeTableStatusStr, MAX_PCD_TABLE_STATUS_LENGTH, pTmpStr, MAX_PCD_TABLE_STATUS_LENGTH - 1);
-    } else {
+    }
+    else {
       UnicodeSPrint(PartitionSizeChangeTableStatusStr, sizeof(PartitionSizeChangeTableStatusStr), L"%d", PartitionSizeChangeTableStatus);
     }
 
     if (InterleaveInformationTableStatus_1 == MAX_UINT8) {
       StrnCpyS(InterleaveInformationTableStatus_1Str, MAX_PCD_TABLE_STATUS_LENGTH, pTmpStr, MAX_PCD_TABLE_STATUS_LENGTH - 1);
-    } else {
+    }
+    else {
       UnicodeSPrint(InterleaveInformationTableStatus_1Str, sizeof(InterleaveInformationTableStatus_1Str), L"%d", (UINT32)InterleaveInformationTableStatus_1);
     }
 
     if (InterleaveInformationTableStatus_2 == MAX_UINT8) {
       StrnCpyS(InterleaveInformationTableStatus_2Str, MAX_PCD_TABLE_STATUS_LENGTH, pTmpStr, MAX_PCD_TABLE_STATUS_LENGTH - 1);
-    } else {
+    }
+    else {
       UnicodeSPrint(InterleaveInformationTableStatus_2Str, sizeof(InterleaveInformationTableStatus_2Str), L"%d", InterleaveInformationTableStatus_2);
     }
 
     FREE_POOL_SAFE(pTmpStr);
-
   }
-  pTmpStr1 = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_DIAG_CONFIG_DETAILED_STATUS), NULL);
-  pReturnStr = CatSPrint(NULL, pTmpStr1, CoutStatus, PartitionSizeChangeTableStatusStr, InterleaveInformationTableStatus_1Str, InterleaveInformationTableStatus_2Str);
+
+  switch (CoutStatus) {
+  case CONFIG_OUTPUT_STATUS_ERROR:
+    if (PartitionSizeChangeTableStatus == PARTITION_SIZE_CHANGE_STATUS_FW_ERROR) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_DCPMM_FIRMWARE_ERROR), NULL);
+    }
+    else if (PartitionSizeChangeTableStatus == PARTITION_SIZE_CHANGE_STATUS_EXCEED_DRAM_DECODERS ||
+            InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_EXCEED_DRAM_DECODERS ||
+            InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_EXCEED_DRAM_DECODERS) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_INSUFFICIENT_SILICON_RESOURCES), NULL);
+    }
+    else if (InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_EXCEED_MAX_SPA_SPACE ||
+             InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_EXCEED_MAX_SPA_SPACE) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_INSUFFICIENT_SPA_SPACE), NULL);
+    }
+    else if (PartitionSizeChangeTableStatus == PARTITION_SIZE_CHANGE_STATUS_DIMM_MISSING ||
+             InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_DIMM_MISSING ||
+             InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_DIMM_MISSING) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_DIMM_MISSING_IN_ISET), NULL);
+    }
+    else if (PartitionSizeChangeTableStatus == PARTITION_SIZE_CHANGE_STATUS_ISET_MISSING ||
+             InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_ISET_MISSING ||
+             InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_ISET_MISSING) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_MATCHING_ISET_NOT_FOUND), NULL);
+    }
+    else if (PartitionSizeChangeTableStatus == PARTITION_SIZE_CHANGE_STATUS_EXCEED_SIZE) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_EXCEEDS_PARTITION_SIZE), NULL);
+    }
+    else if (InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_CIN_MISSING ||
+             InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_CIN_MISSING) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_CIN_MISSING), NULL);
+    }
+    else if (InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_CHANNEL_NOT_MATCH ||
+             InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_CHANNEL_NOT_MATCH) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_CHANNEL_NOT_MATCH), NULL);
+    }
+    else if (PartitionSizeChangeTableStatus == PARTITION_SIZE_CHANGE_STATUS_UNSUPPORTED_ALIGNMENT ||
+             InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_UNSUPPORTED_ALIGNMENT ||
+             InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_UNSUPPORTED_ALIGNMENT) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_UNSUPPORTED_ALIGNMENT), NULL);
+    }
+    else if (InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_REQUEST_UNSUPPORTED ||
+             InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_REQUEST_UNSUPPORTED) {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_REQUEST_UNSUPPORTED), NULL);
+    }
+    else {
+      pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_UNKNOWN), NULL);
+    }
+    break;
+  case CONFIG_OUTPUT_STATUS_CPU_MAX_MEMORY_LIMIT_VIOLATION:
+    pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_CPU_MAX_MEMORY_LIMIT_VIOLATION), NULL);
+    break;
+  case CONFIG_OUTPUT_STATUS_NM_FM_RATIO_UNSUPPORTED:
+    pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_NM_FM_RATIO_UNSUPPORTED), NULL);
+    break;
+  default:
+    pCoutErrorMessage = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_STATUS_UNKNOWN), NULL);
+    break;
+  }
+
+  pTmpStr1 = HiiGetString(gNvmDimmData->HiiHandle, STRING_TOKEN(STR_CONFIG_DIAG_COUT_CONFIG_DETAILED_STATUS), NULL);
+
+  pReturnStr = CatSPrintClean(NULL, pTmpStr1, CoutStatus, pCoutErrorMessage, PartitionSizeChangeTableStatusStr,
+    InterleaveInformationTableStatus_1Str, InterleaveInformationTableStatus_2Str);
+
   FREE_POOL_SAFE(pTmpStr1);
+  FREE_POOL_SAFE(pCoutErrorMessage);
 
   NVDIMM_EXIT();
   return pReturnStr;
 }
 
 /**
-  Check a COUT table for a broken interleave set and update the list of broken interleave sets if one is discovered
+  Check CCUR table for a broken interleave set and update the list of broken interleave sets if one is discovered
 
-  @param[in] pConfigOutput, COUT table to check for broken interleave set
+  @param[in] pCurrentConfig, CCUR table to check for broken interleave set when DIMM(s) are misplaced
+  @param[in] MissingDimm Flag to indicate if one of the DIMMs in an interleave set is missing
   @param[in out] pBrokenISs array of broken IS information to update
   @param[in out] pBrokenISCount, current number of discovered broken IS's in the array
 
@@ -236,77 +363,161 @@ GetDetailedStatusStr(
 STATIC
 EFI_STATUS
 UpdateBrokenInterleaveSets(
-  IN     NVDIMM_PLATFORM_CONFIG_OUTPUT *pConfigOutput,
+  IN     NVDIMM_CURRENT_CONFIG *pCurrentConfig,
+  IN     BOOLEAN MissingDimm,
   IN OUT BROKEN_IS *pBrokenISs,
   IN OUT UINT16 *pBrokenISCount
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   NVDIMM_PARTITION_SIZE_CHANGE *pPartSizeChange = NULL;
-  NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo = NULL;
   PCAT_TABLE_HEADER *pCurPcatTable = NULL;
   UINT32 SizeOfPcatTables = 0;
-  NVDIMM_IDENTIFICATION_INFORMATION *pCurrentIdentInfo = NULL;
   DIMM *pDimm = NULL;
   UINT16 Index = 0;
   UINT16 BrokenISArrayIndex = 0;
   UINT16 DimmIdIndex = 0;
   BOOLEAN BrokenISFound = FALSE;
   BOOLEAN DimmIdFound = FALSE;
+  BOOLEAN DimmLocationIssue = FALSE;
   BOOLEAN PcdRevision_1 = FALSE;
+  ACPI_REVISION PcdRevision;
   UINT32 TmpDimmSerialNumber = 0;
   DIMM_UNIQUE_IDENTIFIER TmpDimmUid;
+  DIMM_LOCATION DimmLocation;
+  DIMM_LOCATION CurrentDimmLocation;
+  PMTT_MODULE_INFO *pPmttModuleInfo = NULL;
+  UINT8 NumOfDimmsInInterleaveSet = 0;
+  UINT16 InterleaveSetIndex = 0;
+  UINT16 InterleaveInfoHeaderLength = 0;
+  VOID *pCurrentIdentInfo = NULL;
 
   NVDIMM_ENTRY();
 
-  if (pConfigOutput == NULL || pBrokenISs == NULL || pBrokenISCount == NULL || *pBrokenISCount > MAX_IS_CONFIGS) {
+  if (pCurrentConfig == NULL || pBrokenISs == NULL || pBrokenISCount == NULL || *pBrokenISCount > MAX_IS_CONFIGS) {
     ReturnCode = EFI_INVALID_PARAMETER;
     NVDIMM_DBG("Invalid Parameter");
     goto Finish;
   }
 
-  if ((pConfigOutput->Header.Revision != NVDIMM_CONFIGURATION_TABLES_REVISION_1) &&
-      (pConfigOutput->Header.Revision != NVDIMM_CONFIGURATION_TABLES_REVISION_2)) {
+  if (IS_ACPI_HEADER_REV_INVALID(pCurrentConfig)) {
     ReturnCode = EFI_INVALID_PARAMETER;
-    NVDIMM_DBG("Error: Invalid revision value %d for PCD Config Output table.", pConfigOutput->Header.Revision);
+    NVDIMM_DBG("Error: Invalid revision value %d for PCD Current Config table.", pCurrentConfig->Header.Revision.AsUint8);
     goto Finish;
   }
 
   ZeroMem(&TmpDimmUid, sizeof(TmpDimmUid));
-  PcdRevision_1 = (pConfigOutput->Header.Revision == NVDIMM_CONFIGURATION_TABLES_REVISION_1);
+  PcdRevision_1 = (pCurrentConfig->Header.Revision.AsUint8 == NVDIMM_CONFIGURATION_TABLES_REVISION_1);
+  PcdRevision.AsUint8 = pCurrentConfig->Header.Revision.AsUint8;
 
-  /** Check if there is at least one PCAT table **/
-  if (pConfigOutput->Header.Length <= sizeof(*pConfigOutput)) {
+  // For DIMM misplaced or re-ordering issue use DIMM location data in CCUR (PCD Rev 1.1) for validation
+  if (!MissingDimm && !IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(PcdRevision)) {
+    NVDIMM_DBG("DIMM Location details of any interleave set in CCUR table not available.");
     goto Finish;
   }
 
-  pCurPcatTable = (PCAT_TABLE_HEADER *) &pConfigOutput->pPcatTables;
-  SizeOfPcatTables = pConfigOutput->Header.Length - (UINT32) ((UINT8 *)pCurPcatTable - (UINT8 *)pConfigOutput);
+  /** Check if there is at least one PCAT table **/
+  if (pCurrentConfig->Header.Length <= sizeof(*pCurrentConfig)) {
+    goto Finish;
+  }
 
-  while ((UINT32) ((UINT8 *)pCurPcatTable - (UINT8 *)&pConfigOutput->pPcatTables) < SizeOfPcatTables) {
+  pCurPcatTable = (PCAT_TABLE_HEADER *)&pCurrentConfig->pPcatTables;
+  SizeOfPcatTables = pCurrentConfig->Header.Length - (UINT32)((UINT8 *)pCurPcatTable - (UINT8 *)pCurrentConfig);
+
+  while ((UINT32)((UINT8 *)pCurPcatTable - (UINT8 *)&pCurrentConfig->pPcatTables) < SizeOfPcatTables) {
     if (pCurPcatTable->Type == PCAT_TYPE_PARTITION_SIZE_CHANGE_TABLE) {
-      pPartSizeChange = (NVDIMM_PARTITION_SIZE_CHANGE *) pCurPcatTable;
+      pPartSizeChange = (NVDIMM_PARTITION_SIZE_CHANGE *)pCurPcatTable;
       pCurPcatTable = GET_VOID_PTR_OFFSET(pCurPcatTable, pPartSizeChange->Header.Length);
-    } else if (pCurPcatTable->Type == PCAT_TYPE_INTERLEAVE_INFORMATION_TABLE) {
-      pInterleaveInfo = (NVDIMM_INTERLEAVE_INFORMATION *) pCurPcatTable;
-      pCurrentIdentInfo = (NVDIMM_IDENTIFICATION_INFORMATION *) &pInterleaveInfo->pIdentificationInfoList;
+    }
+    else if (pCurPcatTable->Type == PCAT_TYPE_INTERLEAVE_INFORMATION_TABLE) {
+      if (IS_ACPI_REV_MAJ_0_MIN_1_OR_MIN_2(PcdRevision)) {
+        NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo = (NVDIMM_INTERLEAVE_INFORMATION *)pCurPcatTable;
+        pCurrentIdentInfo = (NVDIMM_IDENTIFICATION_INFORMATION *)&pInterleaveInfo->pIdentificationInfoList;
+        NumOfDimmsInInterleaveSet = pInterleaveInfo->NumOfDimmsInInterleaveSet;
+        InterleaveSetIndex = pInterleaveInfo->InterleaveSetIndex;
+        InterleaveInfoHeaderLength = pInterleaveInfo->Header.Length;
+      }
+      else if (IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(PcdRevision)) {
+        NVDIMM_INTERLEAVE_INFORMATION3 *pInterleaveInfo = (NVDIMM_INTERLEAVE_INFORMATION3 *)pCurPcatTable;
+        pCurrentIdentInfo = (NVDIMM_IDENTIFICATION_INFORMATION3 *)&pInterleaveInfo->pIdentificationInfoList;
+        NumOfDimmsInInterleaveSet = pInterleaveInfo->NumOfDimmsInInterleaveSet;
+        InterleaveSetIndex = pInterleaveInfo->InterleaveSetIndex;
+        InterleaveInfoHeaderLength = pInterleaveInfo->Header.Length;
+      }
 
       // for each dimm identifier in the table
-      for (Index = 0; Index < pInterleaveInfo->NumOfDimmsInInterleaveSet; Index++) {
-        TmpDimmSerialNumber = pCurrentIdentInfo->DimmIdentification.Version1.DimmSerialNumber;
-        CopyMem_S(&TmpDimmUid, sizeof(DIMM_UNIQUE_IDENTIFIER), &(pCurrentIdentInfo->DimmIdentification.Version2.Uid), sizeof(DIMM_UNIQUE_IDENTIFIER));
+      for (Index = 0; Index < NumOfDimmsInInterleaveSet; Index++) {
+        if (IS_ACPI_REV_MAJ_0_MIN_1_OR_MIN_2(PcdRevision)) {
+          NVDIMM_IDENTIFICATION_INFORMATION *pCurrentIdentInfoTemp = (NVDIMM_IDENTIFICATION_INFORMATION *)pCurrentIdentInfo;
+          TmpDimmSerialNumber = pCurrentIdentInfoTemp->DimmIdentification.Version1.DimmSerialNumber;
+          CopyMem_S(&TmpDimmUid, sizeof(DIMM_UNIQUE_IDENTIFIER), &(pCurrentIdentInfoTemp->DimmIdentification.Version2.Uid), sizeof(DIMM_UNIQUE_IDENTIFIER));
+        }
+        else if (IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(PcdRevision)) {
+          NVDIMM_IDENTIFICATION_INFORMATION3 *pCurrentIdentInfoTemp = (NVDIMM_IDENTIFICATION_INFORMATION3 *)pCurrentIdentInfo;
+          CopyMem_S(&TmpDimmUid, sizeof(DIMM_UNIQUE_IDENTIFIER), &(pCurrentIdentInfoTemp->DimmIdentification), sizeof(DIMM_UNIQUE_IDENTIFIER));
+          CopyMem_S(&DimmLocation, sizeof(DIMM_LOCATION), &(pCurrentIdentInfoTemp->DimmLocation), sizeof(DIMM_LOCATION));
+        }
+
         if (PcdRevision_1) {
           pDimm = GetDimmBySerialNumber(&gNvmDimmData->PMEMDev.Dimms, TmpDimmSerialNumber);
-        } else {
+        }
+        else {
           pDimm = GetDimmByUniqueIdentifier(&gNvmDimmData->PMEMDev.Dimms, TmpDimmUid);
         }
 
-        // If a certain dimm identifier is missing from DimmInventory for a given Interleave Table, mark it as a bad Interleave set index
-        if (pDimm == NULL) {
+        if (!MissingDimm) {
+          if (pDimm != NULL) {
+            pPmttModuleInfo = GetDimmModuleByPidFromPmtt(pDimm->DimmID, gNvmDimmData->PMEMDev.pPmttHead);
+            if (pPmttModuleInfo == NULL) {
+              NVDIMM_DBG("DIMM Module not found in PMTT");
+            }
+          }
+          else {
+            NVDIMM_DBG("DIMM ID missing from DIMM Inventory. Incorrect Config Status value!");
+            ReturnCode = EFI_INVALID_PARAMETER;
+            goto Finish;
+          }
+
+          DimmLocationIssue = FALSE;
+          //Compare the Identification Info DIMM location with the current DIMM location in PMTT
+          if (pPmttModuleInfo != NULL) {
+            if ((DimmLocation.Split.SocketId != pPmttModuleInfo->SocketId) ||
+              (DimmLocation.Split.DieId != pPmttModuleInfo->DieId) ||
+              (DimmLocation.Split.MemControllerId != pPmttModuleInfo->MemControllerId) ||
+              (DimmLocation.Split.ChannelId != pPmttModuleInfo->ChannelId) ||
+              (DimmLocation.Split.SlotId != pPmttModuleInfo->SlotId)) {
+              DimmLocationIssue = TRUE;
+              CurrentDimmLocation.Split.SocketId = pPmttModuleInfo->SocketId;
+              CurrentDimmLocation.Split.DieId = pPmttModuleInfo->DieId;
+              CurrentDimmLocation.Split.MemControllerId = pPmttModuleInfo->MemControllerId;
+              CurrentDimmLocation.Split.ChannelId = pPmttModuleInfo->ChannelId;
+              CurrentDimmLocation.Split.SlotId = pPmttModuleInfo->SlotId;
+            }
+          }
+          //Compare the Identification Info DIMM location with the current DIMM location in NFIT if PMMT not present
+          else {
+            if ((DimmLocation.Split.SocketId != pDimm->SocketId) ||
+              (DimmLocation.Split.DieId != MAX_DIEID_SINGLE_DIE_SOCKET) ||
+              (DimmLocation.Split.MemControllerId != pDimm->ImcId) ||
+              (DimmLocation.Split.ChannelId != pDimm->ChannelId) ||
+              (DimmLocation.Split.SlotId != pDimm->ChannelPos)) {
+              DimmLocationIssue = TRUE;
+              CurrentDimmLocation.Split.SocketId = pDimm->SocketId;
+              CurrentDimmLocation.Split.DieId = MAX_DIEID_SINGLE_DIE_SOCKET;
+              CurrentDimmLocation.Split.MemControllerId = pDimm->ImcId;
+              CurrentDimmLocation.Split.ChannelId = pDimm->ChannelId;
+              CurrentDimmLocation.Split.SlotId = pDimm->ChannelPos;
+            }
+          }
+        }
+
+        // If a certain dimm identifier is missing from DimmInventory or not in the right order
+        // for a given Interleave Table, mark it as a bad Interleave set index
+        if (pDimm == NULL || DimmLocationIssue) {
           BrokenISFound = FALSE;
           // Check and see if index is already in the bad list
           for (BrokenISArrayIndex = 0; BrokenISArrayIndex < *pBrokenISCount; BrokenISArrayIndex++) {
-            if (pBrokenISs[BrokenISArrayIndex].InterleaveSetIndex == pInterleaveInfo->InterleaveSetIndex) {
+            if (pBrokenISs[BrokenISArrayIndex].InterleaveSetIndex == InterleaveSetIndex) {
               BrokenISFound = TRUE;
               break;
             }
@@ -317,8 +528,8 @@ UpdateBrokenInterleaveSets(
             DimmIdFound = FALSE;
             for (DimmIdIndex = 0; DimmIdIndex < pBrokenISs[BrokenISArrayIndex].MissingDimmCount; DimmIdIndex++) {
               if (((PcdRevision_1) && (TmpDimmSerialNumber == pBrokenISs[BrokenISArrayIndex].MissingDimmIdentifier[DimmIdIndex].SerialNumber)) ||
-                  ((!PcdRevision_1) && (0 == CompareMem(&TmpDimmUid, &pBrokenISs[BrokenISArrayIndex].MissingDimmIdentifier[DimmIdIndex],
-                                        sizeof(DIMM_UNIQUE_IDENTIFIER))))){
+                ((!PcdRevision_1) && (0 == CompareMem(&TmpDimmUid, &pBrokenISs[BrokenISArrayIndex].MissingDimmIdentifier[DimmIdIndex],
+                  sizeof(DIMM_UNIQUE_IDENTIFIER))))) {
                 DimmIdFound = TRUE;
                 break;
               }
@@ -327,32 +538,57 @@ UpdateBrokenInterleaveSets(
             if (!DimmIdFound) {
               if (PcdRevision_1) {
                 pBrokenISs[BrokenISArrayIndex].MissingDimmIdentifier[pBrokenISs[BrokenISArrayIndex].MissingDimmCount].SerialNumber = TmpDimmSerialNumber;
-              } else {
+              }
+              else {
                 CopyMem_S(&pBrokenISs[BrokenISArrayIndex].MissingDimmIdentifier[pBrokenISs[BrokenISArrayIndex].MissingDimmCount], sizeof(DIMM_UNIQUE_IDENTIFIER),
                   &TmpDimmUid, sizeof(DIMM_UNIQUE_IDENTIFIER));
               }
+              if (IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(PcdRevision)) {
+                CopyMem_S(&pBrokenISs[BrokenISArrayIndex].MisplacedDimmLocations[pBrokenISs[BrokenISArrayIndex].MissingDimmCount], sizeof(DIMM_LOCATION),
+                  &DimmLocation, sizeof(DIMM_LOCATION));
+                if (!MissingDimm) {
+                  CopyMem_S(&pBrokenISs[BrokenISArrayIndex].CurrentDimmLocations[pBrokenISs[BrokenISArrayIndex].MissingDimmCount], sizeof(DIMM_LOCATION),
+                    &CurrentDimmLocation, sizeof(DIMM_LOCATION));
+                }
+              }
               pBrokenISs[BrokenISArrayIndex].MissingDimmCount++;
             }
-          // if no add to the next empty index
-          } else {
-            pBrokenISs[*pBrokenISCount].InterleaveSetIndex = pInterleaveInfo->InterleaveSetIndex;
+            // if no add to the next empty index
+          }
+          else {
+            pBrokenISs[*pBrokenISCount].InterleaveSetIndex = InterleaveSetIndex;
             if (PcdRevision_1) {
               pBrokenISs[*pBrokenISCount].MissingDimmIdentifier[pBrokenISs[BrokenISArrayIndex].MissingDimmCount].SerialNumber = TmpDimmSerialNumber;
-            } else {
+            }
+            else {
               CopyMem_S(&pBrokenISs[*pBrokenISCount].MissingDimmIdentifier[pBrokenISs[BrokenISArrayIndex].MissingDimmCount], sizeof(DIMM_UNIQUE_IDENTIFIER),
                 &TmpDimmUid, sizeof(DIMM_UNIQUE_IDENTIFIER));
+            }
+            if (IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(PcdRevision)) {
+              CopyMem_S(&pBrokenISs[*pBrokenISCount].MisplacedDimmLocations[pBrokenISs[BrokenISArrayIndex].MissingDimmCount], sizeof(DIMM_LOCATION),
+                &DimmLocation, sizeof(DIMM_LOCATION));
+              if (!MissingDimm) {
+                CopyMem_S(&pBrokenISs[*pBrokenISCount].CurrentDimmLocations[pBrokenISs[BrokenISArrayIndex].MissingDimmCount], sizeof(DIMM_LOCATION),
+                  &CurrentDimmLocation, sizeof(DIMM_LOCATION));
+              }
             }
             pBrokenISs[*pBrokenISCount].MissingDimmCount++;
             *pBrokenISCount = *pBrokenISCount + 1;
           }
         }
 
-        pCurrentIdentInfo++;
+        if (IS_ACPI_REV_MAJ_0_MIN_1_OR_MIN_2(PcdRevision)) {
+          pCurrentIdentInfo = (UINT8 *)pCurrentIdentInfo + sizeof(NVDIMM_IDENTIFICATION_INFORMATION);
+        }
+        else if (IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(PcdRevision)) {
+          pCurrentIdentInfo = (UINT8 *)pCurrentIdentInfo + sizeof(NVDIMM_IDENTIFICATION_INFORMATION3);
+        }
       }
 
-      pCurPcatTable = GET_VOID_PTR_OFFSET(pCurPcatTable, pInterleaveInfo->Header.Length);
-    } else {
-      NVDIMM_DBG("Unknown table discovered in COUT");
+      pCurPcatTable = GET_VOID_PTR_OFFSET(pCurPcatTable, InterleaveInfoHeaderLength);
+    }
+    else {
+      NVDIMM_DBG("Unknown table discovered in CCUR");
       break;
     }
   }
@@ -400,8 +636,8 @@ CheckPlatformConfigurationData(
   UINT16 Index2 = 0;
   UINT16 BrokenISCount = 0;
   BROKEN_IS *pBrokenISs = NULL;
-  CHAR16 *pDimmIdentifiersStr = NULL;
   CHAR16 *pTmpDimmIdStr = NULL;
+  ACPI_REVISION PcdRevision;
 
   enum PcdErrorTypes
   {
@@ -410,6 +646,8 @@ CheckPlatformConfigurationData(
     PcdErrorInsufficientResources,
     PcdErrorFirmware,
     PcdErrorMissingDimm,
+    PcdErrorDimmLocationIssue,
+    PcdErrorCurConfig,
     PcdErrorUnknown,
   } PcdErrorType;
 
@@ -419,6 +657,7 @@ CheckPlatformConfigurationData(
 
   ZeroMem(DimmStr, sizeof(DimmStr));
   ZeroMem(DimmUid, sizeof(DimmUid));
+  ZeroMem(&PcdRevision, sizeof(PcdRevision));
 
   if (DimmCount == 0 || ppDimms == NULL || DimmCount > MAX_DIMMS ||
        ppResultStr == NULL || pDiagState == NULL) {
@@ -462,7 +701,7 @@ CheckPlatformConfigurationData(
       if (pPcdConfHeader->CurrentConfStartOffset == 0 || pPcdConfHeader->CurrentConfDataSize == 0) {
         // Dimm not configured
         APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_CONFIG_DIMM_NOT_CONFIGURED), EVENT_CODE_606, DIAG_STATE_MASK_OK, ppResultStr, pDiagState,
-          ppDimms[Index]->DeviceHandle.AsUint32);
+          DimmStr);
         FREE_POOL_SAFE(pPcdConfHeader);
         NVDIMM_WARN("There is no Current Config table");
         continue;
@@ -473,9 +712,34 @@ CheckPlatformConfigurationData(
       if (!IsPcdCurrentConfHeaderValid(pPcdCurrentConf, ppDimms[Index]->PcdOemPartitionSize)) {
         ReturnCode = EFI_VOLUME_CORRUPTED;
       }
+
+      PcdRevision.AsUint8 = pPcdCurrentConf->Header.Revision.AsUint8;
     }
 
     if (!EFI_ERROR(ReturnCode)) {
+      // Check for any errors in PCD CCUR
+      switch (pPcdCurrentConf->ConfigStatus) {
+      case DIMM_CONFIG_SUCCESS:
+        PcdErrorType = PcdSuccess;
+        break;
+      case DIMM_CONFIG_IS_INCOMPLETE:
+        PcdErrorType = PcdErrorMissingDimm;
+        break;
+      case DIMM_CONFIG_NO_MATCHING_IS:
+      case DIMM_CONFIG_NEW_DIMM:
+        PcdErrorType = PcdErrorDimmLocationIssue;
+        break;
+      case DIMM_CONFIG_DCPMM_POPULATION_ISSUE:
+      case DIMM_CONFIG_DCPMM_NM_FM_RATIO_UNSUPPORTED:
+      case DIMM_CONFIG_CPU_MAX_MEMORY_LIMIT_VIOLATION:
+        PcdErrorType = PcdErrorCurConfig;
+        break;
+      }
+
+      if (PcdErrorType != PcdSuccess) {
+        goto ProcessPcdError;
+      }
+
       if (pPcdConfHeader->ConfInputStartOffset == 0 || pPcdConfHeader->ConfInputDataSize == 0) {
         FREE_POOL_SAFE(pPcdConfHeader);
         NVDIMM_WARN("There is no Input Config table");
@@ -489,7 +753,7 @@ CheckPlatformConfigurationData(
       } else if (pPcdConfHeader->ConfOutputStartOffset == 0 || pPcdConfHeader->ConfOutputDataSize == 0) {
         // No Output table defined yet means the goal has not been applied yet
         APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_CONFIG_GOAL_NOT_APPLIED), EVENT_CODE_609, DIAG_STATE_MASK_OK, ppResultStr, pDiagState,
-          ppDimms[Index]->DeviceHandle.AsUint32);
+          DimmStr);
       }
     }
 
@@ -507,13 +771,13 @@ CheckPlatformConfigurationData(
       } else if (pPcdOutputConf->SequenceNumber != pPcdInputConf->SequenceNumber) {
         // The goal has not been applied yet
         APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_CONFIG_GOAL_NOT_APPLIED), EVENT_CODE_609, DIAG_STATE_MASK_OK, ppResultStr, pDiagState,
-          ppDimms[Index]->DeviceHandle.AsUint32);
+          DimmStr);
       }
     }
 
     if (EFI_ERROR(ReturnCode)) {
       APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_CONFIG_INVALID_PCD_DATA), EVENT_CODE_621, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
-        ppDimms[Index]->DeviceHandle.AsUint32);
+        DimmStr);
       continue;
     }
 
@@ -523,13 +787,10 @@ CheckPlatformConfigurationData(
       &InterleaveInformationTableStatus_1,
       &InterleaveInformationTableStatus_2);
 
+    // Check for any errors in applying the goal request (PCD CIN)
     switch (pPcdCurrentConf->ConfigStatus) {
     case DIMM_CONFIG_SUCCESS:
-    case DIMM_CONFIG_NEW_DIMM:
-       PcdErrorType = PcdSuccess;
-      break;
-    case DIMM_CONFIG_IS_INCOMPLETE:
-      PcdErrorType = PcdErrorMissingDimm;
+      PcdErrorType = PcdSuccess;
       break;
     case DIMM_CONFIG_OLD_CONFIG_USED:
     case DIMM_CONFIG_BAD_CONFIG:
@@ -551,17 +812,22 @@ CheckPlatformConfigurationData(
           InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_DIMM_MISSING ||
           InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_ISET_MISSING ||
           InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_CIN_MISSING ||
+          InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_REQUEST_UNSUPPORTED ||
           InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_CHANNEL_NOT_MATCH ||
           InterleaveInformationTableStatus_1 == INTERLEAVE_INFO_STATUS_UNSUPPORTED_ALIGNMENT ||
           InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_DIMM_MISSING ||
           InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_ISET_MISSING ||
           InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_CIN_MISSING ||
+          InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_REQUEST_UNSUPPORTED ||
           InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_CHANNEL_NOT_MATCH ||
           InterleaveInformationTableStatus_2 == INTERLEAVE_INFO_STATUS_UNSUPPORTED_ALIGNMENT) {
           PcdErrorType = PcdErrorGoalData;
         } else {
           PcdErrorType = PcdErrorUnknown;
         }
+      } else if (pPcdOutputConf->ValidationStatus == CONFIG_OUTPUT_STATUS_CPU_MAX_MEMORY_LIMIT_VIOLATION ||
+        pPcdOutputConf->ValidationStatus == CONFIG_OUTPUT_STATUS_NM_FM_RATIO_UNSUPPORTED) {
+        PcdErrorType = PcdErrorGoalData;
       } else {
         PcdErrorType = PcdErrorUnknown;
       }
@@ -574,30 +840,45 @@ CheckPlatformConfigurationData(
       PcdErrorType = PcdErrorUnknown;
     }
 
+  ProcessPcdError:
     // Print Message based on PcdError
     switch (PcdErrorType) {
     case PcdSuccess:
       break;
     case PcdErrorFirmware:
-      pDetailedStatusStr = GetDetailedStatusStr(pPcdOutputConf->ValidationStatus, PartitionSizeChangeTableStatus, InterleaveInformationTableStatus_1, InterleaveInformationTableStatus_2);
+      pDetailedStatusStr = GetCoutDetailedStatusStr(pPcdOutputConf->ValidationStatus, PartitionSizeChangeTableStatus, InterleaveInformationTableStatus_1, InterleaveInformationTableStatus_2);
       APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_CONFIG_GOAL_FAILED_FIRMWARE), EVENT_CODE_626, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
         DimmStr, pDetailedStatusStr);
       FREE_POOL_SAFE(pDetailedStatusStr);
       break;
     case PcdErrorGoalData:
-      pDetailedStatusStr = GetDetailedStatusStr(pPcdOutputConf->ValidationStatus, PartitionSizeChangeTableStatus, InterleaveInformationTableStatus_1, InterleaveInformationTableStatus_2);
+      pDetailedStatusStr = GetCoutDetailedStatusStr(pPcdOutputConf->ValidationStatus, PartitionSizeChangeTableStatus, InterleaveInformationTableStatus_1, InterleaveInformationTableStatus_2);
       APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_CONFIG_GOAL_FAILED_DATA), EVENT_CODE_624, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
         DimmStr, pDetailedStatusStr);
       FREE_POOL_SAFE(pDetailedStatusStr);
       break;
+    case PcdErrorCurConfig:
+      pDetailedStatusStr = GetCCurDetailedStatusStr(pPcdCurrentConf->ConfigStatus);
+      APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_CURRENT_CONFIG_FAILED_DATA), EVENT_CODE_633, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
+        DimmStr, pDetailedStatusStr);
+      FREE_POOL_SAFE(pDetailedStatusStr);
+      break;
     case PcdErrorInsufficientResources:
-      pDetailedStatusStr = GetDetailedStatusStr(pPcdOutputConf->ValidationStatus, PartitionSizeChangeTableStatus, InterleaveInformationTableStatus_1, InterleaveInformationTableStatus_2);
+      pDetailedStatusStr = GetCoutDetailedStatusStr(pPcdOutputConf->ValidationStatus, PartitionSizeChangeTableStatus, InterleaveInformationTableStatus_1, InterleaveInformationTableStatus_2);
       APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_CONFIG_GOAL_FAILED_INSUFFICIENT_RESOURCES), EVENT_CODE_625, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
         DimmStr, pDetailedStatusStr);
       FREE_POOL_SAFE(pDetailedStatusStr);
       break;
     case PcdErrorMissingDimm:
-      ReturnCode = UpdateBrokenInterleaveSets(pPcdOutputConf, pBrokenISs, &BrokenISCount);
+      ReturnCode = UpdateBrokenInterleaveSets(pPcdCurrentConf, TRUE, pBrokenISs, &BrokenISCount);
+      if (EFI_ERROR(ReturnCode)) {
+        NVDIMM_DBG("Unable to update broken interleave sets");
+        *pDiagState |= DIAG_STATE_MASK_ABORTED;
+        goto Finish;
+      }
+      break;
+    case PcdErrorDimmLocationIssue:
+      ReturnCode = UpdateBrokenInterleaveSets(pPcdCurrentConf, FALSE, pBrokenISs, &BrokenISCount);
       if (EFI_ERROR(ReturnCode)) {
         NVDIMM_DBG("Unable to update broken interleave sets");
         *pDiagState |= DIAG_STATE_MASK_ABORTED;
@@ -606,7 +887,7 @@ CheckPlatformConfigurationData(
       break;
     case PcdErrorUnknown:
     default:
-      pDetailedStatusStr = GetDetailedStatusStr(pPcdOutputConf->ValidationStatus, PartitionSizeChangeTableStatus, InterleaveInformationTableStatus_1, InterleaveInformationTableStatus_2);
+      pDetailedStatusStr = GetCoutDetailedStatusStr(pPcdOutputConf->ValidationStatus, PartitionSizeChangeTableStatus, InterleaveInformationTableStatus_1, InterleaveInformationTableStatus_2);
       APPEND_RESULT_TO_THE_LOG(ppDimms[Index], STRING_TOKEN(STR_CONFIG_GOAL_FAILED_UNKNOWN), EVENT_CODE_627, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
         DimmStr, pDetailedStatusStr);
       FREE_POOL_SAFE(pDetailedStatusStr);
@@ -619,7 +900,7 @@ CheckPlatformConfigurationData(
   for (Index = 0; Index < BrokenISCount; Index++) {
     if (pBrokenISs[Index].MissingDimmCount > 0) {
       for (Index2 = 0; Index2 < pBrokenISs[Index].MissingDimmCount; Index2++) {
-        if (pPcdOutputConf->Header.Revision == NVDIMM_CONFIGURATION_TABLES_REVISION_2) {
+        if (IS_ACPI_REV_MAJ_0_MIN_2(PcdRevision)) {
           pTmpDimmIdStr = CatSPrint(NULL, L"%04x-%02x-%04x-%08x", EndianSwapUint16(pBrokenISs[Index].MissingDimmIdentifier[Index2].ManufacturerId),
           pBrokenISs[Index].MissingDimmIdentifier[Index2].ManufacturingLocation,
           EndianSwapUint16(pBrokenISs[Index].MissingDimmIdentifier[Index2].ManufacturingDate),
@@ -628,16 +909,30 @@ CheckPlatformConfigurationData(
           pTmpDimmIdStr = CatSPrint(NULL, L"0x%08x", EndianSwapUint32(pBrokenISs[Index].MissingDimmIdentifier[Index2].SerialNumber));
         }
 
-        if (Index2 == 0) {
-          pDimmIdentifiersStr = CatSPrint(NULL, FORMAT_STR, pTmpDimmIdStr);
-        } else {
-          pDimmIdentifiersStr = CatSPrintClean(pDimmIdentifiersStr, L", " FORMAT_STR, pTmpDimmIdStr);
+        if (PcdErrorType == PcdErrorMissingDimm) {
+          if (IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(PcdRevision)) {
+            APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_IS_BROKEN_DIMMS_MISSING_LOCATION), EVENT_CODE_631, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
+              pBrokenISs[Index].InterleaveSetIndex, pTmpDimmIdStr, pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.SocketId,
+              pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.DieId, pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.MemControllerId,
+              pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.ChannelId, pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.SlotId);
+          }
+          else {
+            APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_IS_BROKEN_DIMMS_MISSING), EVENT_CODE_628, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
+              pBrokenISs[Index].InterleaveSetIndex, pTmpDimmIdStr);
+          }
+        }
+
+        if (PcdErrorType == PcdErrorDimmLocationIssue && (IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(PcdRevision))) {
+          APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_IS_BROKEN_DIMMS_MISPLACED_LOCATION), EVENT_CODE_632, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
+            pBrokenISs[Index].InterleaveSetIndex, pTmpDimmIdStr, pBrokenISs[Index].CurrentDimmLocations[Index2].Split.SocketId,
+            pBrokenISs[Index].CurrentDimmLocations[Index2].Split.DieId, pBrokenISs[Index].CurrentDimmLocations[Index2].Split.MemControllerId,
+            pBrokenISs[Index].CurrentDimmLocations[Index2].Split.ChannelId, pBrokenISs[Index].CurrentDimmLocations[Index2].Split.SlotId,
+            pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.SocketId, pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.DieId,
+            pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.MemControllerId, pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.ChannelId,
+            pBrokenISs[Index].MisplacedDimmLocations[Index2].Split.SlotId);
         }
         FREE_POOL_SAFE(pTmpDimmIdStr);
       }
-      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_IS_BROKEN_DIMMS_MISSING), EVENT_CODE_628, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
-        pBrokenISs[Index].InterleaveSetIndex, pDimmIdentifiersStr);
-      FREE_POOL_SAFE(pDimmIdentifiersStr);
     }
   }
 
@@ -653,6 +948,7 @@ Finish:
 
   @param[in out] ppResult Pointer to the result string of platform config diagnostics message
   @param[out] pDiagState Pointer to the platform config diagnostics test state
+  @param  DimmIdPreference Dimm id preference value
 
   @retval EFI_SUCCESS Test executed correctly
   @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL
@@ -662,12 +958,15 @@ STATIC
 EFI_STATUS
 CheckUninitializedDimms(
   IN OUT CHAR16 **ppResultStr,
-     OUT UINT8 *pDiagState
+     OUT UINT8 *pDiagState,
+  IN     UINT8 DimmIdPreference
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
   LIST_ENTRY *pNode = NULL;
   DIMM *pCurDimm = NULL;
+  CHAR16 DimmStr[MAX_DIMM_UID_LENGTH];
+  CHAR16 DimmUid[MAX_DIMM_UID_LENGTH];
 
   NVDIMM_ENTRY();
 
@@ -679,10 +978,26 @@ CheckUninitializedDimms(
     goto Finish;
   }
 
-  LIST_FOR_EACH(pNode, &gNvmDimmData->PMEMDev.UninitializedDimms) {
+  LIST_FOR_EACH(pNode, &gNvmDimmData->PMEMDev.Dimms) {
     pCurDimm = DIMM_FROM_NODE(pNode);
+    if (pCurDimm->NonFunctional == FALSE) {
+      continue;
+    }
+    ZeroMem(DimmStr, sizeof(DimmStr));
+    ZeroMem(DimmUid, sizeof(DimmUid));
+    ReturnCode = GetDimmUid(pCurDimm, DimmUid, MAX_DIMM_UID_LENGTH);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("GetDimmUid function for DIMM ID 0x%x failed.", pCurDimm->DeviceHandle.AsUint32);
+      continue;
+    }
+    ReturnCode = GetPreferredValueAsString(pCurDimm->DeviceHandle.AsUint32, DimmUid, DimmIdPreference == DISPLAY_DIMM_ID_HANDLE,
+      DimmStr, MAX_DIMM_UID_LENGTH);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("GetPreferredValueAsString function for DIMM ID 0x%x failed.", pCurDimm->DeviceHandle.AsUint32);
+      continue;
+    }
     APPEND_RESULT_TO_THE_LOG(pCurDimm, STRING_TOKEN(STR_CONFIG_DIMM_FAILED_TO_INITIALIZE), EVENT_CODE_618, DIAG_STATE_MASK_FAILED, ppResultStr, pDiagState,
-      pCurDimm->DeviceHandle.AsUint32);
+      DimmStr);
   }
 
 Finish:
@@ -714,7 +1029,7 @@ CheckSystemSupportedCapabilities(
   )
 {
   EFI_STATUS ReturnCode = EFI_SUCCESS;
-  PLATFORM_CAPABILITY_INFO *pPlatformCapability = NULL;
+  BOOLEAN ConfigChangeSupported = FALSE;
 
   NVDIMM_ENTRY();
 
@@ -728,15 +1043,12 @@ CheckSystemSupportedCapabilities(
   }
 
   /** Check if BIOS supports changing configuration through management software **/
-  if (gNvmDimmData->PMEMDev.pPcatHead != NULL && gNvmDimmData->PMEMDev.pPcatHead->PlatformCapabilityInfoNum == 1) {
-    pPlatformCapability = gNvmDimmData->PMEMDev.pPcatHead->ppPlatformCapabilityInfo[0];
-
-    if (!IS_BIT_SET_VAR(pPlatformCapability->MgmtSwConfigInputSupport, BIT0)) {
-      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_NO_OS_PROVISIONING), EVENT_CODE_623, DIAG_STATE_MASK_WARNING, ppResultStr, pDiagState);
-    }
-  } else {
-    ReturnCode = EFI_NOT_FOUND;
+  ReturnCode = CheckIfBiosSupportsConfigChange(&ConfigChangeSupported);
+  if (ReturnCode == EFI_LOAD_ERROR) {
     *pDiagState |= DIAG_STATE_MASK_ABORTED;
+    goto Finish;
+  } else if (ReturnCode == EFI_UNSUPPORTED || !ConfigChangeSupported) {
+    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_NO_OS_PROVISIONING), EVENT_CODE_623, DIAG_STATE_MASK_WARNING, ppResultStr, pDiagState);
     goto Finish;
   }
 
@@ -869,118 +1181,6 @@ Finish:
   return ReturnCode;
 }
 
-//  [ATTENTION] : Do not use this function for implementing diagnostic tests. This is kept maintain the backward compatibility.
-/**
-  Run platform configuration diagnostics for the list of DIMMs, and
-  appropriately populate the result messages, and test-state.
-
-  @param[in] ppDimms The DIMM pointers list
-  @param[in] DimmCount DIMMs count
-  @param[in] DimmIdPreference Preference for Dimm ID display (UID/Handle)
-  @param[out] ppResult Pointer to the result string of platform config diagnostics message
-  @param[out] pDiagState Pointer to the platform config diagnostics test state
-
-  @retval EFI_SUCCESS Test executed correctly
-  @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL.
-**/
-EFI_STATUS
-RunConfigDiagnostics(
-  IN     DIMM **ppDimms,
-  IN     CONST UINT16 DimmCount,
-  IN     UINT8 DimmIdPreference,
-     OUT CHAR16 **ppResult,
-     OUT UINT8 *pDiagState
-  )
-{
-  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
-  SYSTEM_CAPABILITIES_INFO SysCapInfo;
-
-  NVDIMM_ENTRY();
-  // Clear the pointer before using the struct
-  SysCapInfo.PtrInterleaveFormatsSupported = 0;
-
-  if (ppResult == NULL || pDiagState == NULL || DimmCount > MAX_DIMMS) {
-    NVDIMM_DBG("The platform configuration diagnostics test aborted due to an internal error.");
-    ReturnCode = EFI_INVALID_PARAMETER;
-    goto Finish;
-  }
-
-  if (*ppResult != NULL) {
-    NVDIMM_DBG("The passed result string for platform configuration diagnostics tests is not empty");
-    ReturnCode = EFI_INVALID_PARAMETER;
-    goto FinishError;
-  }
-
-  ReturnCode = CheckUninitializedDimms(ppResult, pDiagState);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("The check for uninitialized dimms failed.");
-    if ((*pDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
-      goto FinishError;
-    }
-  }
-
-  if (DimmCount == 0 || ppDimms == NULL) {
-    ReturnCode = EFI_INVALID_PARAMETER;
-    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_NO_MANAGEABLE_DIMMS), EVENT_CODE_601, DIAG_STATE_MASK_OK, ppResult, pDiagState);
-    goto Finish;
-  }
-
-  ReturnCode = CheckDimmUIDDuplication(ppDimms, DimmCount, ppResult, pDiagState);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("The check for duplicate UID numbers failed.");
-    if ((*pDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
-      goto FinishError;
-    }
-  }
-
-  ReturnCode = GetSystemCapabilitiesInfo(&gNvmDimmDriverNvmDimmConfig, &SysCapInfo);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("Failed on GetSystemCapabilitiesInfo");
-    goto Finish;
-  }
-
-  if (!SysCapInfo.AdrSupported) {
-    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_NO_ADR_SUPPORT), EVENT_CODE_629, DIAG_STATE_MASK_FAILED, ppResult, pDiagState);
-  }
-
-  ReturnCode = CheckSystemSupportedCapabilities(ppDimms, DimmCount, DimmIdPreference, ppResult, pDiagState);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("The check for System supported capabilities failed.");
-    if ((*pDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
-      goto FinishError;
-    }
-  }
-
-  ReturnCode = CheckNamespaceLabelAreaIndex(ppDimms, DimmCount, DimmIdPreference, ppResult, pDiagState);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("The check for Namespace label retrieve failed.");
-    if ((*pDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
-      goto FinishError;
-    }
-  }
-
-  ReturnCode = CheckPlatformConfigurationData(ppDimms, DimmCount, DimmIdPreference, ppResult, pDiagState);
-  if (EFI_ERROR(ReturnCode)) {
-    NVDIMM_DBG("The check for platform configuration data failed.");
-    if ((*pDiagState & DIAG_STATE_MASK_ABORTED) != 0) {
-      goto FinishError;
-    }
-  }
-
-  if ((*pDiagState & DIAG_STATE_MASK_ALL) <= DIAG_STATE_MASK_OK) {
-    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_SUCCESS), EVENT_CODE_600, DIAG_STATE_MASK_OK, ppResult, pDiagState);
-  }
-  ReturnCode = EFI_SUCCESS;
-  goto Finish;
-
-FinishError:
-  APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_ABORTED_INTERNAL_ERROR), EVENT_CODE_630, DIAG_STATE_MASK_ABORTED, ppResult, pDiagState);
-Finish:
-  FREE_HII_POINTER(SysCapInfo.PtrInterleaveFormatsSupported);
-  NVDIMM_EXIT_I64(ReturnCode);
-  return ReturnCode;
-}
-
 /**
   Run platform configuration diagnostics for the list of DIMMs, and
   appropriately populate the result structure.
@@ -988,13 +1188,13 @@ Finish:
   @param[in] ppDimms The DIMM pointers list
   @param[in] DimmCount DIMMs count
   @param[in] DimmIdPreference Preference for Dimm ID display (UID/Handle)
-  @param[out] pResult Pointer to the result structure of platform config diagnostics message
+  @param[out] pResult Pointer of structure with diagnostics test result
 
   @retval EFI_SUCCESS Test executed correctly
   @retval EFI_INVALID_PARAMETER if any of the parameters is a NULL.
 **/
 EFI_STATUS
-RunConfigDiagnosticsDetail(
+RunConfigDiagnostics(
   IN     DIMM **ppDimms,
   IN     CONST UINT16 DimmCount,
   IN     UINT8 DimmIdPreference,
@@ -1007,6 +1207,7 @@ RunConfigDiagnosticsDetail(
   NVDIMM_ENTRY();
   // Clear the pointer before using the struct
   SysCapInfo.PtrInterleaveFormatsSupported = 0;
+  SysCapInfo.PtrInterleaveSize = 0;
 
   if (pResult == NULL || DimmCount > MAX_DIMMS) {
 
@@ -1015,30 +1216,31 @@ RunConfigDiagnosticsDetail(
     goto Finish;
   }
 
+  if (DimmCount == 0 || ppDimms == NULL) {
+    ReturnCode = EFI_SUCCESS;
+    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_NO_MANAGEABLE_DIMMS), EVENT_CODE_601, DIAG_STATE_MASK_OK,
+      &pResult->Message, &pResult->StateVal);
+    goto Finish;
+  }
+
   pResult->SubTestName[DIMMSPECS_TEST_INDEX] = CatSPrint(NULL, L"Dimm specs");
-  ReturnCode = CheckUninitializedDimms(&pResult->Message[DIMMSPECS_TEST_INDEX], &pResult->SubTestStateVal[DIMMSPECS_TEST_INDEX]);
+  ReturnCode = CheckUninitializedDimms(&pResult->SubTestMessage[DIMMSPECS_TEST_INDEX], &pResult->SubTestStateVal[DIMMSPECS_TEST_INDEX],DimmIdPreference);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("The check for uninitialized dimms failed.");
     if ((pResult->SubTestStateVal[DIMMSPECS_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
-      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-        &pResult->Message[DIMMSPECS_TEST_INDEX], &pResult->SubTestStateVal[DIMMSPECS_TEST_INDEX]);
+      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_ABORTED_INTERNAL_ERROR), EVENT_CODE_630, DIAG_STATE_MASK_ABORTED,
+        &pResult->SubTestMessage[DIMMSPECS_TEST_INDEX], &pResult->SubTestStateVal[DIMMSPECS_TEST_INDEX]);
       goto Finish;
     }
   }
 
-  if (DimmCount == 0 || ppDimms == NULL) {
-    ReturnCode = EFI_INVALID_PARAMETER;
-    NVDIMM_DBG("The dimm count and dimm information is missing");
-    goto Finish;
-  }
-
   pResult->SubTestName[DUPLICATE_DIMM_TEST_INDEX] = CatSPrint(NULL, L"Duplicate Dimm");
-  ReturnCode = CheckDimmUIDDuplication(ppDimms, DimmCount, &pResult->Message[DUPLICATE_DIMM_TEST_INDEX], &pResult->SubTestStateVal[1]);
+  ReturnCode = CheckDimmUIDDuplication(ppDimms, DimmCount, &pResult->SubTestMessage[DUPLICATE_DIMM_TEST_INDEX], &pResult->SubTestStateVal[1]);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("The check for duplicate UID numbers failed.");
     if ((pResult->SubTestStateVal[DUPLICATE_DIMM_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
-      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-        &pResult->Message[DUPLICATE_DIMM_TEST_INDEX], &pResult->SubTestStateVal[DUPLICATE_DIMM_TEST_INDEX]);
+      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_ABORTED_INTERNAL_ERROR), EVENT_CODE_630, DIAG_STATE_MASK_ABORTED,
+        &pResult->SubTestMessage[DUPLICATE_DIMM_TEST_INDEX], &pResult->SubTestStateVal[DUPLICATE_DIMM_TEST_INDEX]);
       goto Finish;
     }
   }
@@ -1046,44 +1248,44 @@ RunConfigDiagnosticsDetail(
   pResult->SubTestName[SYSTEMCAP_TEST_INDEX] = CatSPrint(NULL, L"System Capability");
   ReturnCode = GetSystemCapabilitiesInfo(&gNvmDimmDriverNvmDimmConfig, &SysCapInfo);
   if ((pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
-    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-      &pResult->Message[SYSTEMCAP_TEST_INDEX], &pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX]);
+    APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_ABORTED_INTERNAL_ERROR), EVENT_CODE_630, DIAG_STATE_MASK_ABORTED,
+      &pResult->SubTestMessage[SYSTEMCAP_TEST_INDEX], &pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX]);
     goto Finish;
   }
 
   if (!SysCapInfo.AdrSupported) {
     APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_NO_ADR_SUPPORT), EVENT_CODE_629, DIAG_STATE_MASK_FAILED,
-      &pResult->Message[SYSTEMCAP_TEST_INDEX], &pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX]);
+      &pResult->SubTestMessage[SYSTEMCAP_TEST_INDEX], &pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX]);
   }
 
-  ReturnCode = CheckSystemSupportedCapabilities(ppDimms, DimmCount, DimmIdPreference, &pResult->Message[SYSTEMCAP_TEST_INDEX], &pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX]);
+  ReturnCode = CheckSystemSupportedCapabilities(ppDimms, DimmCount, DimmIdPreference, &pResult->SubTestMessage[SYSTEMCAP_TEST_INDEX], &pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX]);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("The check for System supported capabilities failed.");
     if ((pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
-      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-        &pResult->Message[SYSTEMCAP_TEST_INDEX], &pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX]);
+      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_ABORTED_INTERNAL_ERROR), EVENT_CODE_630, DIAG_STATE_MASK_ABORTED,
+        &pResult->SubTestMessage[SYSTEMCAP_TEST_INDEX], &pResult->SubTestStateVal[SYSTEMCAP_TEST_INDEX]);
       goto Finish;
     }
   }
 
   pResult->SubTestName[NAMESPACE_LSA_TEST_INDEX] = CatSPrint(NULL, L"Namespace LSA");
-  ReturnCode = CheckNamespaceLabelAreaIndex(ppDimms, DimmCount, DimmIdPreference, &pResult->Message[NAMESPACE_LSA_TEST_INDEX], &pResult->SubTestStateVal[NAMESPACE_LSA_TEST_INDEX]);
+  ReturnCode = CheckNamespaceLabelAreaIndex(ppDimms, DimmCount, DimmIdPreference, &pResult->SubTestMessage[NAMESPACE_LSA_TEST_INDEX], &pResult->SubTestStateVal[NAMESPACE_LSA_TEST_INDEX]);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("The check for Namespace label retrieve failed.");
     if ((pResult->SubTestStateVal[NAMESPACE_LSA_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
-      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-        &pResult->Message[NAMESPACE_LSA_TEST_INDEX], &pResult->SubTestStateVal[NAMESPACE_LSA_TEST_INDEX]);
+      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_ABORTED_INTERNAL_ERROR), EVENT_CODE_630, DIAG_STATE_MASK_ABORTED,
+        &pResult->SubTestMessage[NAMESPACE_LSA_TEST_INDEX], &pResult->SubTestStateVal[NAMESPACE_LSA_TEST_INDEX]);
       goto Finish;
     }
   }
 
   pResult->SubTestName[PCD_TEST_INDEX] = CatSPrint(NULL, L"PCD");
-  ReturnCode = CheckPlatformConfigurationData(ppDimms, DimmCount, DimmIdPreference, &pResult->Message[PCD_TEST_INDEX], &pResult->SubTestStateVal[PCD_TEST_INDEX]);
+  ReturnCode = CheckPlatformConfigurationData(ppDimms, DimmCount, DimmIdPreference, &pResult->SubTestMessage[PCD_TEST_INDEX], &pResult->SubTestStateVal[PCD_TEST_INDEX]);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("The check for platform configuration data failed.");
     if ((pResult->SubTestStateVal[PCD_TEST_INDEX] & DIAG_STATE_MASK_ABORTED) != 0) {
-      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_FW_ABORTED_INTERNAL_ERROR), EVENT_CODE_910, DIAG_STATE_MASK_ABORTED,
-        &pResult->Message[PCD_TEST_INDEX], &pResult->SubTestStateVal[PCD_TEST_INDEX]);
+      APPEND_RESULT_TO_THE_LOG(NULL, STRING_TOKEN(STR_CONFIG_ABORTED_INTERNAL_ERROR), EVENT_CODE_630, DIAG_STATE_MASK_ABORTED,
+        &pResult->SubTestMessage[PCD_TEST_INDEX], &pResult->SubTestStateVal[PCD_TEST_INDEX]);
       goto Finish;
     }
   }
@@ -1093,6 +1295,7 @@ RunConfigDiagnosticsDetail(
 
 Finish:
   FREE_HII_POINTER(SysCapInfo.PtrInterleaveFormatsSupported);
+  FREE_HII_POINTER(SysCapInfo.PtrInterleaveSize);
   NVDIMM_EXIT_I64(ReturnCode);
   return ReturnCode;
 }
