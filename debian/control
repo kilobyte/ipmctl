@@ -33,6 +33,8 @@ Architecture: amd64
 Multi-Arch: same
 Depends: ${shlibs:Depends},
          ${misc:Depends}
+Breaks: libipmctl3
+Replaces: libipmctl3
 Description: library for managing Intel Optane DC persistent memory modules
  This package provides an API for the following functionality:
   * Discover PMMs on the platform.
