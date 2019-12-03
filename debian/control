@@ -7,7 +7,6 @@ Build-Depends: debhelper-compat (= 12),
                libndctl-dev,
                pkg-config,
                python3,
-               libsafec-dev,
                asciidoctor
 Standards-Version: 4.4.0
 Homepage: https://github.com/intel/ipmctl
