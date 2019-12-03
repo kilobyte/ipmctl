@@ -27,7 +27,7 @@ Description: utility for configuring and managing Intel Optane DC persistent mem
   * Track performance of PMMs.
   * Debug and troubleshoot PMMs.
 
-Package: libipmctl3
+Package: libipmctl4
 Section: libs
 Architecture: amd64
 Multi-Arch: same
@@ -49,7 +49,7 @@ Package: libipmctl-dev
 Section: libdevel
 Architecture: amd64
 Multi-Arch: same
-Depends: libipmctl3 (=${binary:Version}),
+Depends: libipmctl4 (=${binary:Version}),
          ${misc:Depends}
 Description: library for managing Intel Optane DC persistent memory modules - devel
  This package provides an API for the following functionality:

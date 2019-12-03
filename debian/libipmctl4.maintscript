@@ -1,0 +1,1 @@
+mv_conffile /etc/logrotate.d/ipmctl.conf /etc/logrotate.d/ipmctl 02.00.00.3658~ libipmctl3
