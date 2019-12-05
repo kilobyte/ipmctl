@@ -1,3 +1,13 @@
+ipmctl (02.00.00.3658+ds-1) experimental; urgency=medium
+
+  * New upstream alpha release.
+  * Drop safeclib from B-Deps.
+  * The ipmctl-monitor daemon package is no more.
+  * Bump lib package version for soname to libipmctl4.
+  * Follow upstream renaming of the lib's logfile logrotate config.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Thu, 05 Dec 2019 19:17:03 +0100
+
 ipmctl (02.00.00.3474+ds-2) unstable; urgency=medium
 
   * Rebuild on buildds.
