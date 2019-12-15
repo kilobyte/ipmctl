@@ -1,3 +1,10 @@
+ipmctl (02.00.00.3673+ds-1) experimental; urgency=medium
+
+  * New upstream alpha release.
+  * Include library symbols.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Sun, 15 Dec 2019 03:48:05 +0100
+
 ipmctl (02.00.00.3658+ds-1) experimental; urgency=medium
 
   * New upstream alpha release.
