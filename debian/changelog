@@ -1,3 +1,9 @@
+ipmctl (02.00.00.3673+ds-3) unstable; urgency=medium
+
+  * Purge libipmctl3's conffile, unbreaking logrotate.  Closes: #949850.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Sun, 26 Jan 2020 19:39:29 +0100
+
 ipmctl (02.00.00.3673+ds-2) unstable; urgency=medium
 
   * Upload the beta to unstable.
