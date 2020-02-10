@@ -50,7 +50,7 @@ struct Command CreateGoalCommand =
     {RESERVED_PROPERTY, L"", HELP_TEXT_PERCENT, FALSE, ValueRequired},
     {NS_LABEL_VERSION_PROPERTY, L"", HELP_TEXT_NS_LABEL_VERSION, FALSE, ValueRequired}
   },
-  L"Provision capacity on one or more DIMMs into regions",     //!< help
+  L"Provision capacity on one or more DCPMMs into regions.",     //!< help
   CreateGoal,
   TRUE,                                               //!< enable print control support
 };
@@ -514,11 +514,6 @@ CreateGoal(
     if (!AllDimmsInListAreManageable(pDimms, DimmCount, pDimmIds, DimmIdsCount)){
       ReturnCode = EFI_INVALID_PARAMETER;
       PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_UNMANAGEABLE_DIMM);
-      goto Finish;
-    }
-    if (!AllDimmsInListInSupportedConfig(pDimms, DimmCount, pDimmIds, DimmIdsCount)) {
-      ReturnCode = EFI_INVALID_PARAMETER;
-      PRINTER_SET_MSG(pPrinterCtx, ReturnCode, CLI_ERR_POPULATION_VIOLATION);
       goto Finish;
     }
   }

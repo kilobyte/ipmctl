@@ -22,7 +22,7 @@
 #define MAX_FIRMWARE_SPI_IMAGE_SIZE_B    FIRMWARE_SPI_IMAGE_GEN2_SIZE_B
 #define NO_FW_GIVEN_VERSION_MSG           L"None"
 
-#define UPDATE_FIRMWARE_DATA_PACKET_SIZE  64
+#define UPDATE_FIRMWARE_SMALL_PAYLOAD_DATA_PACKET_SIZE  64
 
 /** Firmware types **/
 #define FW_TYPE_PRODUCTION  29
@@ -42,6 +42,14 @@
 #define FW_UPDATE_STATUS_STAGED_SUCCESS 1
 #define FW_UPDATE_STATUS_LOAD_SUCCESS 2
 #define FW_UPDATE_STATUS_FAILED 3
+
+/** Quiesce required values **/
+#define QUIESCE_NOT_REQUIRED 0
+#define QUIESCE_REQUIRED     1
+
+/** Staged fw activatable values **/
+#define STAGED_FW_NOT_ACTIVATABLE 0
+#define STAGED_FW_ACTIVATABLE 1
 
 #define IN_MB_SIZE          (1 << 20)   //!< Size of the OS mailbox large input payload
 #define OUT_MB_SIZE         (1 << 20)   //!< Size of the OS mailbox large output payload

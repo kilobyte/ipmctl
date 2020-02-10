@@ -32,6 +32,7 @@ typedef enum _NvmStatusCode {
   NVM_ERR_CONFIG_NOT_SUPPORTED_BY_CURRENT_SKU       = 16,   ///< Error: Config Not supproted by current SKU
   NVM_ERR_MANAGEABLE_DIMM_NOT_FOUND                 = 17,   ///< Error: Manageable DIMM not found
   NVM_ERR_NO_USABLE_DIMMS                           = 18,   ///< Error: No usable DIMMs due to all DIMMs being unmanageable, non-functional, or having a population issue
+  NVM_ERR_DIMM_EXCLUDED                             = 19,   ///< Error: DIMM excluded as it is unmanageable, non-functional, or has a population issue.
 
   NVM_ERR_PASSPHRASE_NOT_PROVIDED                   = 30,   ///< Error: Passphrase not provided
   NVM_ERR_NEW_PASSPHRASE_NOT_PROVIDED               = 31,   ///< Error: New passphrase not provided
@@ -45,7 +46,7 @@ typedef enum _NvmStatusCode {
   NVM_ERR_INCONSISTENT_SECURITY_STATE               = 40,   ///< Error: Inconsistent security state
   NVM_ERR_INVALID_PASSPHRASE                        = 41,   ///< Error: Invalid passphrase
   NVM_ERR_SECURITY_USER_PP_COUNT_EXPIRED            = 42,   ///< Error: Security count for user passphrase expired
-  NVM_ERR_RECOVERY_ACCESS_NOT_ENABLED               = 43,   ///< Error: Recovery access not enabled
+  NVM_ERR_SPI_ACCESS_NOT_ENABLED                    = 43,   ///< Error: DCPMM SPI access not enabled
   NVM_ERR_SECURE_ERASE_NAMESPACE_EXISTS             = 44,   ///< Error: Namespace exists - cannot execute request
   NVM_ERR_SECURITY_MASTER_PP_COUNT_EXPIRED          = 45,   ///< Error: Security count for master passphrase expired
 
@@ -70,7 +71,7 @@ typedef enum _NvmStatusCode {
 
   NVM_ERR_MEDIA_DISABLED                            = 90,   ///< Error: Media disabled
 
-  NVM_WARN_GOAL_CREATION_SECURITY_UNLOCKED              = 97,   ///< Warning: Goal will not be applied unless security is disabled prior to UEFI FW provisioning!
+  NVM_WARN_GOAL_CREATION_SECURITY_UNLOCKED              = 97,   ///< Warning: Goal will not be applied unless security is disabled prior to platform firmware (BIOS) provisioning!
   NVM_WARN_REGION_MAX_PM_INTERLEAVE_SETS_EXCEEDED       = 98,   ///< Warning: Interleave Sets cannot exceed MaxPMInterleaveSetsPerDie per Socket due to platform limitation
   NVM_WARN_REGION_MAX_AD_PM_INTERLEAVE_SETS_EXCEEDED    = 99,   ///< Warning: Interleave Sets cannot exceed MaxPMInterleaveSetsPerDie per Socket due to platform limitation for AD Interleaved mode
   NVM_WARN_REGION_MAX_AD_NI_PM_INTERLEAVE_SETS_EXCEEDED = 100,  ///< Warning: Interleave Sets cannot exceed MaxPMInterleaveSetsPerDie per Socket due to platform limitation for AD Non-Interleaved mode

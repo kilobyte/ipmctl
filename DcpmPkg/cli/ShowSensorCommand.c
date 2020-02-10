@@ -112,7 +112,7 @@ struct Command ShowSensorCommand =
   {
     {L"", L"", L"", FALSE, ValueOptional},
   },                                                                  //!< properties
-  L"Show health statistics ",                                         //!< help
+  L"Show health statistics.",                                         //!< help
   ShowSensor,
   TRUE,                                                               //!< enable print control support
 };
@@ -202,8 +202,6 @@ ShowSensor(
   };
   UINT32 SensorsNum = ARRAY_SIZE(Sensors);
   CHAR16 DimmStr[MAX_DIMM_UID_LENGTH];
-  UINT32 UninitializedDimmCount = 0;
-  UINT32 InitializedDimmCount = 0;
 
   NVDIMM_ENTRY();
 
@@ -249,8 +247,7 @@ ShowSensor(
   }
 
   // Populate the list of DIMM_INFO structures with relevant information
-  ReturnCode = GetAllDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmsCount,
-      &InitializedDimmCount, &UninitializedDimmCount);
+  ReturnCode = GetAllDimmList(pNvmDimmConfigProtocol, pCmd, DIMM_INFO_CATEGORY_NONE, &pDimms, &DimmsCount);
   if (EFI_ERROR(ReturnCode)) {
     if (ReturnCode == EFI_NOT_FOUND) {
       PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_INFO_NO_FUNCTIONAL_DIMMS);

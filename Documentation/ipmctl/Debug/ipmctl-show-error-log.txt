@@ -13,7 +13,9 @@ ipmctl-show-error-log - Shows thermal or media errors on the specified DCPMMs
 SYNOPSIS
 --------
 [verse]
+____
 ipmctl show [OPTIONS] -error (Thermal|Media) [TARGETS] [PROPERTIES]
+____
 
 DESCRIPTION
 -----------
@@ -21,6 +23,10 @@ Shows thermal or media errors on the specified DCPMMs.
 
 OPTIONS
 -------
+-a::
+-all::
+  Shows all attributes.
+
 -h::
 -help::
   Displays help for the command.
@@ -50,8 +56,8 @@ endif::os_build[]
 TARGETS
 -------
 -dimm [DimmIDs]::
-  Filter output to events on a specific DCPMM by supplying the dimm target and
-  one DCPMM identifier.
+  Filter output to specific DCPMMs by optionally supplying one or more
+  comma-separated DCPMM identifiers. The default is to include all manageable DCPMMs.
 
 PROPERTIES
 ----------
@@ -74,35 +80,44 @@ EXAMPLES
 --------
 Show all high thermal error log entries
 [verse]
+____
 ipmctl show -error Thermal Level=High
+____
 
 Show all low media error log entries
 [verse]
+____
 ipmctl show -error Media Level=Low
+____
 
 LIMITATIONS
 -----------
 To successfully execute this command, the specified DCPMM(s) must be manageable
-by the host software.
+by the host software. In addition, for DCPMMs with firmware version 2.3 and above,
+errors due to AIT operations are no longer exposed.
 
 RETURN DATA
 -----------
 Prints errors of the specified type for the specified DCPMMs. If no errors are found, the
 following message will be printed:
 [verse]
+____
 No errors found on DIMM (DimmID)
+____
 
 SAMPLE OUTPUT
 -------------
 [verse]
-Thermal Error occurred on Dimm (DimmID):
-System Timestamp : 1527273299
-Temperature : 88C
-Reported : 4 - Critical
-Temperature Type : 0 - Media Temperature
-Sequence Number : 1
+____
+ DimmID | System Timestamp    | Error Type
+=============================================================
+ 0x0001 | 01/01/1970 00:00:20 | 0x04 - Locked/Illegal Access
+ 0x0001 | 01/01/1970 00:00:21 | 0x04 - Locked/Illegal Access
+Show error executed successfully
+____
 
 [verse]
+____
 Media Error occurred on Dimm (DimmID):
 System Timestamp : 1527266471
 DPA : 0x000014c0
@@ -112,3 +127,4 @@ Error Type : 4 - Locked/Illegal Access
 Error Flags : DPA Valid
 Transaction Type : 11 - CSR Write
 Sequence Number : 2
+____

@@ -216,7 +216,7 @@ typedef struct _CMD_DISPLAY_OPTIONS {
 
 #define CLI_CREATE_GOAL_PROMPT_VOLATILE                       L"The requested goal was adjusted more than 10%% to find a valid configuration."
 #define CLI_CREATE_GOAL_PROMPT_HEADER                         L"The following configuration will be applied:"
-#define CLI_WARN_GOAL_CREATION_SECURITY_UNLOCKED              L"WARNING: Goal will not be applied unless security is disabled prior to UEFI FW provisioning!"
+#define CLI_WARN_GOAL_CREATION_SECURITY_UNLOCKED              L"WARNING: Goal will not be applied unless security is disabled prior to platform firmware (BIOS) provisioning!"
 #define CLI_ERR_CREATE_GOAL_AUTO_PROV_ENABLED                 L"Error: Automatic provisioning is enabled. Please disable to manually create goals."
 
 #define CLI_CREATE_NAMESPACE_PROMPT_ROUNDING_CAPACITY         L"The requested namespace capacity %lld B will be rounded up to %lld B to align properly."
@@ -259,6 +259,7 @@ typedef struct _CMD_DISPLAY_OPTIONS {
 #define CLI_ERR_FAILED_TO_READ_FILE                           L"Failed to read pbr file."
 #define CLI_ERR_FAILED_TO_SET_SESSION_BUFFER                  L"Failed to set session buffer."
 #define CLI_ERR_FAILED_TO_RESET_SESSION                       L"Failed to reset the session."
+#define CLI_ERR_CMD_FAILED_NOT_ADMIN                          L"Error: The ipmctl command you have attempted to execute requires administrator privileges."
 
 #define ERROR_CHECKING_MIXED_SKU    L"Error: Could not check if SKU is mixed."
 #define WARNING_DIMMS_SKU_MIXED     L"Warning: Mixed SKU detected. Driver functionalities limited.\n"
@@ -302,7 +303,7 @@ GetDimmList(
   );
 
 /**
-  Retrieve a populated array and count of all DCPMMs (initialized and uninitialized)
+  Retrieve a populated array and count of all DCPMMs (functional and non-functional)
   in the system. The caller is responsible for freeing the returned array
 
   @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance.
@@ -311,13 +312,8 @@ GetDimmList(
   @param[in] dimmInfoCategories Categories that will be populated in
              the DIMM_INFO struct.
   @param[out] ppDimms A pointer to a combined DCPMM list (initialized and
-              uninitialized) from NFIT. The initialized DIMM_INFO entries
-              occur first, then the uninitialized DIMM_INFO entries. So
-              0 to pInitializedDimmCount-1 = initialized dimms, and
-              pInitializedDimmCount to pDimmCount - 1 contain the uninitialized entries
+              uninitialized) from NFIT.
   @param[out] pDimmCount A pointer to the total number of DCPMMs found in NFIT.
-  @param[out] pInitializedDimmCount A pointer to the number of initialized DCPMMs in ppDimms
-  @param[out] pUninitializedDimmCount A pointer to the number of uninitialized DCPMMs in ppDimms.
 
   @retval EFI_SUCCESS  the dimm list was returned properly
   @retval EFI_INVALID_PARAMETER one or more parameters are NULL
@@ -330,9 +326,7 @@ GetAllDimmList(
   IN     struct Command *pCmd,
   IN     DIMM_INFO_CATEGORIES dimmInfoCategories,
   OUT DIMM_INFO **ppDimms,
-  OUT UINT32 *pDimmCount,
-  OUT UINT32 *pInitializedDimmCount,
-  OUT UINT32 *pUninitializedDimmCount
+  OUT UINT32 *pDimmCount
 );
 
 /**
@@ -531,27 +525,6 @@ CheckAllAndDisplayOptions(
   IN     UINT32 AllowedDisplayValuesCount,
   OUT CMD_DISPLAY_OPTIONS *pDispOptions
 );
-
-/**
-  Display command status with specified command message.
-  Function displays per DIMM status if such exists and
-  summarizing status for whole command. Memory allocated
-  for status message and command status is freed after
-  status is displayed.
-
-  @param[in] pStatusMessage String with command information
-  @param[in] pStatusPreposition String with preposition
-  @param[in] pCommandStatus Command status data
-
-  @retval EFI_INVALID_PARAMETER pCommandStatus is NULL
-  @retval EFI_SUCCESS All Ok
-**/
-EFI_STATUS
-DisplayCommandStatus (
-  IN     CONST CHAR16 *pStatusMessage,
-  IN     CONST CHAR16 *pStatusPreposition,
-  IN     COMMAND_STATUS *pCommandStatus
-  );
 
 /**
   Retrieve property by name and assign its value to UINT64.

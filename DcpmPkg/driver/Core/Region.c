@@ -494,7 +494,10 @@ InitializeDimmRegionFromNfit(
 
     (*ppDimmRegion)->pDimm = pDimm;
 
-    ASSERT(pDimm->ISsNfitNum < MAX_IS_PER_DIMM);
+    if (MAX_IS_PER_DIMM <= pDimm->ISsNfitNum) {
+      ReturnCode = EFI_OUT_OF_RESOURCES;
+      goto Finish;
+    }
     pDimm->pISsNfit[pDimm->ISsNfitNum] = *ppCurrentIS;
     pDimm->ISsNfitNum++;
 
@@ -514,6 +517,7 @@ Finish:
 /**
   Allocate and initialize the dimm region by using Interleave Information table from Platform Config Data
 
+  @param[in] pCurDimm the DIMM from which Interleave Information table was retrieved
   @param[in] pDimmList Head of the list of all Intel NVM Dimm in the system
   @param[in] pISList List of interleaveset formed so far
   @param[in] pIdentificationInfoTable Identification Information table
@@ -530,6 +534,7 @@ Finish:
 **/
 EFI_STATUS
 InitializeDimmRegion(
+  IN     DIMM *pCurDimm,
 	IN     LIST_ENTRY *pDimmList,
 	IN     LIST_ENTRY *pISList,
 	IN     VOID *pIdentificationInfoTable,
@@ -558,8 +563,8 @@ InitializeDimmRegion(
 
 	ZeroMem(&DimmUidInPcd, sizeof(DimmUidInPcd));
 
-	if (pDimmList == NULL || pISList == NULL || pIdentificationInfoTable == NULL || pInterleaveInfoTable == NULL ||
-		pRegionId == NULL || ppDimmRegion == NULL || ppNewIS == NULL || pISAlreadyExists == NULL) {
+	if (pCurDimm == NULL || pDimmList == NULL || pISList == NULL || pIdentificationInfoTable == NULL ||
+    pInterleaveInfoTable == NULL || pRegionId == NULL || ppDimmRegion == NULL || ppNewIS == NULL || pISAlreadyExists == NULL) {
 		Rc = EFI_INVALID_PARAMETER;
 		goto Finish;
 	}
@@ -656,13 +661,24 @@ InitializeDimmRegion(
 
     (*ppDimmRegion)->pDimm = pDimm;
 
-    ASSERT(pDimm->ISsNum < MAX_IS_PER_DIMM);
-    pDimm->pISs[pDimm->ISsNum] = *ppNewIS;
-    pDimm->ISsNum++;
+    /**
+      Insert only mapped/healthy regions into pDimm->pISs array.
+      PCD is not updated by BIOS on non-functional DIMMS. So
+      non-functional DIMMs need to be excluded to avoid false
+      indication of being in configured state.
+    **/
+    if (pCurDimm->Configured && !pCurDimm->NonFunctional) {
+      if (MAX_IS_PER_DIMM <= pDimm->ISsNum) {
+        Rc = EFI_OUT_OF_RESOURCES;
+        goto Finish;
+      }
+      pDimm->pISs[pDimm->ISsNum] = *ppNewIS;
+      pDimm->ISsNum++;
+    }
 
-		(*ppDimmRegion)->Signature = DIMM_REGION_SIGNATURE;
-		(*ppDimmRegion)->PartitionOffset = PartitionOffset;
-		(*ppDimmRegion)->PartitionSize = PartitionSize;
+    (*ppDimmRegion)->Signature = DIMM_REGION_SIGNATURE;
+    (*ppDimmRegion)->PartitionOffset = PartitionOffset;
+    (*ppDimmRegion)->PartitionSize = PartitionSize;
 	}
 Finish:
   NVDIMM_EXIT_I64(Rc);
@@ -740,7 +756,10 @@ RetrieveISsFromNfit(
       InsertTailList(&pIS->DimmRegionList, &pNewDimmRegion->DimmRegionNode);
 
       IsRegionIndex = pNewDimmRegion->pDimm->IsRegionsNfitNum;
-      ASSERT(IsRegionIndex < MAX_IS_PER_DIMM);
+      if (MAX_IS_PER_DIMM <= IsRegionIndex) {
+        ReturnCode = EFI_OUT_OF_RESOURCES;
+        goto Finish;
+      }
       pNewDimmRegion->pDimm->pIsRegionsNfit[IsRegionIndex] = pDimmRegion;
       pNewDimmRegion->pDimm->IsRegionsNfitNum = IsRegionIndex + 1;
 
@@ -835,7 +854,6 @@ RetrieveISsFromPlatformConfigData(
   CONFIG_MANAGEMENT_ATTRIBUTES_EXTENSION_TABLE *pConfigManagementAttributesInfo = NULL;
   PCAT_TABLE_HEADER *pCurPcatTable = NULL;
   UINT32 SizeOfPcatTables = 0;
-  UINT32 Index = 0;
   UINT16 RegionId = 1; // region id  used internally to distinguish different regions. Will be used when creating namespace.
 
   if (pDimmList == NULL || pISList == NULL) {
@@ -896,6 +914,7 @@ RetrieveISsFromPlatformConfigData(
     switch (pPcdCurrentConf->ConfigStatus) {
       case DIMM_CONFIG_SUCCESS:
       case DIMM_CONFIG_OLD_CONFIG_USED:
+      case DIMM_CONFIG_PM_MAPPED_VM_POPULATION_ISSUE:
         pDimm->Configured = TRUE;
         break;
       default:
@@ -945,12 +964,6 @@ RetrieveISsFromPlatformConfigData(
           pCurPcatTable->Type);
         ReturnCode = EFI_DEVICE_ERROR;
         break;
-      }
-    }
-
-    if (pDimm->ConfigStatus != DIMM_CONFIG_SUCCESS && pDimm->ConfigStatus != DIMM_CONFIG_OLD_CONFIG_USED) {
-      for (Index = 0; Index < pDimm->ISsNum; Index++) {
-        pDimm->pISs[Index]->State = SetISStateWithPriority(pDimm->pISs[Index]->State, IS_STATE_CONFIG_INACTIVE);
       }
     }
 
@@ -1019,7 +1032,7 @@ RetrieveISFromInterleaveInformationTable(
   }
 
     for (Index = 0; Index < NumOfDimmsInInterleaveSet; Index++) {
-      Rc = InitializeDimmRegion(pDimmList, pISList, pCurrentIdentInfo, pInterleaveInfoTable, PcdCurrentConfRevision, pRegionId, &pIS, &pDimmRegion, &ISAlreadyExists);
+      Rc = InitializeDimmRegion(pDimm, pDimmList, pISList, pCurrentIdentInfo, pInterleaveInfoTable, PcdCurrentConfRevision, pRegionId, &pIS, &pDimmRegion, &ISAlreadyExists);
       // pIS will be null when the IS already exist or when there is no memory to do malloc. In either case go to Finish.
       if (ISAlreadyExists || pIS == NULL) {
         goto Finish;
@@ -1035,9 +1048,21 @@ RetrieveISFromInterleaveInformationTable(
           InsertTailList(&pIS->DimmRegionList, &pDimmRegion->DimmRegionNode);
 
           IsRegionIndex = pDimmRegion->pDimm->IsRegionsNum;
-          ASSERT(IsRegionIndex < MAX_IS_PER_DIMM);
-          pDimmRegion->pDimm->pIsRegions[IsRegionIndex] = pDimmRegion;
-          pDimmRegion->pDimm->IsRegionsNum = IsRegionIndex + 1;
+
+          /**
+            Insert only mapped/healthy DimmRegions into pDimm->pIsRegions array.
+            PCD is not updated by BIOS on non-functional DIMMS. So
+            non-functional DIMMs need to be excluded to avoid false
+            indication of being in configured state.
+          **/
+          if (pDimm->Configured && !pDimm->NonFunctional) {
+            if (MAX_IS_PER_DIMM <= IsRegionIndex) {
+              Rc = EFI_OUT_OF_RESOURCES;
+              goto Finish;
+            }
+            pDimmRegion->pDimm->pIsRegions[IsRegionIndex] = pDimmRegion;
+            pDimmRegion->pDimm->IsRegionsNum = IsRegionIndex + 1;
+          }
 
           pIS->Size += pDimmRegion->PartitionSize;
         }
@@ -1048,6 +1073,11 @@ RetrieveISFromInterleaveInformationTable(
         pCurrentIdentInfo = (UINT8 *)pCurrentIdentInfo + sizeof(NVDIMM_IDENTIFICATION_INFORMATION3);
       }
     }
+
+    if (pIS != NULL && !pDimm->Configured) {
+      pIS->State = SetISStateWithPriority(pIS->State, IS_STATE_CONFIG_INACTIVE);
+    }
+
     Rc = RetrieveAppDirectMappingFromNfit(pFitHead, pIS);
     if (pIS != NULL) {
       if (EFI_ERROR(Rc)) {
@@ -1810,7 +1840,12 @@ VerifyCreatingSupportedRegionConfigs(
       pDimm = DIMM_FROM_NODE(pDimmNode);
 
       if (Socket == pDimm->SocketId) {
-        if (!IsDimmManageable(pDimm) || !IsDimmInSupportedConfig(pDimm) || pDimm->NonFunctional) {
+        // Unmanageable and non-functional DCPMMs are not included in goal requests
+        if (!IsDimmManageable(pDimm) || pDimm->NonFunctional) {
+          continue;
+        }
+        // Population Violation DCPMMs are not included in goal requests except ADx1 100%
+        if (IsDimmInPopulationViolation(pDimm) && !(PM_TYPE_AD_NI == PersistentMemType && 0 == VolatilePercent)) {
           continue;
         }
 
@@ -1843,9 +1878,12 @@ VerifyCreatingSupportedRegionConfigs(
     /** Get a number of specified configured and unconfigured DIMMs on a given socket **/
     for (Index = 0; Index < DimmsNum; Index++) {
       if (Socket == pDimms[Index]->SocketId) {
-        if (!IsDimmManageable(pDimms[Index]) ||
-            !IsDimmInSupportedConfig(pDimms[Index]) ||
-            pDimms[Index]->NonFunctional) {
+        // Unmanageable and non-functional DCPMMs are not included in goal requests
+        if (!IsDimmManageable(pDimms[Index]) || pDimms[Index]->NonFunctional) {
+          continue;
+        }
+        // Population Violation DCPMMs are not included in goal requests except ADx1 100%
+        if (IsDimmInPopulationViolation(pDimms[Index]) && !(PM_TYPE_AD_NI == PersistentMemType && 0 == VolatilePercent)) {
           continue;
         }
 
@@ -2084,7 +2122,8 @@ RetrieveGoalConfigsFromPlatformConfigData(
       continue;
     }
     else if (pPcdConfOutput->ValidationStatus == CONFIG_OUTPUT_STATUS_CPU_MAX_MEMORY_LIMIT_VIOLATION ||
-             pPcdConfOutput->ValidationStatus == CONFIG_OUTPUT_STATUS_NM_FM_RATIO_UNSUPPORTED) {
+             pPcdConfOutput->ValidationStatus == CONFIG_OUTPUT_STATUS_NM_FM_RATIO_UNSUPPORTED ||
+             pPcdConfOutput->ValidationStatus == CONFIG_OUTPUT_STATUS_POPULATION_ISSUE) {
       pDimm->GoalConfigStatus = GOAL_CONFIG_STATUS_BAD_REQUEST;
     }
 
@@ -2500,6 +2539,9 @@ MapRegionsGoal(
   ACPI_REVISION PcatRevision;
   BOOLEAN WholeSocket = FALSE;
   MAX_PMINTERLEAVE_SETS MaxPMInterleaveSets;
+  LIST_ENTRY *pRegionList = NULL;
+  LIST_ENTRY *pRegionNode = NULL;
+  NVM_IS *pRegion = NULL;
 
   NVDIMM_ENTRY();
 
@@ -2553,16 +2595,19 @@ MapRegionsGoal(
       This can happen when adding new dimms to the system with previously configured regions.
   **/
   if (0x0 == AvailableISIndex) {
+
+    ReturnCode = GetRegionList(&pRegionList, FALSE);
+    if (EFI_ERROR(ReturnCode)) {
+      NVDIMM_DBG("Failed to retrieve the region list.");
+      goto Finish;
+    }
+
     /** Get the largest interleave set index in existing regions on DIMMs. **/
-    LIST_FOR_EACH(pDimmNode, &gNvmDimmData->PMEMDev.Dimms) {
-      pDimm = DIMM_FROM_NODE(pDimmNode);
-      if (!IsDimmManageable(pDimm)) {
-        continue;
-      }
-      for (Index = 0; Index < MAX_IS_PER_DIMM; Index++) {
-        if (NULL != pDimm->pISs[Index] && pDimm->pISs[Index]->InterleaveSetIndex > AvailableISIndex) {
-          AvailableISIndex = pDimm->pISs[Index]->InterleaveSetIndex;
-        }
+    LIST_FOR_EACH(pRegionNode, pRegionList) {
+      pRegion = IS_FROM_NODE(pRegionNode);
+
+      if (pRegion->InterleaveSetIndex > AvailableISIndex) {
+        AvailableISIndex = pRegion->InterleaveSetIndex;
       }
     }
   }
@@ -3489,17 +3534,18 @@ ReduceCapacityForSocketSKU(
   EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
   BOOLEAN WholeSocket = FALSE;
    UINT64 TotalRequestedMemoryOnSocket = 0;
-  VOID *pSocketSkuInfoTable = NULL;
   BOOLEAN CurrentConfigurationMemoryMode = FALSE;
   BOOLEAN NewConfigurationMemoryMode = FALSE;
   DIMM *pDimm = NULL;
   LIST_ENTRY *pDimmNode = NULL;
   UINT32 Index = 0;
   UINT64 ReduceCapacity = 0;
-  ACPI_REVISION PcatRevision;
   UINT64 MappedMemorySizeLimit = 0;
-  UINT64 TotalMemorySizeMappedToSpa = 0;
-  UINT64 CachingMemorySize = 0;
+  UINT64 DDRRawCapacity = 0;
+  UINT64 DDRCacheCapacity = 0;
+  UINT64 DDRVolatileCapacity = 0;
+  ACPI_REVISION PcatRevision;
+  VOID* pSocketSkuInfoTable = NULL;
 
   NVDIMM_ENTRY();
 
@@ -3529,15 +3575,18 @@ ReduceCapacityForSocketSKU(
   if (IS_ACPI_REV_MAJ_0_MIN_1_OR_MIN_2(PcatRevision)) {
     SOCKET_SKU_INFO_TABLE *pSocketSkuInfo = (SOCKET_SKU_INFO_TABLE *)pSocketSkuInfoTable;
     MappedMemorySizeLimit = pSocketSkuInfo->MappedMemorySizeLimit;
-    TotalMemorySizeMappedToSpa = pSocketSkuInfo->TotalMemorySizeMappedToSpa;
-    CachingMemorySize = pSocketSkuInfo->CachingMemorySize;
   }
   else if (IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(PcatRevision)) {
     DIE_SKU_INFO_TABLE *pDieSkuInfo = (DIE_SKU_INFO_TABLE *)pSocketSkuInfoTable;
     MappedMemorySizeLimit = pDieSkuInfo->MappedMemorySizeLimit;
-    TotalMemorySizeMappedToSpa = pDieSkuInfo->TotalMemorySizeMappedToSpa;
-    CachingMemorySize = pDieSkuInfo->CachingMemorySize;
   }
+
+  ReturnCode = GetDDRCapacities((UINT16)Socket, &DDRRawCapacity, &DDRCacheCapacity, &DDRVolatileCapacity);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Could not retrieve DDR capacities");
+    goto Finish;
+  }
+
 
   // If no PCAT tables exist for a socket then that socket will not be reduced.
   if (ReturnCode == EFI_NOT_FOUND) {
@@ -3594,43 +3643,20 @@ ReduceCapacityForSocketSKU(
     TotalRequestedMemoryOnSocket += DimmsAsymmetricalOnSocket[Index].RegionSize;
   }
 
-  // If we configure entire socket and we are moving from 1LM+AD to 1LM+AD
-  // we need to account for the VolatileMemory in the new configuration
-  if (!CurrentConfigurationMemoryMode && !NewConfigurationMemoryMode) {
+  // Adding full DDR4 capacity only if new config will contain 1LM
+  if (!NewConfigurationMemoryMode) {
+    TotalRequestedMemoryOnSocket += DDRRawCapacity;
+  }
 
-    // Add in what is currently mapped and take out old AD to get the amount of 1LM VM
-    TotalRequestedMemoryOnSocket += TotalMemorySizeMappedToSpa;
-
-    for (Index = 0; Index < NumDimmsOnSocket; Index++) {
-      if (TRUE == pDimmsOnSocket[Index]->Configured) {
-        if (TotalRequestedMemoryOnSocket < pDimmsOnSocket[Index]->MappedPersistentCapacity) {
-          NVDIMM_DBG("Mapping negative capacity");
-          ResetCmdStatus(pCommandStatus, NVM_ERR_OPERATION_FAILED);
-          ReturnCode = EFI_UNSUPPORTED;
-          goto Finish;
-        }
-
-        TotalRequestedMemoryOnSocket -= pDimmsOnSocket[Index]->MappedPersistentCapacity;
-      }
-    }
-
-    // if we will be removing all MemoryMode from the socket we need to add in the DDR4
-    // volatile memory that was being used as cache
-  } else if (CurrentConfigurationMemoryMode && !NewConfigurationMemoryMode && WholeSocket) {
-
-    TotalRequestedMemoryOnSocket += CachingMemorySize;
-
-    // when adding a new dimm to a configuration the BIOS will configure it as MemoryMode,
-    // since this dimm is unconfigured it can be configured by itself and a corner case exists
-    // where we can go from 2LM -> 1LM by only changing a single dimm.
-  } else if (CurrentConfigurationMemoryMode && !NewConfigurationMemoryMode && !WholeSocket) {
-
-    TotalRequestedMemoryOnSocket += CachingMemorySize;
+  // when adding a new dimm to a configuration the BIOS will configure it as MemoryMode,
+  // since this dimm is unconfigured it can be configured by itself and a corner case exists
+  // where we can go from 2LM -> 1LM by only changing a single dimm.
+  if (CurrentConfigurationMemoryMode && !NewConfigurationMemoryMode && !WholeSocket) {
 
     LIST_FOR_EACH(pDimmNode, &gNvmDimmData->PMEMDev.Dimms) {
       pDimm = DIMM_FROM_NODE(pDimmNode);
 
-      if (Socket == pDimm->SocketId && pDimm->Configured && IsDimmManageable(pDimm)) {
+      if (Socket == pDimm->SocketId && !IsPointerInArray((VOID **)pDimmsOnSocket, NumDimmsOnSocket, pDimm) && IsDimmManageable(pDimm)) {
         TotalRequestedMemoryOnSocket += pDimm->MappedPersistentCapacity;
       }
     }
@@ -3642,7 +3668,7 @@ ReduceCapacityForSocketSKU(
     LIST_FOR_EACH(pDimmNode, &gNvmDimmData->PMEMDev.Dimms) {
       pDimm = DIMM_FROM_NODE(pDimmNode);
 
-      if (Socket == pDimm->SocketId && pDimm->Configured && IsDimmManageable(pDimm)) {
+      if (Socket == pDimm->SocketId && !IsPointerInArray((VOID **)pDimmsOnSocket, NumDimmsOnSocket, pDimm) && IsDimmManageable(pDimm)) {
         TotalRequestedMemoryOnSocket += pDimm->MappedPersistentCapacity;
         TotalRequestedMemoryOnSocket += pDimm->MappedVolatileCapacity;
       }
@@ -3783,7 +3809,7 @@ ApplyGoalConfigsToDimms(
   **/
   LIST_FOR_EACH(pDimmNode, pDimmList) {
     pDimm = DIMM_FROM_NODE(pDimmNode);
-    if (!IsDimmManageable(pDimm)||!IsDimmInSupportedConfig(pDimm)) {
+    if (!IsDimmManageable(pDimm)) {
       continue;
     }
     if (pDimm->PcdSynced) {
@@ -3803,10 +3829,10 @@ ApplyGoalConfigsToDimms(
   **/
   LIST_FOR_EACH(pDimmNode, pDimmList) {
     pDimm = DIMM_FROM_NODE(pDimmNode);
-    if (!IsDimmManageable(pDimm)) {
+    if (!IsDimmManageable(pDimm) || !pDimm->RegionsGoalConfig) {
       continue;
     }
-    if (pDimm->PcdSynced || !pDimm->RegionsGoalConfig) {
+    if (pDimm->PcdSynced) {
       continue;
     }
 
@@ -4645,7 +4671,7 @@ VerifyDeletingSupportedRegionConfigs(
     LIST_FOR_EACH(pDimmNode, &gNvmDimmData->PMEMDev.Dimms) {
       pDimm = DIMM_FROM_NODE(pDimmNode);
 
-      if (!IsDimmManageable(pDimm) || !IsDimmInSupportedConfig(pDimm)){
+      if (!IsDimmManageable(pDimm)){
         continue;
       }
 

@@ -122,7 +122,7 @@ extern EFI_GUID gNvmDimmPbrProtocolGuid;
   Each of those steps must be done at least one, so the minimum number of packets will be 3.
 **/
 #define FW_UPDATE_SP_MINIMUM_PACKETS      3
-#define FW_UPDATE_SP_MAXIMUM_PACKETS      MAX_FIRMWARE_IMAGE_SIZE_B / UPDATE_FIRMWARE_DATA_PACKET_SIZE
+#define FW_UPDATE_SP_MAXIMUM_PACKETS      MAX_FIRMWARE_IMAGE_SIZE_B / UPDATE_FIRMWARE_SMALL_PAYLOAD_DATA_PACKET_SIZE
 
 #pragma pack(push)
 #pragma pack(1)
@@ -131,7 +131,7 @@ typedef struct {
     UINT16 PacketNumber : 14;
     UINT8 PayloadTypeSelector;
     UINT8 Reserved;
-    UINT8 Data[UPDATE_FIRMWARE_DATA_PACKET_SIZE];
+    UINT8 Data[UPDATE_FIRMWARE_SMALL_PAYLOAD_DATA_PACKET_SIZE];
     UINT8 Reserved1[60];
 } FW_SMALL_PAYLOAD_UPDATE_PACKET;
 #pragma pack(pop)
@@ -485,52 +485,27 @@ ModifyPcdConfig(
 );
 
 /**
-  Update firmware or training data of a specified NVDIMM
+  Flash new SPI image to a specified DCPMM
 
-  @param[in] DimmPid Dimm ID of a NVDIMM on which update is to be performed
-  @param[in] pImageBuffer is a pointer to FW image
-  @param[in] ImageBufferSize is Image size in bytes
-  @param[in] Force flag suppresses warning message in case of attempted downgrade
-
-  @param[out] pNvmStatus NVM status code
-
-  @remarks If Address Range Scrub (ARS) is in progress on any target DIMM,
-  an attempt will be made to abort ARS and the proceed with the firmware update.
-
-  @remarks A reboot is required to activate the updated firmware image and is
-  recommended to ensure ARS runs to completion.
-
-  @retval EFI_SUCCESS Success
-  @retval ERROR any non-zero value is an error (more details in Base.h)
-**/
-EFI_STATUS
-EFIAPI
-UpdateDimmFw(
-  IN     UINT16 DimmPid,
-  IN     CONST VOID *pImageBuffer,
-  IN     UINT64 ImageBufferSize,
-  IN     BOOLEAN Force,
-     OUT NVM_STATUS *pNvmStatus
-  );
-
-/**
-  Recover firmware of a specified NVDIMM
-
-  @param[in] DimmHandle Dimm ID of a NVDIMM on which recovery is to be performed
-  @param[in] pImageBuffer is a pointer to FW image
-  @param[in] ImageBufferSize is Image size in bytes
+  @param[in] DimmPid Dimm ID of a DCPMM on which recovery is to be performed
+  @param[in] pNewSpiImageBuffer is a pointer to new SPI FW image
+  @param[in] ImageBufferSize is SPI image size in bytes
 
   @param[out] pNvmStatus NVM error code
   @param[out] pCommandStatus  command status list
 
-  @retval EFI_SUCCESS Success
-  @retval ERROR any non-zero value is an error (more details in Base.h)
+  @retval EFI_INVALID_PARAMETER One of parameters provided is not acceptable
+  @retval EFI_NOT_FOUND there is no DCPMM with such Pid
+  @retval EFI_DEVICE_ERROR Unable to communicate with Dimm SPI
+  @retval EFI_OUT_OF_RESOURCES Unable to allocate memory for a data structure
+  @retval EFI_ACCESS_DENIED When SPI access is not unlocked
+  @retval EFI_SUCCESS Update has completed successfully
 **/
 EFI_STATUS
 EFIAPI
 RecoverDimmFw(
   IN     UINT32 DimmHandle,
-  IN     CONST VOID *pImageBuffer,
+  IN     CONST VOID *pNewSpiImageBuffer,
   IN     UINT64 ImageBufferSize,
   IN     CHAR16 *pWorkingDirectory OPTIONAL,
      OUT NVM_STATUS *pNvmStatus,
@@ -1253,6 +1228,7 @@ GetCapacities(
 /**
   Retrieve and calculate DDR cache and memory capacity to return.
 
+  @param[in]  SocketId Socket Id for SKU limit calculations, value 0xFFFF indicate include all sockets values accumulated
   @param[out] pDDRRawCapacity Pointer to value of the total cache capacity
   @param[out] pDDRCacheCapacity Pointer to value of the DDR cache capacity
   @param[out] pDDRVolatileCapacity Pointer to value of the DDR memory capacity
@@ -1264,6 +1240,7 @@ GetCapacities(
 EFI_STATUS
 EFIAPI
 GetDDRCapacities(
+  IN     UINT16 SocketId,
   OUT UINT64 *pDDRRawCapacity,
   OUT UINT64 *pDDRCacheCapacity,
   OUT UINT64 *pDDRVolatileCapacity
@@ -1273,6 +1250,7 @@ GetDDRCapacities(
   Calculate the total size of available memory in the DIMMs
   according to the smbios and return the result.
 
+  @param[in]  SocketId Socket Id for SKU limit calculations, value 0xFFFF indicate include all sockets values accumulated.
   @param[out] pResult Pointer to total memory size.
 
   @retval EFI_INVALID_PARAMETER Passed NULL argument
@@ -1281,6 +1259,7 @@ GetDDRCapacities(
 **/
 EFI_STATUS
 GetDDRPhysicalSize(
+  IN     UINT16 SocketId,
   OUT UINT64 *pResult
 );
 
@@ -1463,35 +1442,33 @@ GetBSRAndBootStatusBitMask(
   If DIMM Ids were provided then check if those DIMMs exist.
   If there are duplicate DIMM/socket Ids then report error.
   If specified DIMMs count is 0 then take all Manageable DIMMs.
-  Update CommandStatus structure at the end.
+  Update CommandStatus structure with any warnings/errors found.
 
   @param[in] DimmIds An array of DIMM Ids
   @param[in] DimmIdsCount Number of items in array of DIMM Ids
   @param[in] SocketIds An array of Socket Ids
   @param[in] SocketIdsCount Number of items in array of Socket Ids
-  @param[in] UninitializedDimms If true only uninitialized dimms are verified, if false only Initialized
-  @param[in] CheckSupportedConfigDimms If true, include dimms in unmapped set of dimms (non-POR) in
-                                       returned dimm list. If false, skip these dimms from returned list
+  @param[in] RequireDcpmmsBitfield Indicate what requirements should be validated on
+  the list of DCPMMs discovered.
   @param[out] pDimms Output array of pointers to verified dimms
   @param[out] pDimmsNum Number of items in array of pointers to dimms
   @param[out] pCommandStatus Pointer to command status structure
 
-  @retval EFI_SUCCESS Success
-  @retval ERROR any non-zero value is an error (more details in Base.h)
-**/
+  @retval EFI_INVALID_PARAMETER Problem with getting specified DIMMs
+  @retval EFI_SUCCESS All Ok
+ **/
 EFI_STATUS
 EFIAPI
-VerifyTargetDimms(
+VerifyTargetDimms (
   IN     UINT16 DimmIds[]      OPTIONAL,
   IN     UINT32 DimmIdsCount,
   IN     UINT16 SocketIds[]    OPTIONAL,
   IN     UINT32 SocketIdsCount,
-  IN     BOOLEAN UninitializedDimms,
-  IN     BOOLEAN CheckSupportedConfigDimms,
-  OUT DIMM *pDimms[MAX_DIMMS],
-  OUT UINT32 *pDimmsNum,
-  OUT COMMAND_STATUS *pCommandStatus
-);
+  IN     REQUIRE_DCPMMS RequireDcpmmsBitfield,
+     OUT DIMM *pDimms[MAX_DIMMS],
+     OUT UINT32 *pDimmsNum,
+     OUT COMMAND_STATUS *pCommandStatus
+  );
 
 /**
   Verify target DIMM IDs in list are available for SPI Flash.

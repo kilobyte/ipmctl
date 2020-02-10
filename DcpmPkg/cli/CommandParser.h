@@ -57,12 +57,13 @@
 #define DICTIONARY_OPTION_HELP          L"file"
 #define EXAMINE_OPTION                  L"-examine"                            //!< 'examine' option name
 #define EXAMINE_OPTION_SHORT            L"-x"                                  //!< 'examine' option short form
-#define EXAMINE_OPTION_HELP             L"Verify only"                         //!< 'examine' option help text
+#define EXAMINE_OPTION_DETAILS_TEXT     L"Test the provided firmware image for compatibility"  //!< 'examine' option detailed help text
 #define FORCE_OPTION                    L"-force"                              //!< 'force' option name
 #define FORCE_OPTION_SHORT              L"-f"                                  //!< 'force' option short form
-#define FORCE_OPTION_HELP               L"Suppress confirmation"               //!< 'force' option help text
+#define FORCE_OPTION_DETAILS_TEXT       L"Suppress confirmations"              //!< 'force' option help text detail
 #define RECOVER_OPTION                  L"-recover"                            //!< 'recover' option name
 #define RECOVER_OPTION_FLASH_SPI        L"FlashSPI"                            //!< 'recover' option value to FlashSpi during update
+#define RECOVER_OPTION_DETAILS_TEXT     L"Run update on non-functional DCPMMs only (deprecated) or run SPI Flash recovery"     //!< 'recover' option value to FlashSpi during update
 #define UNITS_OPTION                    L"-units"                              //!< 'units' option name
 #define UNITS_OPTION_B                  L"B"                                   //!< 'units' option value for B
 #define UNITS_OPTION_MB                 L"MB"                                  //!< 'units' option value for MB
@@ -169,16 +170,13 @@
 #define LOCKSTATE_VALUE_DISABLED          L"Disabled"                 //!< 'LockState' property Disabled value
 #define LOCKSTATE_VALUE_UNLOCKED          L"Unlocked"                 //!< 'LockState' property Unlocked value
 #define LOCKSTATE_VALUE_FROZEN            L"Frozen"                   //!< 'LockState' property Frozen value
-#define CONFIG_STATUS_VALUE_VALID         L"Valid"                    //!< 'ConfigStatus' property Valid value
-#define CONFIG_STATUS_VALUE_NOT_CONFIG    L"Not Configured"           //!< 'ConfigStatus' property Not Configured value
-#define CONFIG_STATUS_VALUE_BAD_CONFIG \
-  L"Failed - Bad configuration"                                   //!< 'ConfigStatus' property Bad Configuration value
-#define CONFIG_STATUS_VALUE_BROKEN_INTERLEAVE \
-  L"Failed - Broken interleave"                                   //!< 'ConfigStatus' property Broken Interleave value
-#define CONFIG_STATUS_VALUE_REVERTED \
-  L"Failed - Reverted"                                            //!< 'ConfigStatus' property Reverted value
-#define CONFIG_STATUS_VALUE_UNSUPPORTED \
-  L"Failed - Unsupported"                                                  //!< 'ConfigStatus' property Unsupported value
+#define CONFIG_STATUS_VALUE_VALID               L"Valid"                        //!< 'ConfigStatus' property Valid value
+#define CONFIG_STATUS_VALUE_NOT_CONFIG          L"Not configured"               //!< 'ConfigStatus' property Not Configured value
+#define CONFIG_STATUS_VALUE_BAD_CONFIG          L"Failed - Bad configuration"   //!< 'ConfigStatus' property Bad Configuration value
+#define CONFIG_STATUS_VALUE_BROKEN_INTERLEAVE   L"Failed - Broken interleave"   //!< 'ConfigStatus' property Broken Interleave value
+#define CONFIG_STATUS_VALUE_REVERTED            L"Failed - Reverted"            //!< 'ConfigStatus' property Reverted value
+#define CONFIG_STATUS_VALUE_UNSUPPORTED         L"Failed - Unsupported"         //!< 'ConfigStatus' property Unsupported value
+#define CONFIG_STATUS_VALUE_PARTIALLY_SUPPORTED L"Failed - Partially supported" //!< 'ConfigStatus' property Partially Supported value
 #define PASSPHRASE_PROPERTY               L"Passphrase"               //!< 'Passphrase' property name
 #define NEWPASSPHRASE_PROPERTY            L"NewPassphrase"            //!< 'NewPassphrase' property name
 #define CONFIRMPASSPHRASE_PROPERTY        L"ConfirmPassphrase"        //!< 'ConfirmPassphrase' property name
@@ -282,7 +280,7 @@
 #define HELP_OPTIONS_DETAILS_TEXT       L"Changes the output format."
 #define HELP_VERBOSE_DETAILS_TEXT       L"Change the Debug Level Message Display"
 #define HELP_ALL_DETAILS_TEXT           L"Shows all attributes."
-#define HELP_DISPLAY_DETAILS_TEXT       L"Shows attributes specified in a comma-separatedlist"
+#define HELP_DISPLAY_DETAILS_TEXT       L"Shows attributes specified in a comma-separated list"
 #define HELP_FORCE_DETAILS_TEXT         L"Suppresses the confirmation from the User to use this operation"
 #define HELP_UNIT_DETAILS_TEXT          L"Desired Unit for display"
 #define HELP_DDRT_DETAILS_TEXT          L"Used to specify DDRT as the desired transport protocol"

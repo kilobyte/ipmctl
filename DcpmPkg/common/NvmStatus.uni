@@ -45,6 +45,7 @@
 #string STR_DCPMM_STATUS_ERR_FORCE_REQUIRED        #language en "This operation requires force option"
 #string STR_DCPMM_STATUS_ERR_DIMM_NOT_FOUND        #language en "DIMM not found"
 #string STR_DCPMM_STATUS_ERR_MANAGEABLE_DIMM_NOT_FOUND  #language en "No manageable DIMMs in the system."
+#string STR_DCPMM_STATUS_ERR_DIMM_EXCLUDED         #language en "DIMM excluded as it is unmanageable, non-functional, or has a population issue."
 #string STR_DCPMM_STATUS_ERR_NO_USABLE_DIMMS            #language en "No usable DIMMs due to all DIMMs being one of the following:\n- DIMMs unmanageable\n- DIMMs non-functional\n- DIMMs have a population issue"
 #string STR_DCPMM_STATUS_ERR_FIRMWARE_API_NOT_VALID     #language en "The firmware image is not compatible with this version of software."
 #string STR_DCPMM_STATUS_ERR_FIRMWARE_DOWNGRADE         #language en "Firmware unchanged."
@@ -62,11 +63,11 @@
 #string STR_DCPMM_STATUS_ERR_SECURITY_USER_PP_COUNT_EXPIRED       #language en "The maximum user passphrase submission limit has been reached"
 #string STR_DCPMM_STATUS_ERR_SECURITY_MASTER_PP_COUNT_EXPIRED     #language en "The maximum master passphrase submission limit has been reached"
 
-#string STR_DCPMM_STATUS_ERR_RECOVERY_ACCESS_NOT_ENABLED          #language en "Recovery access to DIMM is not enabled. Use Firmware update instead"
+#string STR_DCPMM_STATUS_ERR_SPI_ACCESS_NOT_ENABLED               #language en "DCPMM SPI access is not enabled."
 #string STR_DCPMM_STATUS_ERR_SECURE_ERASE_NAMESPACE_EXISTS        #language en "Namespaces exist on specified DIMM. They must be removed before an erase."
 
 #string STR_DCPMM_STATUS_ERR_PASSPHRASE_TOO_LONG                  #language en "Provided passphrase is too long"
-#string STR_DCPMM_STATUS_ERR_PASSPHRASE_NOT_PROVIDED               #language en "Passphrase not provided"
+#string STR_DCPMM_STATUS_ERR_PASSPHRASE_NOT_PROVIDED              #language en "Passphrase not provided"
 #string STR_DCPMM_STATUS_ERR_PASSPHRASES_DO_NOT_MATCH             #language en "The new passphrase and the confirmed passphrase do not match"
 
 #string STR_DCPMM_STATUS_ERR_SENSOR_NOT_VALID                     #language en "Invalid sensor"
@@ -201,9 +202,15 @@
 #string STR_DCPMM_SECSTATE_NOT_SUPPORTED     #language en  "Not Supported"
 #string STR_DCPMM_SECSTATE_PW_MAX            #language en  "Exceeded"
 
+#string STR_DCPMM_SEC_OPTIN_SVN_DOWNGRADE_DISABLED #language en  "Disabled"
+#string STR_DCPMM_SEC_OPTIN_SVN_DOWNGRADE_ENABLED  #language en  "Enabled"
+#string STR_DCPMM_SEC_OPTIN_SECURE_ERASE_NO_MASTER_PASSPHRASE #language en  "No Master Passphrase"
+#string STR_DCPMM_SEC_OPTIN_SECURE_ERASE_MASTER_PASSPHRASE_ENABLED     #language en  "Master Passphrase Enabled"
 #string STR_DCPMM_SEC_OPTIN_SECURE_S3       #language en  "SecureS3"
 #string STR_DCPMM_SEC_OPTIN_UNSECURE_S3     #language en  "UnsecureS3"
-#string STR_DCPMM_SEC_OPTIN_INVALID         #language en  "Invalid"
+#string STR_DCPMM_SEC_OPTIN_FW_ACTIVATE_DISABLED    #language en  "Disabled"
+#string STR_DCPMM_SEC_OPTIN_FW_ACTIVATE_ENABLED     #language en  "Enabled"
+#string STR_DCPMM_SEC_OPTIN_UNKNOWN         #language en  "Unknown"
 
 #string STR_DCPMM_BOOT_STATUS_UNKNOWN #language en "Unknown"
 #string STR_DCPMM_BOOT_STATUS_SUCCESS #language en "Success"
@@ -218,6 +225,11 @@
 #string STR_DCPMM_FW_UPDATE_STATUS_SUCCESS    #language en "Update loaded successfully"
 #string STR_DCPMM_FW_UPDATE_STATUS_FAIL       #language en "Update failed to load, fell back to previous firmware"
 #string STR_DCPMM_FW_UPDATE_STATUS_UNKNOWN    #language en "Unknown"
+#string STR_DCPMM_QUIESCE_REQUIRED            #language en "Required"
+#string STR_DCPMM_QUIESCE_NOT_REQUIRED        #language en "Not required"
+#string STR_DCPMM_STAGED_FW_NOT_ACTIVATABLE   #language en "Not activatable, reboot is required"
+#string STR_DCPMM_STAGED_FW_ACTIVATABLE       #language en "Activatable"
+
 #string STR_DCPMM_VIEW_FIRMWARE_VERSION_NOT_VALID    #language en "Incorrect FW version"
 #string STR_DCPMM_VIEW_FIRMWARE_INCOMPATIBLE_TO_CTLR_STEPPING    #language en "Image not compatible with this DCPMM"
 
