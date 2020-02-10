@@ -1,3 +1,11 @@
+ipmctl (02.00.00.3709+ds-1) unstable; urgency=medium
+
+  * A new upstream snapshot.
+    + Fixes bad parsing of v0.1 PMTT data.  Closes: #951075.
+  * Update symbols.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Mon, 10 Feb 2020 23:44:47 +0100
+
 ipmctl (02.00.00.3673+ds-3) unstable; urgency=medium
 
   * Purge libipmctl3's conffile, unbreaking logrotate.  Closes: #949850.
