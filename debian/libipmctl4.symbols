@@ -387,7 +387,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  DiagnosticsManageabilityCheck@Base 02.00.00.3673
  DimmFormat@Base 02.00.00.3673
  DimmWPQFlush@Base 02.00.00.3673
- DisplayCommandStatus@Base 02.00.00.3673
  DivU64x32@Base 02.00.00.3673
  DivU64x32Remainder@Base 02.00.00.3673
  DumpCmdsPerDimm@Base 02.00.00.3673
@@ -457,6 +456,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  FreeStringArray@Base 02.00.00.3673
  FreeUnicodeStringTable@Base 02.00.00.3673
  FullHelpRequested@Base 02.00.00.3673
+ FwActivateOptInToString@Base 02.00.00.3709
  FwCmdDeviceCharacteristics@Base 02.00.00.3673
  FwCmdDisableARS@Base 02.00.00.3673
  FwCmdFormatDimm@Base 02.00.00.3673
@@ -494,6 +494,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  FwCmdSetOptionalConfigurationDataPolicy@Base 02.00.00.3673
  FwCmdSetPMONRegisters@Base 02.00.00.3673
  FwCmdSetPlatformConfigData@Base 02.00.00.3673
+ FwCmdUpdateFw@Base 02.00.00.3709
  FwGetPCDFromOffsetSmallPayload@Base 02.00.00.3673
  FwHasBeenStaged@Base 02.00.00.3673
  FwSetPCDFromOffsetSmallPayload@Base 02.00.00.3673
@@ -758,20 +759,24 @@ libipmctl.so.4 libipmctl4 #MINVER#
  IsDevicePathEndType@Base 02.00.00.3673
  IsDevicePathMultiInstance@Base 02.00.00.3673
  IsDevicePathValid@Base 02.00.00.3673
+ IsDimmAllowed@Base 02.00.00.3709
  IsDimmIdManageable@Base 02.00.00.3673
+ IsDimmInPmMappedPopulationViolation@Base 02.00.00.3709
+ IsDimmInPopulationViolation@Base 02.00.00.3709
  IsDimmInSupportedConfig@Base 02.00.00.3673
+ IsDimmInUnmappedPopulationViolation@Base 02.00.00.3709
  IsDimmInterfaceCodeSupported@Base 02.00.00.3673
  IsDimmInterfaceCodeSupportedByValues@Base 02.00.00.3673
  IsDimmLocked@Base 02.00.00.3673
  IsDimmManageable@Base 02.00.00.3673
  IsDimmManageableByDimmInfo@Base 02.00.00.3673
  IsDimmManageableByValues@Base 02.00.00.3673
- IsDimmNotAllowed@Base 02.00.00.3673
  IsDimmSkuModeMismatch@Base 02.00.00.3673
  IsDimmsMixedSkuCfg@Base 02.00.00.3673
  IsFwApiVersionSupported@Base 02.00.00.3673
  IsFwApiVersionSupportedByValues@Base 02.00.00.3673
  IsFwStaged@Base 02.00.00.3673
+ IsGetSecurityOptInSupported@Base 02.00.00.3709
  IsHexOrDecimalNumber@Base 02.00.00.3673
  IsHexStr@Base 02.00.00.3673
  IsHexValue@Base 02.00.00.3673
@@ -943,6 +948,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  PromptedInput@Base 02.00.00.3673
  PropertyToDouble@Base 02.00.00.3673
  PropertyToUint64@Base 02.00.00.3673
+ QuiesceRequiredToString@Base 02.00.00.3709
  RShiftU64@Base 02.00.00.3673
  RandomizeBuffer@Base 02.00.00.3673
  RawDataToLabelIndexArea@Base 02.00.00.3673
@@ -985,6 +991,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  RegisterSetDimmCommand@Base 02.00.00.3673
  RegisterSetPreferencesCommand@Base 02.00.00.3673
  RegisterSetSensorCommand@Base 02.00.00.3673
+ RegisterShowAcpiCommand@Base 02.00.00.3709
  RegisterShowCelCommand@Base 02.00.00.3673
  RegisterShowCmdAccessPolicyCommand@Base 02.00.00.3673
  RegisterShowDimmsCommand@Base 02.00.00.3673
@@ -1037,8 +1044,10 @@ libipmctl.so.4 libipmctl4 #MINVER#
  SMBIOS_3_ANCHOR_STR@Base 02.00.00.3673
  SMBIOS_ANCHOR_STR@Base 02.00.00.3673
  SPrintLength@Base 02.00.00.3673
+ SVNDowngradeOptInToString@Base 02.00.00.3709
  SafeAsciiStrToUnicodeStr@Base 02.00.00.3673
  SafeCapacityConversionToBytes@Base 02.00.00.3673
+ SecureErasePolicyOptInToString@Base 02.00.00.3709
  SecurityCapabilitiesToStr@Base 02.00.00.3673
  SecurityStateBitmaskToString@Base 02.00.00.3673
  SecurityToString@Base 02.00.00.3673
@@ -1199,6 +1208,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  SplitStr@Base 02.00.00.3673
  SquashDataSet@Base 02.00.00.3673
  SquashDataSetCb@Base 02.00.00.3673
+ StagedFwActivatableToString@Base 02.00.00.3709
  StartDiagDataSetAttribs@Base 02.00.00.3673
  StartDiagListAttributes@Base 02.00.00.3673
  StartDiagnostic@Base 02.00.00.3673
@@ -1289,7 +1299,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  UnicodeVSPrint@Base 02.00.00.3673
  UninstallNamespaceProtocols@Base 02.00.00.3673
  UnitsToStr@Base 02.00.00.3673
- UpdateDimmFw@Base 02.00.00.3673
  UpdateFw@Base 02.00.00.3673
  UpdateIntelDIMMConfig@Base 02.00.00.3673
  UpdateLsaIndex@Base 02.00.00.3673
@@ -1706,7 +1715,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  preferences_set_var_string_wide@Base 02.00.00.3673
  preferences_uninit@Base 02.00.00.3673
  process_output@Base 02.00.00.3673
- registerShowAcpiCommand@Base 02.00.00.3673
  s_digitstrtouc@Base 02.00.00.3673
  s_snprintf@Base 02.00.00.3673
  s_strcat@Base 02.00.00.3673
