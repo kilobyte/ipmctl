@@ -6242,18 +6242,45 @@ Finish:
 
 /**
   Calculate a size of capacity considered Reserved. It is the aligned PM
-  capacity less the AD capacity
+  capacity less the mapped AD capacity
 
   @param[in] Dimm to retrieve reserved size for
+  @param[out] pReservedCapacity pointer to reserved capacity
 
-  @retval Amount of capacity that will be reserved
+  @retval EFI_INVALID_PARAMETER passed NULL argument
+  @retval EFI_ABORTED Failure to retrieve current memory mode
+  @retval EFI_SUCCESS Success
 **/
-UINT64
+EFI_STATUS
 GetReservedCapacity(
-  IN     DIMM *pDimm
+  IN     DIMM *pDimm,
+  OUT UINT64 *pReservedCapacity
   )
 {
-  return ROUNDDOWN(pDimm->PmCapacity, REGION_PERSISTENT_SIZE_ALIGNMENT_B) - pDimm->MappedPersistentCapacity;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+  MEMORY_MODE CurrentMode = MEMORY_MODE_1LM;
+
+  if (pDimm == NULL || pReservedCapacity == NULL) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  ReturnCode = CurrentMemoryMode(&CurrentMode);
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_DBG("Unable to determine current memory mode");
+    goto Finish;
+  }
+
+  if (pDimm->Configured || (MEMORY_MODE_2LM == CurrentMode)) {
+    *pReservedCapacity =  ROUNDDOWN(pDimm->PmCapacity, REGION_PERSISTENT_SIZE_ALIGNMENT_B) - pDimm->MappedPersistentCapacity;
+  }
+  else {
+    *pReservedCapacity = 0;
+  }
+
+Finish:
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
 }
 
 #define FW_TEMPERATURE_CONST_1 625
@@ -6911,6 +6938,58 @@ Finish:
 }
 
 /**
+  Firmware command to get Latch System Shutdown State
+
+  @param[in] pDimm Target DIMM structure pointer
+  @param[out] pExtendedAdrInfo pointer to filled payload with Latch System Shutdown State info
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_INVALID_PARAMETER if parameter provided is invalid
+  @retval EFI_OUT_OF_RESOURCES memory allocation failure
+**/
+EFI_STATUS
+FwCmdGetLatchSystemShutdownStateInfo(
+  IN     DIMM *pDimm,
+  OUT PT_OUTPUT_PAYLOAD_GET_LATCH_SYSTEM_SHUTDOWN_STATE *pLastSystemShutdownStateInfo
+)
+{
+  EFI_STATUS ReturnCode = EFI_INVALID_PARAMETER;
+  FW_CMD *pFwCmd = NULL;
+
+  NVDIMM_ENTRY();
+
+  if (pDimm == NULL || pLastSystemShutdownStateInfo == NULL) {
+    ReturnCode = EFI_INVALID_PARAMETER;
+    goto Finish;
+  }
+
+  pFwCmd = AllocateZeroPool(sizeof(*pFwCmd));
+  if (pFwCmd == NULL) {
+    ReturnCode = EFI_OUT_OF_RESOURCES;
+    goto Finish;
+  }
+
+  pFwCmd->DimmID = pDimm->DimmID;
+  pFwCmd->Opcode = PtGetAdminFeatures;
+  pFwCmd->SubOpcode = SubopLatchSystemShutdownState;
+  pFwCmd->OutputPayloadSize = sizeof(*pLastSystemShutdownStateInfo);
+  ReturnCode = PassThru(pDimm, pFwCmd, PT_TIMEOUT_INTERVAL);
+
+  if (EFI_ERROR(ReturnCode)) {
+    NVDIMM_WARN("Failed to get Latch System Shutdown State info");
+    FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode);
+    goto Finish;
+  }
+
+  CopyMem_S(pLastSystemShutdownStateInfo, sizeof(*pLastSystemShutdownStateInfo), pFwCmd->OutPayload, sizeof(*pLastSystemShutdownStateInfo));
+
+Finish:
+  FREE_POOL_SAFE(pFwCmd);
+  NVDIMM_EXIT_I64(ReturnCode);
+  return ReturnCode;
+}
+
+/**
 Check if DIMM is manageable
 
 @param[in] pDimm the DIMM struct
@@ -7160,7 +7239,7 @@ DeterminePassThruMethod(
     // We did not succeed in calling IdentifyDimm over any interface in
     // InitializeDimm(). Seems like a dead DCPMM. Don't bother sending anything more.
     ReturnCode = EFI_DEVICE_ERROR;
-    NVDIMM_ERR("DCPMM BSR is unknown. Cancelling PassThru()");
+    NVDIMM_ERR("DCPMM mailbox is not ready. Cancelling PassThru()");
     goto Finish;
   }
 

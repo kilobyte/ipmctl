@@ -73,7 +73,7 @@ extern EFI_DCPMM_CONFIG2_PROTOCOL gNvmDimmDriverNvmDimmConfig;
 extern EFI_STATUS EFIAPI NvmDimmDriverUnload(IN EFI_HANDLE ImageHandle);
 extern EFI_STATUS
 EFIAPI
-GetCapacities(IN UINT16 DimmPid, OUT UINT64 *pVolatileCapacity, OUT UINT64 *pAppDirectCapacity, OUT UINT64 *pUnconfiguredCapacity, OUT UINT64 *pReservedCapacity, OUT UINT64 *pInaccessibleCapacity);
+GetDcpmmCapacities(IN UINT16 DimmPid, OUT UINT64 *pRawCapacity, OUT UINT64 *pVolatileCapacity, OUT UINT64 *pAppDirectCapacity, OUT UINT64 *pUnconfiguredCapacity, OUT UINT64 *pReservedCapacity, OUT UINT64 *pInaccessibleCapacity);
 extern EFI_STATUS
 ParseSourceDumpFile(IN CHAR16 *pFilePath, IN EFI_DEVICE_PATH_PROTOCOL *pDevicePath, OUT CHAR8 **pFileString);
 extern EFI_STATUS RegisterCommands();
@@ -168,7 +168,7 @@ static void nvm_internal_uninit(BOOLEAN binding_stop)
 {
   EFI_HANDLE FakeBindHandle = (EFI_HANDLE)0x1;
 
-  if (binding_stop) {
+  if (binding_stop && (!g_fast_path && !g_basic_commands)) {
     NvmDimmDriverDriverBindingStop(&gNvmDimmDriverDriverBinding, FakeBindHandle, 0, NULL);
   }
   NvmDimmDriverUnload(FakeBindHandle);
@@ -1380,6 +1380,7 @@ NVM_API int nvm_get_nvm_capabilities(struct nvm_capabilities *p_capabilties)
 
 NVM_API int nvm_get_nvm_capacities(struct device_capacities *p_capacities)
 {
+  UINT64 RawCapacity;
   UINT64 VolatileCapacity;
   UINT64 AppDirectCapacity;
   UINT64 UnconfiguredCapacity;
@@ -1404,6 +1405,8 @@ NVM_API int nvm_get_nvm_capacities(struct device_capacities *p_capacities)
     return NVM_ERR_UNKNOWN;
   }
 
+  ZeroMem(p_capacities, sizeof(*p_capacities));
+
   DIMM_INFO *pdimms = (DIMM_INFO *)AllocatePool(sizeof(DIMM_INFO) * dimm_cnt);
   if (NULL == pdimms) {
     NVDIMM_ERR("Failed to allocate memory\n");
@@ -1417,12 +1420,12 @@ NVM_API int nvm_get_nvm_capacities(struct device_capacities *p_capacities)
     goto Finish;
   }
   for (i = 0; i < dimm_cnt; ++i) {
-    ReturnCode = GetCapacities(pdimms[i].DimmID, &VolatileCapacity, &AppDirectCapacity, &UnconfiguredCapacity, &ReservedCapacity, &InaccessibleCapacity);
+    ReturnCode = GetDcpmmCapacities(pdimms[i].DimmID, &RawCapacity, &VolatileCapacity, &AppDirectCapacity, &UnconfiguredCapacity, &ReservedCapacity, &InaccessibleCapacity);
     if (EFI_ERROR(ReturnCode)) {
       rc = NVM_ERR_UNKNOWN;
       goto Finish;
     }
-    p_capacities->capacity += VolatileCapacity + AppDirectCapacity + UnconfiguredCapacity + ReservedCapacity + InaccessibleCapacity;
+    p_capacities->capacity += RawCapacity;
     p_capacities->app_direct_capacity += AppDirectCapacity;
     p_capacities->unconfigured_capacity += UnconfiguredCapacity;
     p_capacities->reserved_capacity += ReservedCapacity;
@@ -1627,6 +1630,12 @@ NVM_API int nvm_set_master_passphrase(const NVM_UID device_uid,
   unsigned int dimm_handle;
   CHAR16 UnicodeOldMasterPassphrase[PASSPHRASE_BUFFER_SIZE];
   CHAR16 UnicodeNewMasterPassphrase[PASSPHRASE_BUFFER_SIZE];
+
+  if (old_master_passphrase_len > PASSPHRASE_BUFFER_SIZE
+       || new_master_passphrase_len > PASSPHRASE_BUFFER_SIZE) {
+    rc = NVM_ERR_PASSPHRASE_TOO_LONG;
+    return rc;
+  }
 
   SetMem(UnicodeOldMasterPassphrase, sizeof(UnicodeOldMasterPassphrase), 0x0);
   SetMem(UnicodeNewMasterPassphrase, sizeof(UnicodeNewMasterPassphrase), 0x0);
@@ -2596,31 +2605,7 @@ NVM_API int nvm_set_user_preference(const NVM_PREFERENCE_KEY  key,
 
 NVM_API int nvm_clear_dimm_lsa(const NVM_UID device_uid)
 {
-  EFI_STATUS ReturnCode = EFI_SUCCESS;
-  UINT16 dimm_id;
-  int nvm_status;
-  COMMAND_STATUS *p_command_status;
-
-  if (NVM_SUCCESS != (nvm_status = nvm_init())) {
-    NVDIMM_ERR("Failed to intialize nvm library %d\n", nvm_status);
-    return nvm_status;
-  }
-  ReturnCode = InitializeCommandStatus(&p_command_status);
-  if (EFI_ERROR(ReturnCode))
-    return NVM_ERR_UNKNOWN;
-  if (NVM_SUCCESS != (nvm_status = get_dimm_id((char *)device_uid, &dimm_id, NULL))) {
-    FreeCommandStatus(&p_command_status);
-    NVDIMM_ERR("Failed to get dimm ID %d\n", nvm_status);
-    return NVM_ERR_DIMM_NOT_FOUND;
-  }
-  ReturnCode = gNvmDimmDriverNvmDimmConfig.ModifyPcdConfig(&gNvmDimmDriverNvmDimmConfig, &dimm_id, 1, DELETE_PCD_CONFIG_LSA_MASK, p_command_status);
-  if (EFI_ERROR(ReturnCode)) {
-    FreeCommandStatus(&p_command_status);
-    NVDIMM_ERR_W(FORMAT_STR_NL, CLI_ERR_INTERNAL_ERROR);
-    return NVM_ERR_UNKNOWN;
-  }
-  FreeCommandStatus(&p_command_status);
-  return NVM_SUCCESS;
+  return NVM_ERR_API_NOT_SUPPORTED; //deprecated
 }
 
 /*

@@ -294,6 +294,7 @@ typedef struct _SMBUS_DIMM_ADDR {
 #define DIMM_INFO_CATEGORY_DEVICE_CHARACTERISTICS       (1 << 11)   ///< Device Characteristics fields will be populated: CTST, MTST, MTSTT, MTSPT, CTSTT, CTSPT, MaxAveragePowerLimit, MaxTurboModePowerConsumption, MaxAveragePowerTimeConstant, AveragePowerTimeConstantStep.
 #define DIMM_INFO_CATEGORY_MEM_INFO_PAGE_4              (1 << 12)   ///< Memory info page 4 fields will be populated
 #define DIMM_INFO_CATEGORY_EXTENDED_ADR                 (1 << 13)   ///< Extended ADR status info
+#define DIMM_INFO_CATEGORY_LATCH_SYSTEM_SHUTDOWN_STATE  (1 << 14)   ///< Latch System Shutdown State fields will be populated: LatchSystemShutdownState, PreviousPowerCycleLatchSystemShutdownState
 #define DIMM_INFO_CATEGORY_ALL                          (0xFFFF)    ///< All DIMM_INFO fields will be populated.
 
 /**
@@ -318,6 +319,7 @@ typedef struct _SMBUS_DIMM_ADDR {
 #define DIMM_INFO_ERROR_SVN_DOWNGRADE                   (1 << 15)
 #define DIMM_INFO_ERROR_SECURE_ERASE_POLICY             (1 << 16)
 #define DIMM_INFO_ERROR_FW_ACTIVATE                     (1 << 17)
+#define DIMM_INFO_ERROR_LATCH_SYSTEM_SHUTDOWN_STATE     (1 << 18)
 
 
 #define DIMM_INFO_TYPE_CHAR16   1
@@ -512,6 +514,10 @@ typedef struct _DIMM_INFO {
   UINT8 QuiesceRequired;                    //!< Specifies if FW Activate requires host to quiesce traffic before calling
   UINT16 ActivationTime;                    //!< Specifies activation time in ms for fw activate
 
+  //DIMM_INFO_CATEGORY_LATCH_SYSTEM_SHUTDOWN_STATE
+  UINT8 LatchSystemShutdownState;                  //!< Specifies whether latch is enabled
+  UINT8 PrevPwrCycleLatchSystemShutdownState;      //!< Specifies whether latch was enabled during the last power cycle
+
   } DIMM_INFO;
 
 typedef struct _TOPOLOGY_DIMM_INFO {
@@ -587,7 +593,8 @@ typedef struct _MEMORY_RESOURCES_INFO {
   UINT64 DDRRawCapacity;            //!< Sum of the raw capacity on all DDR dimms
   UINT64 DDRCacheCapacity;          //!< Sum of the DDR capacity used for caching
   UINT64 DDRVolatileCapacity;       //!< Sum of the DDR capacity used as volatile memory
-  UINT64 Reserved[7];
+  UINT64 DDRInaccessibleCapacity;   //!< Sum of the DDR capacity that is inaccessible
+  UINT64 Reserved[6];
 } MEMORY_RESOURCES_INFO;
 
 typedef struct _DIMM_PERFORMANCE_DATA {
@@ -829,6 +836,7 @@ typedef struct _DEBUG_LOG_INFO {
 #define DDRT_TRAINING_UNKNOWN       0xFF
 
 /** Dimm Boot Status Bitmask **/
+#define DIMM_BOOT_STATUS_NORMAL               0
 #define DIMM_BOOT_STATUS_UNKNOWN              BIT0
 #define DIMM_BOOT_STATUS_MEDIA_NOT_READY      BIT1
 #define DIMM_BOOT_STATUS_MEDIA_ERROR          BIT2

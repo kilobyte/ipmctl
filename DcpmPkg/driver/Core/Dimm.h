@@ -13,7 +13,30 @@
 #include <IndustryStandard/SmBios.h>
 #include <NvmDimmPassThru.h>
 #include <PlatformConfigData.h>
+
+#ifndef OS_BUILD
 #include <DcpmmTypes.h>
+#else
+
+typedef enum {
+  PlaceHolder1,
+  PlaceHolder2
+} DCPMM_FIS_INTERFACE;
+
+#pragma pack(1)
+typedef struct {
+  struct {
+    UINT32   Data;
+  } Junk;
+} DCPMM_FIS_INPUT;
+
+typedef struct {
+  struct {
+    UINT32   Data;
+  } Junk;
+} DCPMM_FIS_OUTPUT;
+#pragma pack()
+#endif
 
 #ifdef OS_BUILD
 #define FW_CMD_ERROR_TO_EFI_STATUS(pFwCmd, ReturnCode) \
@@ -276,6 +299,15 @@ typedef struct _DIMM {
   reloaded. It should not be considered current outside of initialization.
   */
   LABEL_STORAGE_AREA *pLsa;
+
+#ifdef OS_BUILD
+  /**
+    Flag to indicate that ConfigStatus, IsNew, Configured,
+    MappedVolatileCapacity & MappedPersistentCapacity values
+    have been initialized using PCD in OS.
+  **/
+  BOOLEAN PcdMappedMemInfoRead;
+#endif
 } DIMM;
 
 #define DIMM_SIGNATURE     SIGNATURE_64('\0', '\0', '\0', '\0', 'D', 'I', 'M', 'M')
@@ -1613,15 +1645,20 @@ IsDimmSkuModeMismatch(
   );
 
 /**
-  Calculate a size of capacity lost to volatile alignment and space that is not partitioned
+  Calculate a size of capacity considered Reserved. It is the aligned PM
+  capacity less the mapped AD capacity
 
   @param[in] Dimm to retrieve reserved size for
+  @param[out] pReservedCapacity pointer to reserved capacity
 
-  @retval Amount of capacity that will be reserved
+  @retval EFI_INVALID_PARAMETER passed NULL argument
+  @retval EFI_ABORTED Failure to retrieve current memory mode
+  @retval EFI_SUCCESS Success
 **/
-UINT64
+EFI_STATUS
 GetReservedCapacity(
-  IN     DIMM *pDimm
+  IN     DIMM *pDimm,
+  OUT UINT64 *pReservedCapacity
   );
 
 /**
@@ -1801,6 +1838,22 @@ EFI_STATUS
 FwCmdGetExtendedAdrInfo(
   IN     DIMM *pDimm,
   OUT PT_OUTPUT_PAYLOAD_GET_EADR *pExtendedAdrInfo
+);
+
+/**
+  Firmware command to get Latch System Shutdown State
+
+  @param[in] pDimm Target DIMM structure pointer
+  @param[out] pExtendedAdrInfo pointer to filled payload with Latch System Shutdown State info
+
+  @retval EFI_SUCCESS Success
+  @retval EFI_INVALID_PARAMETER if parameter provided is invalid
+  @retval EFI_OUT_OF_RESOURCES memory allocation failure
+**/
+EFI_STATUS
+FwCmdGetLatchSystemShutdownStateInfo(
+  IN     DIMM *pDimm,
+  OUT PT_OUTPUT_PAYLOAD_GET_LATCH_SYSTEM_SHUTDOWN_STATE *pLastSystemShutdownStateInfo
 );
 
 /**
