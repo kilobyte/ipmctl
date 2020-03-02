@@ -1,3 +1,10 @@
+ipmctl (02.00.00.3722+ds-1) unstable; urgency=medium
+
+  * New upstream snapshot.
+  * Update symbols.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Mon, 02 Mar 2020 14:13:28 +0100
+
 ipmctl (02.00.00.3709+ds-1) unstable; urgency=medium
 
   * A new upstream snapshot.
