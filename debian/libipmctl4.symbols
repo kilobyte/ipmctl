@@ -473,6 +473,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  FwCmdGetFirmwareImageInfo@Base 02.00.00.3673
  FwCmdGetFwDebugLog@Base 02.00.00.3673
  FwCmdGetFwDebugLogSize@Base 02.00.00.3673
+ FwCmdGetLatchSystemShutdownStateInfo@Base 02.00.00.3722
  FwCmdGetLongOperationStatus@Base 02.00.00.3673
  FwCmdGetMemoryInfoPage@Base 02.00.00.3673
  FwCmdGetOptionalConfigurationDataPolicy@Base 02.00.00.3673
@@ -521,7 +522,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  GetBlockDataWindowRegDescTabl@Base 02.00.00.3673
  GetBlockDeviceBlockSize@Base 02.00.00.3673
  GetBwCommandStatus@Base 02.00.00.3673
- GetCapacities@Base 02.00.00.3673
  GetCommandAccessPolicy@Base 02.00.00.3673
  GetCommandEffectLog@Base 02.00.00.3673
  GetControlRegionTableForNvDimmRegionTable@Base 02.00.00.3673
@@ -535,6 +535,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  GetDataSetName@Base 02.00.00.3673
  GetDataSetNameInfo@Base 02.00.00.3673
  GetDataSetUserData@Base 02.00.00.3673
+ GetDcpmmCapacities@Base 02.00.00.3722
  GetDdrtIoInitInfo@Base 02.00.00.3673
  GetDeviceAndFilePath@Base 02.00.00.3673
  GetDevicePathSize@Base 02.00.00.3673
@@ -669,6 +670,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  GetTargetValue@Base 02.00.00.3673
  GetTimeFormatString@Base 02.00.00.3673
  GetTopologyAndInterleaveSetMapInfoBasedOnProcessorType@Base 02.00.00.3673
+ GetTotalDcpmmCapacities@Base 02.00.00.3722
  GetU64FromString@Base 02.00.00.3673
  GetUintsFromString@Base 02.00.00.3673
  GetUninitializedDimmCount@Base 02.00.00.3673
@@ -1032,7 +1034,9 @@ libipmctl.so.4 libipmctl4 #MINVER#
  RetrieveInterleaveSetMap@Base 02.00.00.3673
  RetrieveMaxPMInterleaveSets@Base 02.00.00.3673
  RetrieveNamespacesFromLsa@Base 02.00.00.3673
- RetrievePcatSocketSkuInfoTable@Base 02.00.00.3673
+ RetrievePcatSocketSkuCachedMemory@Base 02.00.00.3722
+ RetrievePcatSocketSkuMappedMemoryLimit@Base 02.00.00.3722
+ RetrievePcatSocketSkuTotalMappedMemory@Base 02.00.00.3722
  RetrieveRegionGoalFromInterleaveInformationTable@Base 02.00.00.3673
  RetrieveSupportediMcAndChannelInterleaveSizes@Base 02.00.00.3673
  RunConfigDiagnostics@Base 02.00.00.3673
