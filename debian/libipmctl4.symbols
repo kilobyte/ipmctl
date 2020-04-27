@@ -231,8 +231,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  DecodePcatInterleaveFormatSupported@Base 02.00.00.3673
  DecodePcatMemoryModeCapabilities@Base 02.00.00.3673
  DefaultPassThru@Base 02.00.00.3673
- DeleteDimm@Base 02.00.00.3673
- DeleteDimmCommand@Base 02.00.00.3673
  DeleteFile@Base 02.00.00.3673
  DeleteGoal@Base 02.00.00.3673
  DeleteGoalCommand@Base 02.00.00.3673
@@ -693,6 +691,8 @@ libipmctl.so.4 libipmctl4 #MINVER#
  HiiRemovePackages@Base 02.00.00.3673
  INTERLEAVE_SETS_2_3@Base 02.00.00.3673
  INTERLEAVE_SETS_2_3_x1@Base 02.00.00.3673
+ INTERLEAVE_SETS_4_2@Base 02.00.00.3759
+ INTERLEAVE_SETS_4_2_x1@Base 02.00.00.3759
  InitErrorAndWarningNvmStatusCodes@Base 02.00.00.3673
  InitSensorsSet@Base 02.00.00.3673
  InitializeAllLabelStorageAreas@Base 02.00.00.3673
@@ -755,7 +755,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  IsConfiguringAllowed@Base 02.00.00.3673
  IsConfiguringForCreateGoalAllowed@Base 02.00.00.3673
  IsDebugLoggerEnabled@Base 02.00.00.3673
- IsDecimalDigitCharacter@Base 02.00.00.3673
  IsDevicePathEnd@Base 02.00.00.3673
  IsDevicePathEndInstance@Base 02.00.00.3673
  IsDevicePathEndType@Base 02.00.00.3673
@@ -782,7 +781,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  IsHexOrDecimalNumber@Base 02.00.00.3673
  IsHexStr@Base 02.00.00.3673
  IsHexValue@Base 02.00.00.3673
- IsHexaDecimalDigitCharacter@Base 02.00.00.3673
  IsLSANotInitializedOnDimms@Base 02.00.00.3673
  IsLargePayloadAvailable@Base 02.00.00.3673
  IsLeaf@Base 02.00.00.3673
@@ -853,6 +851,9 @@ libipmctl.so.4 libipmctl4 #MINVER#
  NvmDimmDriverDriverBindingSupported@Base 02.00.00.3673
  NvmDimmDriverDriverEntryPoint@Base 02.00.00.3673
  NvmDimmDriverUnload@Base 02.00.00.3673
+ NvmIsDecimalDigitCharacter@Base 02.00.00.3759
+ NvmIsHexaDecimalDigitCharacter@Base 02.00.00.3759
+ NvmToUpper@Base 02.00.00.3759
  OpenFile@Base 02.00.00.3673
  OpenFileBinary@Base 02.00.00.3673
  OpenFileByDevice@Base 02.00.00.3673
@@ -979,7 +980,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  RegisterCommand@Base 02.00.00.3673
  RegisterCommands@Base 02.00.00.3673
  RegisterCreateGoalCommand@Base 02.00.00.3673
- RegisterDeleteDimmCommand@Base 02.00.00.3673
  RegisterDeleteGoalCommand@Base 02.00.00.3673
  RegisterDeletePcdCommand@Base 02.00.00.3673
  RegisterDumpDebugCommand@Base 02.00.00.3673
@@ -1266,7 +1266,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  TargetCount@Base 02.00.00.3673
  TargetMatchCount@Base 02.00.00.3673
  ThresholdsCheck@Base 02.00.00.3673
- ToUpper@Base 02.00.00.3673
  TransformFwTempToRealValue@Base 02.00.00.3673
  TransformRealValueToFwTemp@Base 02.00.00.3673
  TrimString@Base 02.00.00.3673
