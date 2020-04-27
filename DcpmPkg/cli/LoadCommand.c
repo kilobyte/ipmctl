@@ -39,7 +39,7 @@ struct Command LoadCommand =
     {DIMM_TARGET, L"", HELP_TEXT_DIMM_IDS, TRUE, ValueOptional}
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                            //!< properties
-  L"Update the firmware on one or more DCPMMs.",                       //!< help
+  L"Update the firmware on one or more " PMEM_MODULES_STR L".",                       //!< help
   Load                                                                //!< run function
 };
 
@@ -87,7 +87,7 @@ Load(
   COMMAND_STATUS *pCommandStatus = NULL;
   BOOLEAN Examine = FALSE;
   BOOLEAN Force = FALSE;
-  FW_IMAGE_INFO *pFwImageInfo = NULL;
+  NVM_FW_IMAGE_INFO *pFwImageInfo = NULL;
   volatile UINT32 Index = 0;
   volatile UINT32 Index2 = 0;
   CHAR16 DimmStr[MAX_DIMM_UID_LENGTH];
@@ -300,7 +300,7 @@ Load(
 
   ResetCmdStatus(pCommandStatus, NVM_ERR_OPERATION_NOT_STARTED);
   if (!Examine) {
-    Print(L"Starting update on %d dimm(s)...\n", DimmTargetsNum);
+    Print(L"Starting update on %d " PMEM_MODULE_STR L"(s)...\n", DimmTargetsNum);
     // Create callback that will print progress
     gBS->CreateEvent((EVT_TIMER | EVT_NOTIFY_SIGNAL), PRINT_PRIORITY, PrintProgress, pCommandStatus, &ProgressEvent);
     gBS->SetTimer(ProgressEvent, TimerPeriodic, PROGRESS_EVENT_TIMEOUT);
@@ -378,28 +378,22 @@ Load(
 
 
   if (Examine) {
-    if (pFwImageInfo != NULL) {
-
-      //only print non 0.0.0.0 versions...
-      if (pFwImageInfo->ImageVersion.ProductNumber.Version != 0 ||
-        pFwImageInfo->ImageVersion.RevisionNumber.Version != 0 ||
-        pFwImageInfo->ImageVersion.SecurityRevisionNumber.Version != 0 ||
-        pFwImageInfo->ImageVersion.BuildNumber.Build != 0) {
-        Print(FORMAT_STR L": %02d.%02d.%02d.%04d\n",
-          pFileName,
-          pFwImageInfo->ImageVersion.ProductNumber.Version,
-          pFwImageInfo->ImageVersion.RevisionNumber.Version,
-          pFwImageInfo->ImageVersion.SecurityRevisionNumber.Version,
-          pFwImageInfo->ImageVersion.BuildNumber.Build);
-      }
-    }
-    else {
-      Print(FORMAT_STR L" " FORMAT_STR_NL, pFileName, CLI_ERR_VERSION_RETRIEVE);
+    //only print non 0.0.0.0 versions...
+    if (pFwImageInfo->ImageVersion.ProductNumber.Version != 0 ||
+      pFwImageInfo->ImageVersion.RevisionNumber.Version != 0 ||
+      pFwImageInfo->ImageVersion.SecurityRevisionNumber.Version != 0 ||
+      pFwImageInfo->ImageVersion.BuildNumber.Build != 0) {
+      Print(FORMAT_STR L": %02d.%02d.%02d.%04d\n",
+        pFileName,
+        pFwImageInfo->ImageVersion.ProductNumber.Version,
+        pFwImageInfo->ImageVersion.RevisionNumber.Version,
+        pFwImageInfo->ImageVersion.SecurityRevisionNumber.Version,
+        pFwImageInfo->ImageVersion.BuildNumber.Build);
     }
   } else {
     gBS->CloseEvent(ProgressEvent);
     Print(L"\n");
-    if (StagedFwUpdates > 0) {
+    if (!FlashSPI && StagedFwUpdates > 0) {
       /*
       At this point, all indications are that the FW is on the way to being staged.
       Loop until they all report a staged version

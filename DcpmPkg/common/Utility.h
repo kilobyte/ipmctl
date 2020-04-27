@@ -96,6 +96,11 @@ typedef union {
 #define FW_UPDATE_OPCODE    0x09
 #define FW_UPDATE_SUBOPCODE 0x00
 
+// Product name string values
+#define PMEM_MODULE_STR             L"PMem module"
+#define PMEM_MODULES_STR            PMEM_MODULE_STR L"s"
+#define PMEM_MODULE_PASCAL_CASE_STR L"PMemModule"
+
 // Last shutdown status string values
 #define LAST_SHUTDOWN_STATUS_PM_ADR_STR               L"PM ADR Command Received"
 #define LAST_SHUTDOWN_STATUS_PM_S3_STR                L"PM S3 Received"
@@ -743,7 +748,7 @@ FreeStringArray(
   If the user does not provide a handle, the function will try
   to match the driver or the controller handle based on the
   provided protocol GUID.
-  No need to call close protocol because of the way it's opened.
+  No need to call close protocol because of the way it is opened.
 
   @param[in] Guid is the EFI GUID of the protocol we want to open.
   @param[out] ppProtocol is the pointer to a pointer where the opened
@@ -1190,7 +1195,7 @@ CheckIfLanguageIsSupported(
 
   @retval - upper character
 **/
-CHAR16 ToUpper(
+CHAR16 NvmToUpper(
   IN      CHAR16 InChar
   );
 
@@ -1959,6 +1964,18 @@ CHAR16 * ConvertDimmInfoAttribToString(
   VOID *pAttrib,
   CHAR16* pFormatStr OPTIONAL
 );
+
+/**
+  Match driver command status to EFI return code
+
+  @param[in] Status - NVM_STATUS returned from driver
+
+  @retval - Appropriate EFI return code
+**/
+EFI_STATUS
+MatchCliReturnCode (
+  IN     NVM_STATUS Status
+ );
 
 #ifndef OS_BUILD
 /**

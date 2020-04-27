@@ -43,7 +43,7 @@ else()
 	endif()
 
 	if(NOT GIT_FOUND OR ${GIT_RETURN_CODE})
-		set(IPMCTL_VERSION_STRING ${IPMCTL_VERSION_MAJOR}.${IPMCTL_VERSION_MINOR}.${IPMCTL_VERSION_PATCH}.3722)
+		set(IPMCTL_VERSION_STRING ${IPMCTL_VERSION_MAJOR}.${IPMCTL_VERSION_MINOR}.${IPMCTL_VERSION_PATCH}.3759)
 	endif()
 endif()
 
@@ -72,6 +72,9 @@ endif()
 if(ESX_BUILD)
 	set(OS_TYPE esx)
 	set(FILE_PREFIX esx)
+	set(CMAKE_SKIP_BUILD_RPATH FALSE)
+	set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+	set(CMAKE_INSTALL_RPATH "/opt/intel/bin")
 	find_package(PythonInterp REQUIRED)
 elseif(UNIX)
 	set(LNX_BUILD 1)
@@ -247,7 +250,7 @@ target_include_directories(ipmctl_os_interface PUBLIC
 	src/os/nvm_api
 	src/os/s_string
 	)
-# TODO: Remove the backup winioctl.h file when the 17650+ Windows SDK is publicly released
+
 if (MSVC)
 	string(REGEX REPLACE "([0-9]+)\\.[0-9]+\\.[0-9]+\\.[0-9]+" "\\1" sdk_version_major $ENV{WindowsSDKVersion})
 	string(REGEX REPLACE "[0-9]+\\.([0-9]+)\\.[0-9]+\\.[0-9]+" "\\1" sdk_version_major2 $ENV{WindowsSDKVersion})
@@ -255,10 +258,7 @@ if (MSVC)
 	if (${sdk_version_major} GREATER 9 AND ${sdk_version_minor} GREATER 17650)
 		MESSAGE("Using Windows SDK 17650+")
 	else()
-		MESSAGE("Using internal winioctl.h")
-		target_include_directories(ipmctl_os_interface PUBLIC
-			src/os/win/sdk
-		)
+		MESSAGE(FATAL_ERROR "Requires Windows SDK version 17650 or newer.")
 	endif()
 endif()
 
@@ -611,27 +611,6 @@ if(LNX_BUILD)
 endif()
 
 #----------------------------------------------------------------------------------------------------
-# Documentation
-#----------------------------------------------------------------------------------------------------
-find_package(Doxygen)
-
-if(DOXYGEN_FOUND)
-
-#----------------------------------------------------------------------------------------------------
-# Generate NVM C API documentation with Doxygen
-#----------------------------------------------------------------------------------------------------
-	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/os/docs/Doxyfile_api.in ${CMAKE_BINARY_DIR}/docs/nvm_api/Doxyfile_nvm_api @ONLY)
-	add_custom_target(doc-api
-		mkdir -p ${ROOT}/output/${BUILD_TYPE}/docs/nvm_api
-		COMMAND cp ${CMAKE_CURRENT_SOURCE_DIR}/Documentation/nvm_management_api/nvm_management_api_latex_header.tex ${CMAKE_BINARY_DIR}/docs/nvm_api/
-		COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_BINARY_DIR}/docs/nvm_api/Doxyfile_nvm_api
-		COMMAND make -C ${ROOT}/output/${BUILD_TYPE}/docs/nvm_api/latex pdf
-		WORKING_DIRECTORY ${ROOT}/output/${BUILD_TYPE}/docs/nvm_api
-		COMMENT "Generating API documentation with Doxygen" VERBATIM
-		)
-endif()
-
-#----------------------------------------------------------------------------------------------------
 # Generate man pages with asciidoctor
 #----------------------------------------------------------------------------------------------------
 if((ASCIIDOCTOR_FOUND OR A2X_FOUND) AND LNX_BUILD)
@@ -640,18 +619,14 @@ if((ASCIIDOCTOR_FOUND OR A2X_FOUND) AND LNX_BUILD)
 
 	set(DOCUMENTATION_INPUT_FILES
 		${ROOT}/Documentation/ipmctl/ipmctl.txt
-		${ROOT}/Documentation/ipmctl/DIMM_Discovery/ipmctl-show-device.txt
-		${ROOT}/Documentation/ipmctl/DIMM_Discovery/ipmctl-show-memory-resources.txt
-		${ROOT}/Documentation/ipmctl/DIMM_Discovery/ipmctl-show-socket.txt
-		${ROOT}/Documentation/ipmctl/DIMM_Discovery/ipmctl-show-system-capabilities.txt
-		${ROOT}/Documentation/ipmctl/DIMM_Discovery/ipmctl-show-topology.txt
-		${ROOT}/Documentation/ipmctl/Memory_Subsystem_Provisioning/ipmctl-change-device-passphrase.txt
-		${ROOT}/Documentation/ipmctl/Memory_Subsystem_Provisioning/ipmctl-change-device-security.txt
+		${ROOT}/Documentation/ipmctl/Discovery/ipmctl-show-device.txt
+		${ROOT}/Documentation/ipmctl/Discovery/ipmctl-show-memory-resources.txt
+		${ROOT}/Documentation/ipmctl/Discovery/ipmctl-show-socket.txt
+		${ROOT}/Documentation/ipmctl/Discovery/ipmctl-show-system-capabilities.txt
+		${ROOT}/Documentation/ipmctl/Discovery/ipmctl-show-topology.txt
 		${ROOT}/Documentation/ipmctl/Memory_Subsystem_Provisioning/ipmctl-create-goal.txt
 		${ROOT}/Documentation/ipmctl/Memory_Subsystem_Provisioning/ipmctl-delete-goal.txt
 		${ROOT}/Documentation/ipmctl/Memory_Subsystem_Provisioning/ipmctl-dump-goal.txt
-		${ROOT}/Documentation/ipmctl/Memory_Subsystem_Provisioning/ipmctl-enable-device-security.txt
-		${ROOT}/Documentation/ipmctl/Memory_Subsystem_Provisioning/ipmctl-erase-device-data.txt
 		${ROOT}/Documentation/ipmctl/Memory_Subsystem_Provisioning/ipmctl-load-goal.txt
 		${ROOT}/Documentation/ipmctl/Memory_Subsystem_Provisioning/ipmctl-show-goal.txt
 		${ROOT}/Documentation/ipmctl/Persistent_Memory_Provisioning/ipmctl-show-region.txt

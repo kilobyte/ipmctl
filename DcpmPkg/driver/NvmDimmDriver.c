@@ -1110,7 +1110,7 @@ InitializeDimms()
    }
 #ifndef OS_BUILD
    ReturnCodeNonBlocking = SmbusInit();
-   if (EFI_ERROR(ReturnCode)) {
+   if (EFI_ERROR(ReturnCodeNonBlocking)) {
     NVDIMM_WARN("Failed on Smbus init, error = " FORMAT_EFI_STATUS ".", ReturnCodeNonBlocking);
    }
 #endif //!OS_BUILD
@@ -1542,7 +1542,7 @@ NvmDimmDriverDriverBindingStart(
       goto FinishSkipClose;
    }
 
-   gNvmDimmData->HiiHandle = HiiAddPackages(&gNvmDimmNgnvmGuid, gNvmDimmData->DriverHandle, IntelDCPersistentMemoryDriverStrings, NULL);
+   gNvmDimmData->HiiHandle = HiiAddPackages(&gNvmDimmNgnvmGuid, gNvmDimmData->DriverHandle, IntelOptanePMemDriverStrings, NULL);
    if (gNvmDimmData->HiiHandle == NULL) {
       NVDIMM_WARN("Unable to add string package to Hii");
       goto Finish;

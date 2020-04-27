@@ -121,7 +121,7 @@ struct Command ShowDimmsCommand =
     {SOCKET_TARGET, L"", HELP_TEXT_SOCKET_IDS, FALSE, ValueOptional}
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                //!< properties
-  L"Show information about one or more DCPMMs.",           //!< help
+  L"Show information about one or more " PMEM_MODULES_STR L".",           //!< help
   ShowDimms,                                              //!< run function
   TRUE,                                                   //!< enable print control support
 };
@@ -186,7 +186,6 @@ CHAR16 *mppAllowedShowDimmsDisplayValues[] =
   MEMORY_BANDWIDTH_BOOST_MAX_POWER_LIMIT_STR,
   MEMORY_BANDWIDTH_BOOST_AVERAGE_POWER_TIME_CONSTANT_STR,
   MAX_AVG_POWER_LIMIT_STR,
-  MAX_TURBO_MODE_POWER_CONSUMPTION_STR,
   MAX_MEMORY_BANDWIDTH_BOOST_MAX_POWER_LIMIT,
   MAX_MEMORY_BANDWIDTH_BOOST_AVERAGE_POWER_TIME_CONSTANT,
   MEMORY_BANDWIDTH_BOOST_AVERAGE_POWER_TIME_CONSTANT_STEP,
@@ -268,7 +267,6 @@ CHAR16 *pOnlyManageableAllowedDisplayValues[] = {
   MEMORY_BANDWIDTH_BOOST_MAX_POWER_LIMIT_STR,
   MEMORY_BANDWIDTH_BOOST_AVERAGE_POWER_TIME_CONSTANT_STR,
   MAX_AVG_POWER_LIMIT_STR,
-  MAX_TURBO_MODE_POWER_CONSUMPTION_STR,
   MAX_MEMORY_BANDWIDTH_BOOST_MAX_POWER_LIMIT,
   MAX_MEMORY_BANDWIDTH_BOOST_AVERAGE_POWER_TIME_CONSTANT,
   MEMORY_BANDWIDTH_BOOST_AVERAGE_POWER_TIME_CONSTANT_STEP,
@@ -448,7 +446,7 @@ ShowDimms(
   UINT32 Index2 = 0;
   UINT32 Index3 = 0;
   UINT16 UnitsOption = DISPLAY_SIZE_UNIT_UNKNOWN;
-  UINT16 UnitsToDisplay = FixedPcdGet32(PcdDcpmmCliDefaultCapacityUnit);
+  UINT16 UnitsToDisplay = FixedPcdGet16(PcdDcpmmCliDefaultCapacityUnit);
   BOOLEAN Found = FALSE;
   BOOLEAN ShowAll = FALSE;
   BOOLEAN ShowTableView = FALSE;
@@ -591,7 +589,7 @@ ShowDimms(
   }
 
   /** if a specific DIMM pid was passed in, set it **/
-  if (pCmd->targets[0].pTargetValueStr && StrLen(pCmd->targets[0].pTargetValueStr) > 0) {
+  if (NULL != pCmd->targets[0].pTargetValueStr && StrLen(pCmd->targets[0].pTargetValueStr) > 0) {
     pAllDimms = AllocateZeroPool(sizeof(*pAllDimms) * (DimmCount));
     if (NULL == pAllDimms) {
       ReturnCode = EFI_OUT_OF_RESOURCES;
@@ -767,7 +765,7 @@ ShowDimms(
           pSVNDowngradeStr = CatSPrint(NULL, FORMAT_STR, UNKNOWN_ATTRIB_VAL);
         }
         else {
-          pSVNDowngradeStr = SVNDowngradeOptInToString(gNvmDimmCliHiiHandle, pDimms[DimmIndex].S3ResumeOptIn);
+          pSVNDowngradeStr = SVNDowngradeOptInToString(gNvmDimmCliHiiHandle, pDimms[DimmIndex].SVNDowngradeOptIn);
         }
         PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, SVN_DOWNGRADE_OPT_IN_STR, pSVNDowngradeStr);
         FREE_POOL_SAFE(pSVNDowngradeStr);
@@ -779,7 +777,7 @@ ShowDimms(
           pSecureErasePolicyStr = CatSPrint(NULL, FORMAT_STR, UNKNOWN_ATTRIB_VAL);
         }
         else {
-          pSecureErasePolicyStr = SecureErasePolicyOptInToString(gNvmDimmCliHiiHandle, pDimms[DimmIndex].S3ResumeOptIn);
+          pSecureErasePolicyStr = SecureErasePolicyOptInToString(gNvmDimmCliHiiHandle, pDimms[DimmIndex].SecureErasePolicyOptIn);
         }
         PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, SEP_OPT_IN_STR, pSecureErasePolicyStr);
         FREE_POOL_SAFE(pSecureErasePolicyStr);
@@ -802,7 +800,7 @@ ShowDimms(
           pFwActivateStr = CatSPrint(NULL, FORMAT_STR, UNKNOWN_ATTRIB_VAL);
         }
         else {
-          pFwActivateStr = FwActivateOptInToString(gNvmDimmCliHiiHandle, pDimms[DimmIndex].S3ResumeOptIn);
+          pFwActivateStr = FwActivateOptInToString(gNvmDimmCliHiiHandle, pDimms[DimmIndex].FwActivateOptIn);
         }
         PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, FW_ACTIVATE_OPT_IN_STR, pFwActivateStr);
         FREE_POOL_SAFE(pFwActivateStr);
@@ -837,6 +835,12 @@ ShowDimms(
       if (ShowAll || (pDispOptions->DisplayOptionSet && ContainsValue(pDispOptions->pDisplayValues, FW_API_VER_STR))) {
         ConvertFwApiVersion(TmpFwVerString, pDimms[DimmIndex].FwVer.FwApiMajor, pDimms[DimmIndex].FwVer.FwApiMinor);
         PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, FW_API_VER_STR, TmpFwVerString);
+      }
+
+      /** FwActiveApiVersion **/
+      if (ShowAll || (pDispOptions->DisplayOptionSet && ContainsValue(pDispOptions->pDisplayValues, FW_ACTIVE_API_VER_STR))) {
+        ConvertFwApiVersion(TmpFwVerString, pDimms[DimmIndex].FwActiveApiVersionMajor, pDimms[DimmIndex].FwActiveApiVersionMinor);
+        PRINTER_SET_KEY_VAL_WIDE_STR(pPrinterCtx, pPath, FW_ACTIVE_API_VER_STR, TmpFwVerString);
       }
 
       /** InterfaceFormatCode **/
@@ -1223,14 +1227,9 @@ ShowDimms(
           PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, MAX_AVG_POWER_LIMIT_STR, ConvertDimmInfoAttribToString((VOID*)&pDimms[DimmIndex].MaxAveragePowerLimit, FORMAT_INT32 L" " MILI_WATT_STR));
         }
 
-        /** 2.1/2.0 MaxMemoryBandwidthBoostMaxPowerLimit/MaxTurboModePowerConsumption **/
-        if (ShowAll
-          || (pDispOptions->DisplayOptionSet && ContainsValue(pDispOptions->pDisplayValues, MAX_TURBO_MODE_POWER_CONSUMPTION_STR))
-          || (pDispOptions->DisplayOptionSet && ContainsValue(pDispOptions->pDisplayValues, MAX_MEMORY_BANDWIDTH_BOOST_MAX_POWER_LIMIT))) {
-          if (2 == pDimms[DimmIndex].FwVer.FwApiMajor && 0 == pDimms[DimmIndex].FwVer.FwApiMinor) {
-            PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, MAX_TURBO_MODE_POWER_CONSUMPTION_STR, ConvertDimmInfoAttribToString((VOID*)&pDimms[DimmIndex].MaxMemoryBandwidthBoostMaxPowerLimit, FORMAT_INT32 L" " MILI_WATT_STR));
-          }
-          else if ((2 == pDimms[DimmIndex].FwVer.FwApiMajor && 1 <= pDimms[DimmIndex].FwVer.FwApiMinor)
+        /** MaxMemoryBandwidthBoostMaxPowerLimit **/
+        if (ShowAll || (pDispOptions->DisplayOptionSet && ContainsValue(pDispOptions->pDisplayValues, MAX_MEMORY_BANDWIDTH_BOOST_MAX_POWER_LIMIT))) {
+          if ((2 == pDimms[DimmIndex].FwVer.FwApiMajor && 0 <= pDimms[DimmIndex].FwVer.FwApiMinor)
             || 3 <= pDimms[DimmIndex].FwVer.FwApiMajor) {
             PRINTER_SET_KEY_VAL_WIDE_STR_FORMAT(pPrinterCtx, pPath, MAX_MEMORY_BANDWIDTH_BOOST_MAX_POWER_LIMIT, ConvertDimmInfoAttribToString((VOID*)&pDimms[DimmIndex].MaxMemoryBandwidthBoostMaxPowerLimit, FORMAT_INT32 L" " MILI_WATT_STR));
           }

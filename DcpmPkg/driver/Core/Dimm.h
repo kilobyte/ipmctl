@@ -308,6 +308,8 @@ typedef struct _DIMM {
   **/
   BOOLEAN PcdMappedMemInfoRead;
 #endif
+  UINT8 FwActiveApiVersionMajor;               //!< Specifies the FW Active Api major version
+  UINT8 FwActiveApiVersionMinor;               //!< Specifies the FW Active Api minor version
 } DIMM;
 
 #define DIMM_SIGNATURE     SIGNATURE_64('\0', '\0', '\0', '\0', 'D', 'I', 'M', 'M')
@@ -2024,7 +2026,7 @@ IsLargePayloadAvailable(
 EFI_STATUS
 PassThru(
   IN     struct _DIMM *pDimm,
-  IN OUT FW_CMD *pCmd,
+  IN OUT NVM_FW_CMD *pCmd,
   IN     UINT64 Timeout
 );
 
@@ -2079,7 +2081,7 @@ PopulateDimmBsrAndBootStatusBitmask(
 EFI_STATUS
 DcpmmCmd(
   IN     struct _DIMM *pDimm,
-  IN OUT FW_CMD *pCmd,
+  IN OUT NVM_FW_CMD *pCmd,
   IN     UINT32 Timeout OPTIONAL,
   IN     DCPMM_FIS_INTERFACE DcpmmInterface
 );

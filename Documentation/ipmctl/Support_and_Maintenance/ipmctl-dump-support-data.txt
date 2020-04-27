@@ -12,14 +12,14 @@ ipmctl-dump-support-data - Dumps a support snapshot to a file
 
 SYNOPSIS
 --------
-[verse]
+[listing]
 ipmctl dump [OPTIONS] -destination (file_prefix) [-dict (filename)] -support
 
 DESCRIPTION
 -----------
 Creates a support snapshot and dump support data to a file for off-line analysis
-by support personnel. Support data may include system log(s), error log(s),
-trace log(s), platform configuration, sensor information and diagnostic results.
+by support personnel. Support data may include system logs, error logs,
+trace logs, platform configuration, sensor information and diagnostic results.
 
 This command may take significantly longer than other commands to complete, because
 it combines and executes multiple individual commands.
@@ -33,7 +33,7 @@ Commands executed:
 * start -diagnostic
 * show -system
 
-Commands executed per DCPMM:
+Commands executed per PMem module:
 
 * show -a -dimm
 * show -a -sensor -dimm
@@ -58,8 +58,8 @@ NOTE: The -ddrt and -smbus options are mutually exclusive and may not be used to
 ifdef::os_build[]
 -o (text|nvmxml)::
 -output (text|nvmxml)::
-    Changes the output format of the command execution (the output file content
-    will remain text). One of: "text" (default) or "nvmxml".
+  Changes the output format of the command execution (the output file content
+  will remain text). One of: "text" (default) or "nvmxml".
 endif::os_build[]
 
 TARGET
@@ -83,7 +83,7 @@ platform supported data in that file. Also, dumps the debug log info in the
 related files that start with the file name dumpfile_*. Refer to
 *_Dump Debug Log_* for more info on the output files.
 
-[verse]
+[listing]
 ipmctl dump -destination filename -dict nlog_dict.1.1.0.0000.txt -support
 
 LIMITATIONS
@@ -92,7 +92,7 @@ In order to successfully execute this command:
 
 - The caller must have the appropriate privileges.
 
-- The specified DCPMM(s) must be manageable by the host software.
+- The specified PMem modules must be manageable by the host software.
 
 RETURN DATA
 -----------
@@ -101,5 +101,5 @@ Returns the status of the operation.
 SAMPLE OUTPUT
 -------------
 On success:
-[verse]
+[listing]
 Dump support data successfully written to filename_platform_support_info.txt.

@@ -156,7 +156,7 @@ struct Command ShowTopologyCommand =
     {SOCKET_TARGET, L"", HELP_TEXT_SOCKET_IDS, FALSE, ValueOptional}
   },
   {{L"", L"", L"", FALSE, ValueOptional}},                                   //!< properties
-  L"Show the topology of all the DDRs and DCPMMs.",                          //!< help
+  L"Show the topology of all the DDRs and " PMEM_MODULES_STR L".",                          //!< help
   ShowTopology,
   TRUE
 };
@@ -194,7 +194,7 @@ ShowTopology(
   UINT16 Index2 = 0;
   UINT16 TopologyDimmsNumber = 0;
   UINT16 UnitsOption = DISPLAY_SIZE_UNIT_UNKNOWN;
-  UINT16 UnitsToDisplay = FixedPcdGet32(PcdDcpmmCliDefaultCapacityUnit);
+  UINT16 UnitsToDisplay = FixedPcdGet16(PcdDcpmmCliDefaultCapacityUnit);
   BOOLEAN AllOptionSet = FALSE;
   BOOLEAN Found = FALSE;
   CHAR16 *pSocketsValue = NULL;

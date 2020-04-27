@@ -287,7 +287,7 @@ GetRegionById(
 /**
   Get Region List
   Retruns the pointer to the region list.
-  It's also initializing the region list if it's necessary.
+  It is also initializing the region list if it is necessary.
 
   @param[in] pRegionList Head of the list for Regions
   @param[in] UseNfit Flag to indicate usage of NFIT
@@ -1243,6 +1243,11 @@ DetermineRegionHealth(
   LIST_FOR_EACH(pNode, &pRegion->DimmRegionList) {
     pDimmRegion = DIMM_REGION_FROM_NODE(pNode);
     pDimm = pDimmRegion->pDimm;
+
+    if (!IsDimmManageable(pDimm)) {
+      continue;
+    }
+
     /** Check if any of the DIMMs are locked **/
     ReturnCode = IsDimmLocked(pDimm, &IsLocked);
     if (EFI_ERROR(ReturnCode)) {
@@ -3541,9 +3546,6 @@ ReduceCapacityForSocketSKU(
   UINT64 ReduceCapacity = 0;
   UINT64 MappedMemorySizeLimit = 0;
   UINT64 DDRRawCapacity = 0;
-  UINT64 DDRCacheCapacity = 0;
-  UINT64 DDRVolatileCapacity = 0;
-  UINT64 DDRInaccessibleCapacity = 0;
 
   NVDIMM_ENTRY();
 
@@ -3579,7 +3581,7 @@ ReduceCapacityForSocketSKU(
     goto Finish;
   }
 
-  ReturnCode = GetDDRCapacities((UINT16)Socket, &DDRRawCapacity, &DDRCacheCapacity, &DDRVolatileCapacity, &DDRInaccessibleCapacity);
+  ReturnCode = GetDDRCapacities((UINT16)Socket, &DDRRawCapacity, NULL, NULL, NULL);
   if (EFI_ERROR(ReturnCode)) {
     NVDIMM_DBG("Could not retrieve DDR capacities");
     goto Finish;
