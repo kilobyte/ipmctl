@@ -1,3 +1,10 @@
+ipmctl (02.00.00.3759+ds-1) unstable; urgency=medium
+
+  * New upstream release -- official 2.0.
+  * Update symbols.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Mon, 27 Apr 2020 21:10:39 +0200
+
 ipmctl (02.00.00.3722+ds-1) unstable; urgency=medium
 
   * New upstream snapshot.
