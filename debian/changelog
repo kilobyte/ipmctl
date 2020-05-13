@@ -1,3 +1,9 @@
+ipmctl (02.00.00.3764+ds-1) unstable; urgency=medium
+
+  * New upstream minor release; bumps supported Barlow Pass up to 2.05.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 12 May 2020 15:13:28 +0200
+
 ipmctl (02.00.00.3759+ds-1) unstable; urgency=medium
 
   * New upstream release -- official 2.0.
