@@ -5,11 +5,23 @@ ipmctl (02.00.00.3774+ds-1) unstable; urgency=medium
 
  -- Adam Borowski <kilobyte@angband.pl>  Tue, 16 Jun 2020 06:26:28 +0200
 
+ipmctl (02.00.00.3764+ds-1~bpo10+1) buster-backports; urgency=medium
+
+  * Backport to Buster.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 19 May 2020 01:18:51 +0200
+
 ipmctl (02.00.00.3764+ds-1) unstable; urgency=medium
 
   * New upstream minor release; bumps supported Barlow Pass up to 2.05.
 
  -- Adam Borowski <kilobyte@angband.pl>  Tue, 12 May 2020 15:13:28 +0200
+
+ipmctl (02.00.00.3759+ds-1~bpo10+1) buster-backports; urgency=medium
+
+  * Backport to Buster (reason: add support for next gen hardware).
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 05 May 2020 03:09:53 +0200
 
 ipmctl (02.00.00.3759+ds-1) unstable; urgency=medium
 
