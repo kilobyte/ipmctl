@@ -922,8 +922,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  PrintNamespaceIndex@Base 02.00.00.3673
  PrintNamespaceLabel@Base 02.00.00.3673
  PrintNoBuffer@Base 02.00.00.3673
- PrintPMTT2@Base 02.00.00.3673
- PrintPMTT@Base 02.00.00.3673
  PrintPcat@Base 02.00.00.3673
  PrintPcatTable@Base 02.00.00.3673
  PrintPcdConfInput@Base 02.00.00.3673
@@ -936,6 +934,10 @@ libipmctl.so.4 libipmctl4 #MINVER#
  PrintPcdPartitionSizeChange@Base 02.00.00.3673
  PrintPcdPcatTableHeader@Base 02.00.00.3673
  PrintPcdTableHeader@Base 02.00.00.3673
+ PrintPmtt@Base 02.00.00.3772
+ PrintPmttCommonHeader@Base 02.00.00.3772
+ PrintPmttRev1@Base 02.00.00.3772
+ PrintPmttRev2@Base 02.00.00.3772
  PrintProgress@Base 02.00.00.3673
  PrinterCreateCtx@Base 02.00.00.3673
  PrinterDestroyCtx@Base 02.00.00.3673
