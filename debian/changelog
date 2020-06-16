@@ -1,3 +1,10 @@
+ipmctl (02.00.00.3774+ds-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+  * Update symbols (changed ones are not public API).
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 16 Jun 2020 06:26:28 +0200
+
 ipmctl (02.00.00.3764+ds-1) unstable; urgency=medium
 
   * New upstream minor release; bumps supported Barlow Pass up to 2.05.
