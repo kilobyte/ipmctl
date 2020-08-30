@@ -49,6 +49,7 @@ typedef enum _NvmStatusCode {
   NVM_ERR_SPI_ACCESS_NOT_ENABLED                    = 43,   ///< Error: PMem module SPI access not enabled
   NVM_ERR_SECURE_ERASE_NAMESPACE_EXISTS             = 44,   ///< Error: Namespace exists - cannot execute request
   NVM_ERR_SECURITY_MASTER_PP_COUNT_EXPIRED          = 45,   ///< Error: Security count for master passphrase expired
+  NVM_ERR_FLASH_SPI_NO_LONGER_SUPPORTED             = 46,   ///< Error: PMem module FlashSPI recovery is no longer supported
 
   NVM_ERR_IMAGE_FILE_NOT_COMPATIBLE_TO_CTLR_STEPPING     = 59,   ///< Error: Image not compatible with this PMem module
   NVM_ERR_FILENAME_NOT_PROVIDED                     = 60,   ///< Error: Filename not provided
@@ -70,14 +71,19 @@ typedef enum _NvmStatusCode {
   NVM_ERR_ERROR_INJECTION_BIOS_KNOB_NOT_ENABLED     = 75,   ///< Error: BIOS error injection knob is not enabled
 
   NVM_ERR_MEDIA_DISABLED                            = 90,   ///< Error: Media disabled
+  NVM_ERR_MEDIA_NOT_ACCESSIBLE_CANNOT_CONTINUE      = 91,   ///< Error: Media not accessible. Replace PMem module to continue
+  NVM_ERR_PCD_CURR_CONF_MISSING                     = 92,   ///< Error: One or more PMem modules have invalid PCD data
 
+  NVM_ERR_NMFM_RATIO_GREATER_THAN_ONE                   = 93,   ///< Error: The requested memory mode size is below the NM:FM limit of 1:1
+  NVM_WARN_NMFM_RATIO_LOWER_VIOLATION                   = 95,   ///< Warning: The requested memory mode size is below the recommended NM:FM limit of 1:4
+  NVM_WARN_NMFM_RATIO_UPPER_VIOLATION                   = 96,   ///< Warning: The requested memory mode size is above the recommended NM:FM limit of 1:16
   NVM_WARN_GOAL_CREATION_SECURITY_UNLOCKED              = 97,   ///< Warning: Goal will not be applied unless security is disabled prior to platform firmware (BIOS) provisioning!
   NVM_WARN_REGION_MAX_PM_INTERLEAVE_SETS_EXCEEDED       = 98,   ///< Warning: Interleave Sets cannot exceed MaxPMInterleaveSetsPerDie per Socket due to platform limitation
   NVM_WARN_REGION_MAX_AD_PM_INTERLEAVE_SETS_EXCEEDED    = 99,   ///< Warning: Interleave Sets cannot exceed MaxPMInterleaveSetsPerDie per Socket due to platform limitation for AD Interleaved mode
   NVM_WARN_REGION_MAX_AD_NI_PM_INTERLEAVE_SETS_EXCEEDED = 100,  ///< Warning: Interleave Sets cannot exceed MaxPMInterleaveSetsPerDie per Socket due to platform limitation for AD Non-Interleaved mode
   NVM_WARN_REGION_AD_NI_PM_INTERLEAVE_SETS_REDUCED      = 101,  ///< Warning: Reducing the number of AppDirect2 (AD non-interleaved) regions created in AD interlaeved mode request when MaxPMInterleaveSetsPerDie limit exceeeded
   NVM_ERR_REGION_MAX_PM_INTERLEAVE_SETS_EXCEEDED        = 102,  ///< Error: Interleave Sets cannot exceed MaxPMInterleaveSetsPerDie per Socket due to platform limitation (error if existing regions + new region goals for specific PMem modules greater then MaxPMInterleaveSetsPerDie limit)
-  NVM_WARN_2LM_MODE_OFF                             = 103,  ///< Error: MemoryMode off
+
   NVM_WARN_IMC_DDR_PMM_NOT_PAIRED                   = 104,  ///< Error: PMM and DDR4 missing on iMC
   NVM_ERR_PCD_BAD_DEVICE_CONFIG                     = 105,  ///< Error: Bad PCD config
   NVM_ERR_REGION_GOAL_CONF_AFFECTS_UNSPEC_DIMM      = 106,  ///< Error: Goal config affects unspecified PMem module
@@ -203,6 +209,8 @@ typedef enum _NvmStatusCode {
   NVM_ERR_PCD_DELETE_DENIED                         = 314,  ///< Error: API not supported
   NVM_ERR_MIXED_GENERATIONS_NOT_SUPPORTED           = 315,  ///< Error: Operation does not work when PMem module that are different generations
   NVM_ERR_DIMM_HEALTHY_FW_NOT_RECOVERABLE           = 316,  ///< Error: An attempt to recover FW on a healthy PMem module
+
+  NVM_ERR_PLATFORM_NOT_SUPPORT_MIXED_MODE           = 317,  ///< Error: Platform does not support mixed memory mode
   NVM_LAST_STATUS_VALUE
 } NvmStatusCode;
 

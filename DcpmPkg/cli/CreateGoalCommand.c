@@ -238,8 +238,6 @@ CheckAndConfirmAlignments(
   BOOLEAN CapacityReducedForSKU = FALSE;
   BOOLEAN MaxPmInterleaveSetsExceeded = FALSE;
   CHAR16 *pSingleStatusCodeMessage = NULL;
-  BOOLEAN IsAboveLimit = FALSE;
-  BOOLEAN IsBelowLimit = FALSE;
   UINT32 AppDirect1Regions = 0;
   UINT32 AppDirect2Regions = 0;
   UINT32 NumOfDimmsTargeted = 0;
@@ -289,19 +287,15 @@ CheckAndConfirmAlignments(
     goto Finish;
   }
 
-  if (RegionConfigsCount > 0) {
-    ReturnCode = CheckNmFmLimits(pNvmDimmConfigProtocol, &RegionConfigsInfo[0], RegionConfigsCount, &IsAboveLimit, &IsBelowLimit);
-    if (EFI_ERROR(ReturnCode)) {
-      PRINTER_SET_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_INTERNAL_ERROR);
-      goto Finish;
-    }
-
-    if (TRUE == IsBelowLimit) {
-      PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_NMFM_LOWER_VIOLATION, TWOLM_NMFM_RATIO_LOWER_STR);
-    }
-    else if (TRUE == IsAboveLimit) {
-      PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, CLI_ERR_NMFM_UPPER_VIOLATION, TWOLM_NMFM_RATIO_UPPER);
-    }
+  if (pCommandStatus->GeneralStatus == NVM_WARN_NMFM_RATIO_LOWER_VIOLATION) {
+    pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(gNvmDimmCliHiiHandle, NVM_WARN_NMFM_RATIO_LOWER_VIOLATION);
+    PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, pSingleStatusCodeMessage, TWOLM_NMFM_RATIO_LOWER_STR);
+    FREE_POOL_SAFE(pSingleStatusCodeMessage);
+  }
+  else if (pCommandStatus->GeneralStatus == NVM_WARN_NMFM_RATIO_UPPER_VIOLATION) {
+    pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(gNvmDimmCliHiiHandle, NVM_WARN_NMFM_RATIO_UPPER_VIOLATION);
+    PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, pSingleStatusCodeMessage, TWOLM_NMFM_RATIO_UPPER);
+    FREE_POOL_SAFE(pSingleStatusCodeMessage);
   }
 
   if (VolatilePercent >= VolatilePercentAligned) {
@@ -331,12 +325,6 @@ CheckAndConfirmAlignments(
   }
 
   MaxPmInterleaveSetsExceeded = IsSetNvmStatusForObject(pCommandStatus, 0, NVM_WARN_REGION_MAX_PM_INTERLEAVE_SETS_EXCEEDED);
-
-  if (pCommandStatus->GeneralStatus == NVM_WARN_2LM_MODE_OFF) {
-    pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(gNvmDimmCliHiiHandle, NVM_WARN_2LM_MODE_OFF);
-    PRINTER_PROMPT_MSG(pCmd->pPrintCtx, ReturnCode, pSingleStatusCodeMessage);
-    FREE_POOL_SAFE(pSingleStatusCodeMessage);
-  }
 
   if (pCommandStatus->GeneralStatus == NVM_WARN_IMC_DDR_PMM_NOT_PAIRED) {
     pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(gNvmDimmCliHiiHandle, NVM_WARN_IMC_DDR_PMM_NOT_PAIRED);
@@ -702,8 +690,7 @@ CreateGoal(
 
     goto FinishSkipPrinterProcess;
   }
-  else
-  {
+  else {
     ReturnCode = MatchCliReturnCode(pCommandStatus->GeneralStatus);
     PRINTER_SET_COMMAND_STATUS(pPrinterCtx, ReturnCode, CREATE_GOAL_COMMAND_STATUS_HEADER, CLI_INFO_ON, pCommandStatus);
   }
