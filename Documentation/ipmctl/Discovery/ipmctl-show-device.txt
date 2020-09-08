@@ -29,7 +29,7 @@ NOTE: The all and display options are exclusive and may not be used together.
 
 -d (attributes)::
 -display (attributes)::
-  Filters the returned attributes by explicitly specifying a comma-separated
+  Filters the returned attributes by explicitly specifying a comma separated
   list of any of the attributes defined in the Return Data section.
 
 NOTE: The all and display options are exclusive and may not be used together.
@@ -62,11 +62,11 @@ TARGETS
 -------
 -dimm [DimmIDs]::
   Restricts output to specific PMem modules by supplying the PMem module target and one or
-  more comma-separated PMem module identifiers. The default is to display all PMem modules.
+  more comma separated PMem module identifiers. The default is to display all PMem modules.
 
 -socket [SocketIDs]::
   Restricts output to the PMem modules installed on specific sockets by supplying the
-  socket target and one or more comma-separated socket identifiers. The default
+  socket target and one or more comma separated socket identifiers. The default
   is to display all sockets.
 
 NOTE: If ACPI PMTT table is not present, then DDR4 memory will not be displayed
@@ -93,7 +93,7 @@ below; applying options changes the output to a more detailed format. Limited
 information (noted in the table below) is applicable if the PMem module is not
 manageable by the software as indicated by the "ManageabilityState" property.
 
-NOTE: Some data is endian-swapped for human readability.
+NOTE: Some data is endian swapped for human readability.
 
 DimmID::
   (Default) The PMem module identifier.
@@ -243,7 +243,7 @@ PartNumber::
   The part number assigned by the vendor
 
 DeviceLocator::
-  A string describing the physically-labeled socket or board position where the
+  A string describing the physically labeled socket or board position where the
   memory device is located from the SMBIOS Type 17 Memory Device table.
 
 BankLabel::
@@ -452,20 +452,20 @@ UnlatchedLastShutdownStatus::
   on a dirty shutdown is logged, even if the Latch System Shutdown Status
   was not enabled. One or more of:
   - Unknown: The last shutdown status cannot be determined.
-  - PM ADR Command: Power management ADR command received.
-  - PM S3: Power management S3 command received.
-  - PM S5: Power management S5 command received.
-  - DDRT Power Fail Command: DDR power fail command received.
+  - PM ADR Command Received: Power management ADR command received.
+  - PM S3 Received: Power management S3 command received.
+  - PM S5 Received: Power management S5 command received.
+  - DDRT Power Fail Command Received: DDR power fail command received.
   - PMIC 12V/DDRT 1.2V Power Loss (PLI)
-  - PM Warm Reset: Power management warm reset received.
-  - Thermal Shutdown: Thermal shutdown triggered.
+  - PM Warm Reset Received: Power management warm reset received.
+  - Thermal Shutdown Received: Thermal shutdown triggered.
   - Controller’s FW State Flush Complete: Flush Completed.
-  - Viral Interrupt: Viral interrupt received.
-  - Surprise Clock Stop: Surprise clock stop received.
+  - Viral Interrupt Received: Viral interrupt received.
+  - Surprise Clock Stop Received: Surprise clock stop received.
   - Write Data Flush Complete: Write data flush completed.
-  - PM S4: Power management S4 command received.
-  - DDRT Surprise Reset: Surprise reset received
+  - PM S4 Received: Power management S4 command received.
   - PM Idle Received: Power management idle received.
+  - DDRT Surprise Reset Received: Surprise reset received.
   - Extended Flush Complete.
 
 ThermalThrottleLossPercent::
@@ -574,8 +574,8 @@ BootStatus::
   - Unknown - The boot status register cannot be read.
   - Success - No errors were reported during initialization.
    +
-  *The following statuses indicate that the media is not functional and
-  therefore access to user data and operations that require use of the media
+  *The following statuses indicate that the media is not functional and,
+   therefore, access to user data and operations that require use of the media
   will fail.*
   - Media Not Ready - The firmware did not complete media training.
   - Media Error - The firmware detected an error during media training.
@@ -623,7 +623,7 @@ SoftwareTriggersEnabled::
   - 0: Disabled - This is the default.
   - 1: At least one software trigger enabled.
 
-SoftwareTriggersEnabledDetail::
+SoftwareTriggersEnabledDetails::
   Comma separated list of software triggers currently enabled. One or more of:
   - None
   - Package Sparing

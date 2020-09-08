@@ -67,6 +67,7 @@ GetObjectTypeString(
   @param[in] pStatusPreposition String with preposition
   @param[in] pCommandStatus Command status data
   @param[in] ObjectIdNumberPreferred Use Object ID number if true, use Object ID string otherwise
+  @param[in] DoNotPrintGeneralStatusSuccessCode
   @param[out] ppOutputMessage buffer where output will be saved
 
   Warning: ppOutputMessage - should be freed in caller.
@@ -81,6 +82,7 @@ CreateCommandStatusString(
   IN     CONST CHAR16 *pStatusPreposition,
   IN     COMMAND_STATUS *pCommandStatus,
   IN     BOOLEAN ObjectIdNumberPreferred,
+  IN     BOOLEAN DoNotPrintGeneralStatusSuccessCode,
   OUT CHAR16 **ppOutputMessage
 )
 {
@@ -109,11 +111,15 @@ CreateCommandStatusString(
 
   if (pCommandStatus->ObjectStatusCount == 0) {
     if (!NVM_ERROR(pCommandStatus->GeneralStatus)) {
-      pExecuteSuccessString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_EXECUTE_SUCCESS), NULL);
-      pCurrentString = CatSPrint(pCurrentString, FORMAT_STR_SPACE FORMAT_STR_NL,
-        pStatusMessage,
-        pExecuteSuccessString);
-      FREE_POOL_SAFE(pExecuteSuccessString);
+      if (DoNotPrintGeneralStatusSuccessCode) {
+        pCurrentString = CatSPrint(pCurrentString, L"");
+      } else {
+        pExecuteSuccessString = HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_EXECUTE_SUCCESS), NULL);
+        pCurrentString = CatSPrint(pCurrentString, FORMAT_STR_SPACE FORMAT_STR_NL,
+          pStatusMessage,
+          pExecuteSuccessString);
+        FREE_POOL_SAFE(pExecuteSuccessString);
+      }
     }
     else {
       pSingleStatusCodeMessage = GetSingleNvmStatusCodeMessage(HiiHandle, pCommandStatus->GeneralStatus);
@@ -191,7 +197,6 @@ InitErrorAndWarningNvmStatusCodes()
   // Warnings:
   SetNvmStatus(&gAllWarningNvmStatuses, NVM_WARN_BLOCK_MODE_DISABLED);
   SetNvmStatus(&gAllWarningNvmStatuses, NVM_WARN_SMART_NONCRITICAL_HEALTH_ISSUE);
-  SetNvmStatus(&gAllWarningNvmStatuses, NVM_WARN_2LM_MODE_OFF);
   SetNvmStatus(&gAllWarningNvmStatuses, NVM_WARN_MAPPED_MEM_REDUCED_DUE_TO_CPU_SKU);
   SetNvmStatus(&gAllWarningNvmStatuses, NVM_WARN_IMC_DDR_PMM_NOT_PAIRED);
 
@@ -271,6 +276,9 @@ InitErrorAndWarningNvmStatusCodes()
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_CREATE_NAMESPACE_NOT_ALLOWED);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_REGION_REMAINING_SIZE_NOT_IN_LAST_PROPERTY);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_PERS_MEM_MUST_BE_APPLIED_TO_ALL_DIMMS);
+  SetNvmStatus(&gAllErrorNvmStatuses, NVM_WARN_NMFM_RATIO_LOWER_VIOLATION);
+  SetNvmStatus(&gAllErrorNvmStatuses, NVM_WARN_NMFM_RATIO_UPPER_VIOLATION);
+  SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_NMFM_RATIO_GREATER_THAN_ONE);
 
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_FAILED_TO_GET_DIMM_REGISTERS);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_IMAGE_FILE_NOT_COMPATIBLE_TO_CTLR_STEPPING);
@@ -285,6 +293,8 @@ InitErrorAndWarningNvmStatusCodes()
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_GET_PCD_FAILED);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_FIRMWARE_ALREADY_LOADED);
   SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_FIRMWARE_FAILED_TO_STAGE);
+  SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_PLATFORM_NOT_SUPPORT_MIXED_MODE);
+  SetNvmStatus(&gAllErrorNvmStatuses, NVM_ERR_PCD_CURR_CONF_MISSING);
 
   NVDIMM_EXIT();
 }
@@ -355,6 +365,8 @@ GetSingleNvmStatusCodeMessage(
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_SPI_ACCESS_NOT_ENABLED), NULL);
   case NVM_ERR_SECURE_ERASE_NAMESPACE_EXISTS:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_SECURE_ERASE_NAMESPACE_EXISTS), NULL);
+  case NVM_ERR_FLASH_SPI_NO_LONGER_SUPPORTED:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_FLASH_SPI_NO_LONGER_SUPPORTED), NULL);
   case NVM_ERR_PASSPHRASE_TOO_LONG:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_PASSPHRASE_TOO_LONG), NULL);
   case NVM_ERR_PASSPHRASE_NOT_PROVIDED:
@@ -392,6 +404,10 @@ GetSingleNvmStatusCodeMessage(
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_SENSOR_ENABLED_STATE_INVALID_VALUE), NULL);
   case NVM_ERR_MEDIA_DISABLED:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_MEDIA_DISABLED_VALUE), NULL);
+  case NVM_ERR_MEDIA_NOT_ACCESSIBLE_CANNOT_CONTINUE:
+      return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_MEDIA_NOT_ACCESSIBLE_CANNOT_CONTINUE), NULL);
+  case NVM_ERR_PCD_CURR_CONF_MISSING:
+      return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_PCD_CURR_CONF_MISSING), NULL);
   case NVM_ERR_ENABLE_SECURITY_NOT_ALLOWED:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_ENABLE_SECURITY_NOT_ALLOWED), NULL);
   case NVM_ERR_CREATE_GOAL_NOT_ALLOWED:
@@ -405,10 +421,14 @@ GetSingleNvmStatusCodeMessage(
   case NVM_ERR_INCONSISTENT_SECURITY_STATE:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_INCONSISTENT_SECURITY_STATE), NULL);
 
-  case NVM_WARN_2LM_MODE_OFF:
-    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_WARN_2LM_MODE_OFF), NULL);
   case NVM_WARN_IMC_DDR_PMM_NOT_PAIRED:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_WARN_MM_PMM_DDR_NOT_PAIRED), NULL);
+  case NVM_WARN_NMFM_RATIO_LOWER_VIOLATION:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_WARN_NMFM_RATIO_LOWER_VIOLATION), NULL);
+  case NVM_WARN_NMFM_RATIO_UPPER_VIOLATION:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_WARN_NMFM_RATIO_UPPER_VIOLATION), NULL);
+  case NVM_ERR_NMFM_RATIO_GREATER_THAN_ONE:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_NMFM_RATIO_GREATER_THAN_ONE), NULL);
   case NVM_WARN_MAPPED_MEM_REDUCED_DUE_TO_CPU_SKU:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_WARN_REDUCED_CAPACITY_DUE_TO_SKU), NULL);
   case NVM_WARN_REGION_MAX_AD_PM_INTERLEAVE_SETS_EXCEEDED:
@@ -439,6 +459,8 @@ GetSingleNvmStatusCodeMessage(
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_PLATFORM_NOT_SUPPORT_MANAGEMENT_SOFT), NULL);
   case NVM_ERR_PLATFORM_NOT_SUPPORT_2LM_MODE:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_PLATFORM_NOT_SUPPORT_2LM_MODE), NULL);
+  case NVM_ERR_PLATFORM_NOT_SUPPORT_MIXED_MODE:
+    return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_PLATFORM_NOT_SUPPORT_MIXED_MODE), NULL);
   case NVM_ERR_PLATFORM_NOT_SUPPORT_PM_MODE:
     return HiiGetString(HiiHandle, STRING_TOKEN(STR_DCPMM_STATUS_ERR_PLATFORM_NOT_SUPPORT_PM_MODE), NULL);
   case NVM_ERR_REGION_CURR_CONF_EXISTS:

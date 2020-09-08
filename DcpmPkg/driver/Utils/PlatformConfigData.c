@@ -42,7 +42,6 @@ GeneratePcdConfInput(
   UINT32 Index = 0;
   UINT32 Index2 = 0;
   NVDIMM_CONFIGURATION_HEADER *pConfHeader = NULL;
-  NVDIMM_CURRENT_CONFIG *pPcdCurrentConf = NULL;
   UINT64 PmPartitionSize = 0;
   INTEL_DIMM_CONFIG *pIntelDIMMConfigEfiVar = NULL;
   INTEL_DIMM_CONFIG *pIntelDIMMConfigIn = NULL;
@@ -68,36 +67,24 @@ GeneratePcdConfInput(
     goto Finish;
   }
 
-  if (pConfHeader->CurrentConfStartOffset == 0 || pConfHeader->CurrentConfDataSize == 0) {
-    NVDIMM_DBG("There is no Current Config table");
-
-    if (gNvmDimmData->PMEMDev.pPcatHead == NULL) {
-      NVDIMM_DBG("PCAT table not found");
-      Rc = EFI_DEVICE_ERROR;
-      goto Finish;
-    } else if (IS_ACPI_HEADER_REV_INVALID(gNvmDimmData->PMEMDev.pPcatHead->pPlatformConfigAttr)) {
-      NVDIMM_DBG("Incorrect PCAT table");
-      Rc = EFI_DEVICE_ERROR;
-      goto Finish;
-     } else {
-       Revision = gNvmDimmData->PMEMDev.pPcatHead->pPlatformConfigAttr->Header.Revision;
-     }
-  } else {
-    pPcdCurrentConf = GET_NVDIMM_CURRENT_CONFIG(pConfHeader);
-
-    if (IsPcdCurrentConfHeaderValid(pPcdCurrentConf, pDimm->PcdOemPartitionSize)) {
-      Revision = pPcdCurrentConf->Header.Revision;
-    } else {
-      NVDIMM_DBG("The data in Current Config table is invalid");
-      Rc = EFI_DEVICE_ERROR;
-      goto Finish;
-    }
+  if (gNvmDimmData->PMEMDev.pPcatHead == NULL) {
+    NVDIMM_DBG("PCAT table not found");
+    Rc = EFI_DEVICE_ERROR;
+    goto Finish;
+  }
+  else if (IS_ACPI_HEADER_REV_INVALID(gNvmDimmData->PMEMDev.pPcatHead->pPlatformConfigAttr)) {
+    NVDIMM_DBG("Incorrect PCAT table");
+    Rc = EFI_DEVICE_ERROR;
+    goto Finish;
+  }
+  else {
+    Revision = gNvmDimmData->PMEMDev.pPcatHead->pPlatformConfigAttr->Header.Revision;
   }
 
   /**
    Allocate the block of memory for PCD Config Input
  **/
-  if (IS_ACPI_REV_MAJ_0_MIN_1_OR_MIN_2(Revision)) {
+  if (IS_ACPI_REV_MAJ_0_MIN_VALID(Revision)) {
     ConfInputSize =
       sizeof(NVDIMM_PLATFORM_CONFIG_INPUT)
       + sizeof(NVDIMM_PARTITION_SIZE_CHANGE)
@@ -107,7 +94,7 @@ GeneratePcdConfInput(
       ConfInputSize += pDimm->pRegionsGoal[Index]->DimmsNum * sizeof(NVDIMM_IDENTIFICATION_INFORMATION);
     }
   }
-  else if (IS_ACPI_REV_MAJ_1_MIN_1_OR_MIN_2(Revision)) {
+  else if (IS_ACPI_REV_MAJ_1_MIN_VALID(Revision)) {
     ConfInputSize =
       sizeof(NVDIMM_PLATFORM_CONFIG_INPUT)
       + sizeof(NVDIMM_PARTITION_SIZE_CHANGE)
@@ -188,7 +175,7 @@ GeneratePcdConfInput(
   **/
 
   pCurrentOffset = (UINT8 *)pPartSizeChange + sizeof(NVDIMM_PARTITION_SIZE_CHANGE);
-  if (IS_ACPI_HEADER_REV_MAJ_0_MIN_1_OR_MIN_2((*ppConfigInput))) {
+  if (IS_ACPI_HEADER_REV_MAJ_0_MIN_VALID((*ppConfigInput))) {
     for (Index = 0; Index < pDimm->RegionsGoalNum; Index++) {
       NVDIMM_INTERLEAVE_INFORMATION *pInterleaveInfo = (NVDIMM_INTERLEAVE_INFORMATION *)pCurrentOffset;
 
@@ -254,7 +241,7 @@ GeneratePcdConfInput(
       LastPersistentMemoryOffset += PmPartitionSize;
     }
   }
-  else if (IS_ACPI_HEADER_REV_MAJ_1_MIN_1_OR_MIN_2((*ppConfigInput)))  {
+  else if (IS_ACPI_HEADER_REV_MAJ_1_MIN_VALID((*ppConfigInput)))  {
     for (Index = 0; Index < pDimm->RegionsGoalNum; Index++) {
       NVDIMM_INTERLEAVE_INFORMATION3 *pInterleaveInfo = (NVDIMM_INTERLEAVE_INFORMATION3 *)pCurrentOffset;
 

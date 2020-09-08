@@ -254,6 +254,11 @@ ReenumerateNamespacesAndISs(
 #ifndef OS_BUILD
   NVDIMM_ENTRY();
 
+  // TODO: Look into using ReinstallProtocolInterface() for the DoDriverCleanup
+  // flow instead of manually for a simpler implementation.
+  // Documentation is in the UEFI EDK2 Driver Writer's Guide.
+  // Include runtime PCD corruption detection and device state
+  // (i.e. goes down) in test cases.
   if (DoDriverCleanup == TRUE) {
     ReturnCode = CleanNamespacesAndISs();
     if (EFI_ERROR(ReturnCode)) {
@@ -2015,14 +2020,22 @@ ResolveDeviceType(
   *pResultDevice = Dimm;
   ReturnCode = HandleToPID(ChildHandle, NULL, &DimmPid);
   if (EFI_ERROR(ReturnCode)) {
-    // We couldn't find the DIMM, apparently it was some other kind of child handle
-    *pResultDevice = Unknown;
-    ReturnCode = EFI_UNSUPPORTED;
+    // The child handle is not our DIMM... but it can be our namespace
+    if (HandleToNamespace(ChildHandle) != NULL) {
+      *pResultDevice = Namespace;
+      ReturnCode = EFI_SUCCESS;
+    }
+    else {
+      *pResultDevice = Unknown;
+      ReturnCode = EFI_UNSUPPORTED;
+    }
+    goto Finish;
   }
 
   if (pDimmPid != NULL) {
     *pDimmPid = DimmPid;
   }
+
 Finish:
 #endif
   NVDIMM_EXIT_I64(ReturnCode);

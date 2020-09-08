@@ -29,7 +29,7 @@ NOTE: The all and display options are exclusive and may not be used together.
 
 -d (attributes)::
 -display (attributes)::
-  Filters the returned attributes by explicitly specifying a comma-separated
+  Filters the returned attributes by explicitly specifying a comma separated
   list of any of the attributes defined in the Return Data section.
 
 NOTE: The all and display options are exclusive and may not be used together.
@@ -71,14 +71,16 @@ endif::os_build[]
 
 TARGETS
 -------
+ifndef::os_build[]
 -region [RegionIDs]::
   Restricts output to specific persistent memory regions by providing one or
   more comma separated region identifiers. The default is to display the
   persistent memory regions across all manageable PMem modules.
+endif::os_build[]
 
 -socket [SocketIDs]::
   Restricts output to the persistent memory regions on specific sockets by
-  supplying the socket target and one or more comma-separated socket
+  supplying the socket target and one or more comma separated socket
   identifiers. The default is to display all sockets.
 
 EXAMPLES
@@ -87,9 +89,11 @@ Shows all attributes of all persistent memory regions in the server.
 [listing]
 ipmctl show -a -region
 
+ifndef::os_build[]
 Shows all attributes for the specified persistent memory region.
 [listing]
 ipmctl show -a -region 1
+endif::os_build[]
 
 LIMITATIONS
 -----------
@@ -116,7 +120,7 @@ ISetID::
 endif::os_build[]
 
 PersistentMemoryType::
-  (Default) A comma-separated list of the underlying types of persistent
+  (Default) A comma separated list of the underlying types of persistent
   memory capacity in the region. One or more of:
   - AppDirect: App Direct capacity interleaved across two or more PMem modules that is
     fully mapped into the system physical address space.
@@ -145,7 +149,7 @@ HealthState::
     + PMem module not configured
     + Failure to retrieve AppDirect I/O structures from NFIT (system physical address missing)
     + Interleave set or PMem module region initialization failure (out of memory)
-    + Locked: One or more of the of the underlying Pmem moduless are locked.
+    + Locked: One or more of the of the underlying Pmem modules are locked.
 
 ifndef::os_build[]
 ISetID::

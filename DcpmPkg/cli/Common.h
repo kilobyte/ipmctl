@@ -169,6 +169,7 @@ typedef struct _CMD_DISPLAY_OPTIONS {
 #define CLI_INFO_LOAD_GOAL                                    L"Load Goal"
 #define CLI_INFO_LOAD_GOAL_CONFIRM_PROMPT                     L"Load the configuration goal from '" FORMAT_STR L"' which will delete existing data and provision the capacity of the " PMEM_MODULES_STR L" on the next reboot."
 #define CLI_INFO_SHOW_REGISTER                                L"Show Register"
+#define CLI_INFO_SHOW_PCD                                     L"Show Platform Config Data"
 
 #define CLI_ERR_MASTER_PASSPHRASE_NOT_ENABLED                     L"Master Passphrase not enabled on specified " PMEM_MODULES_STR L"."
 #define CLI_ERR_MISSING_PASSPHRASE_PROPERTY                       L"Syntax Error: Passphrase property not provided."
@@ -489,6 +490,28 @@ GetManageableDimmsNumberAndId(
 );
 
 /**
+  Gets number of Manageable (functional and non-functional) and supported Dimms and their IDs and Handles
+
+  @param[in] pNvmDimmConfigProtocol A pointer to the EFI_DCPMM_CONFIG2_PROTOCOL instance.
+  @param[in] CheckSupportedConfigDimm If true, include dimms in unmapped set of dimms (non-POR) in
+                                      returned dimm list. If false, skip these dimms from returned list.
+  @param[out] DimmIdsCount  is the pointer to variable, where number of dimms will be stored.
+  @param[out] ppDimmIds is the pointer to variable, where IDs of dimms will be stored.
+
+  @retval EFI_NOT_FOUND if the connection with NvmDimmProtocol can't be estabilished
+  @retval EFI_OUT_OF_RESOURCES if the memory allocation fails.
+  @retval EFI_INVALID_PARAMETER if number of dimms or dimm IDs have not been assigned properly.
+  @retval EFI_SUCCESS if succefully assigned number of dimms and IDs to variables.
+**/
+EFI_STATUS
+GetAllManageableDimmsNumberAndId(
+  IN  EFI_DCPMM_CONFIG2_PROTOCOL *pNvmDimmConfigProtocol,
+  IN  BOOLEAN CheckSupportedConfigDimm,
+  OUT UINT32 *pDimmIdsCount,
+  OUT UINT16 **ppDimmIds
+);
+
+/**
   Checks if user has specified the options -a|-all and -d|-display.
   Those two flags exclude each other so the function also checks
   if the user didn't provide them both.
@@ -778,12 +801,12 @@ GetRelativePath(
   This helper method assumes all the dimms in the list exist.
   This helper method also assumes the parameters are non-null.
 
-  @param[in] pDimmInfo The dimm list found in NFIT.
-  @param[in] DimmCount Size of the pDimmInfo array.
-  @param[in] pDimmIds Pointer to the array of DimmIDs to check.
-  @param[in] pDimmIdsCount Size of the pDimmIds array.
+  @param[in] pAllDimms The dimm list found in NFIT
+  @param[in] AllDimmCount Size of the pAllDimms array
+  @param[in] pDimmsListToCheck Pointer to the array of DimmIDs to check
+  @param[in] DimmsToCheckCount Size of the pDimmsListToCheck array
 
-  @retval TRUE if all Dimms in pDimmIds list are manageable
+  @retval TRUE if all Dimms in pDimmsListToCheck array are manageable
   @retval FALSE if at least one DIMM is not manageable
 **/
 BOOLEAN
@@ -799,13 +822,13 @@ AllDimmsInListAreManageable(
   config. This helper method assumes all the dimms in the list exist.
   This helper method also assumes the parameters are non-null.
 
-  @param[in] pDimmInfo The dimm list found in NFIT.
-  @param[in] DimmCount Size of the pDimmInfo array.
-  @param[in] pDimmIds Pointer to the array of DimmIDs to check.
-  @param[in] pDimmIdsCount Size of the pDimmIds array.
+  @param[in] pAllDimms The dimm list found in NFIT
+  @param[in] AllDimmCount Size of the pAllDimms array
+  @param[in] pDimmsListToCheck Pointer to the array of DimmIDs to check
+  @param[in] DimmsToCheckCount Size of the pDimmsListToCheck array
 
-  @retval TRUE if all Dimms in pDimmIds list are manageable
-  @retval FALSE if at least one DIMM is not manageable
+  @retval TRUE if all Dimms in pDimmsListToCheck array are in supported config
+  @retval FALSE if at least one DIMM is not in supported config
 **/
 BOOLEAN
 AllDimmsInListInSupportedConfig(
@@ -814,6 +837,27 @@ AllDimmsInListInSupportedConfig(
   IN     UINT16 *pDimmsListToCheck,
   IN     UINT32 DimmsToCheckCount
 );
+
+/**
+  Check if all dimms in the specified pDimmIds list have master passphrase enabled.
+  This helper method assumes all the dimms in the list exist.
+  This helper method also assumes the parameters are non-null.
+
+  @param[in] pAllDimms The dimm list found in NFIT
+  @param[in] AllDimmCount Size of the pAllDimms array
+  @param[in] pDimmsListToCheck Pointer to the array of DimmIDs to check
+  @param[in] DimmsToCheckCount Size of the pDimmsListToCheck array
+
+  @retval TRUE if all Dimms in pDimmsListToCheck array have master passphrase enabled
+  @retval FALSE if at least one DIMM does not have master passphrase enabled
+**/
+BOOLEAN
+AllDimmsInListHaveMasterPassphraseEnabled(
+  IN     DIMM_INFO *pAllDimms,
+  IN     UINT32 AllDimmCount,
+  IN     UINT16 *pDimmsListToCheck,
+  IN     UINT32 DimmsToCheckCount
+  );
 
 /**
    Get Dimm identifier preference
