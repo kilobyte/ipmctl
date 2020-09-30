@@ -1,3 +1,16 @@
+ipmctl (02.00.00.3820+ds-1~bpo10+1) buster-backports; urgency=high
+
+  * Rebuild for buster-backports, merging the urgent fix.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Wed, 30 Sep 2020 20:30:36 +0200
+
+ipmctl (02.00.00.3820+ds-1) unstable; urgency=high
+
+  * New upstream release.
+    + Fixes provisioning of Apache Pass modules.  Closes: #971369.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 29 Sep 2020 23:53:58 +0200
+
 ipmctl (02.00.00.3809+ds-1~bpo10+1) buster-backports; urgency=medium
 
   * Rebuild for buster-backports.
