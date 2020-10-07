@@ -1,3 +1,15 @@
+ipmctl (02.00.00.3825+ds-1~bpo10+1) buster-backports; urgency=medium
+
+  * Update the backport.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Wed, 07 Oct 2020 09:20:52 +0200
+
+ipmctl (02.00.00.3825+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Fri, 02 Oct 2020 00:50:44 +0200
+
 ipmctl (02.00.00.3820+ds-1~bpo10+1) buster-backports; urgency=high
 
   * Rebuild for buster-backports, merging the urgent fix.
