@@ -157,6 +157,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  CleanNamespacesList@Base 02.00.00.3673
  CleanStringMemory@Base 02.00.00.3673
  CleanUnicodeStringMemory@Base 02.00.00.3673
+ ClearAndInitializeAllLabelStorageAreas@Base 02.00.00.3833
  ClearInterleavedBuffer@Base 02.00.00.3673
  ClearInternalGoalConfigsInfo@Base 02.00.00.3673
  ClearNvmStatus@Base 02.00.00.3673
@@ -699,7 +700,6 @@ libipmctl.so.4 libipmctl4 #MINVER#
  INTERLEAVE_SETS_4_2_x1@Base 02.00.00.3759
  InitErrorAndWarningNvmStatusCodes@Base 02.00.00.3673
  InitSensorsSet@Base 02.00.00.3673
- InitializeAllLabelStorageAreas@Base 02.00.00.3673
  InitializeCommandStatus@Base 02.00.00.3673
  InitializeDimm@Base 02.00.00.3673
  InitializeDimmFieldsFromAcpiTables@Base 02.00.00.3673
