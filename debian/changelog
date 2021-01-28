@@ -1,3 +1,9 @@
+ipmctl (02.00.00.3844+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Thu, 28 Jan 2021 13:48:28 +0100
+
 ipmctl (02.00.00.3833+ds-1) unstable; urgency=medium
 
   * New upstream release.
