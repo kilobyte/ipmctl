@@ -6584,10 +6584,10 @@ CreateGoalConfig(
       goto Finish;
     }
     /** Initialize namespace label storage area **/
-    ReturnCode = InitializeAllLabelStorageAreas(ppDimms, DimmsNum, LabelVersionMajor,
+    ReturnCode = ClearAndInitializeAllLabelStorageAreas(ppDimms, DimmsNum, LabelVersionMajor,
       LabelVersionMinor, pCommandStatus);
     if (EFI_ERROR(ReturnCode)) {
-      NVDIMM_DBG("InitializeAllLabelStorageAreas Error");
+      NVDIMM_DBG("ClearAndInitializeAllLabelStorageAreas Error");
       goto Finish;
     }
 
@@ -10327,6 +10327,10 @@ InjectError(
         continue;
       }
       SetObjStatusForDimm(pCommandStatus, pDimms[Index], NVM_SUCCESS);
+    }
+
+    if (1 == ClearStatus && NVM_SUCCESS == pCommandStatus->GeneralStatus) {
+      SetCmdStatus(pCommandStatus, NVM_WARN_CLEARED_ERR_INJ_REQUIRES_REBOOT);
     }
     break;
     case ERROR_INJ_POISON:

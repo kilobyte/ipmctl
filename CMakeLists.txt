@@ -43,7 +43,7 @@ else()
 	endif()
 
 	if(NOT GIT_FOUND OR ${GIT_RETURN_CODE})
-		set(IPMCTL_VERSION_STRING ${IPMCTL_VERSION_MAJOR}.${IPMCTL_VERSION_MINOR}.${IPMCTL_VERSION_PATCH}.3825)
+		set(IPMCTL_VERSION_STRING ${IPMCTL_VERSION_MAJOR}.${IPMCTL_VERSION_MINOR}.${IPMCTL_VERSION_PATCH}.3844)
 	endif()
 endif()
 
@@ -249,6 +249,9 @@ target_include_directories(ipmctl_os_interface PUBLIC
 	DcpmPkg/common
 	src/os/nvm_api
 	src/os/s_string
+	MdePkg/Include
+	MdePkg/Include/Uefi
+	src/os/efi_shim
 	)
 
 if (MSVC)
