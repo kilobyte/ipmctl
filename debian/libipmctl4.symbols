@@ -136,6 +136,7 @@ libipmctl.so.4 libipmctl4 #MINVER#
  CheckForLongOpStatusInProgress@Base 02.00.00.3673
  CheckFwConsistency@Base 02.00.00.3673
  CheckGoalStatus@Base 02.00.00.3673
+ GuessNvmStatusFromReturnCode@Base 02.00.00.3847
  CheckIfAllDimmsConfigured@Base 02.00.00.3809
  CheckIfBiosSupportsConfigChange@Base 02.00.00.3673
  CheckIfLanguageIsSupported@Base 02.00.00.3673
