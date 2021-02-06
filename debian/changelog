@@ -1,3 +1,11 @@
+ipmctl (02.00.00.3847+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Update symbols.
+  * Use correct path in non-installed.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Sat, 06 Feb 2021 03:33:27 +0100
+
 ipmctl (02.00.00.3844+ds-1) unstable; urgency=medium
 
   * New upstream release.
