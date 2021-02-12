@@ -71,6 +71,9 @@ EFI_STATUS init_protocol_shell_parameters_protocol(int argc, char *argv[])
   char *p_tok_context = NULL;
   int new_argv_index = 1;
   int stripped_args = 0;
+  VOID * ptr = NULL;
+  EFI_STATUS ReturnCode = EFI_SUCCESS;
+
   if (argc > MAX_INPUT_PARAMS) {
     return EFI_INVALID_PARAMETER;
   }
@@ -122,18 +125,31 @@ EFI_STATUS init_protocol_shell_parameters_protocol(int argc, char *argv[])
     {
       int argvSize = (int)strlen(argv[Index]);
       int sizeToAllocate = (argvSize + 1) * sizeof(wchar_t);
-      VOID * ptr = AllocateZeroPool(sizeToAllocate);
+      ptr = AllocateZeroPool(sizeToAllocate);
       if (NULL == ptr) {
-        FreePool(gOsShellParametersProtocol.Argv);
-        return EFI_OUT_OF_RESOURCES;
+        ReturnCode = EFI_OUT_OF_RESOURCES;
+        goto Final;
       }
-      AsciiStrToUnicodeStrS(argv[Index], ptr, sizeToAllocate);
+      // divide by size of wide char to convert size in bytes to number of wide chars
+      CHECK_RESULT(AsciiStrToUnicodeStrS(argv[Index], ptr, (sizeToAllocate / sizeof(wchar_t))), Final);
       gOsShellParametersProtocol.Argv[new_argv_index] = ptr;
       ++new_argv_index;
     }
   }
 
-  return 0;
+Final:
+  // free memory that has been allocated if an error was encountered
+  if (EFI_ERROR(ReturnCode)) {
+    if (NULL != gOsShellParametersProtocol.Argv) {
+      for (int Index = 1; Index < argc; Index++) {
+        FREE_POOL_SAFE(gOsShellParametersProtocol.Argv[Index]);
+      }
+      FREE_POOL_SAFE(gOsShellParametersProtocol.Argv);
+    }
+    FREE_POOL_SAFE(ptr);
+  }
+
+  return ReturnCode;
 }
 
 int uninit_protocol_shell_parameters_protocol()
